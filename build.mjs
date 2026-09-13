@@ -24,7 +24,7 @@ await build({
   minify: false,
 });
 
-await cp("manifest.json", `${outdir}/manifest.json`);
+await cp("src/manifest.json", `${outdir}/manifest.json`);
 await cp("src/popup/popup.html", `${outdir}/popup.html`);
 await cp("src/options/options.html", `${outdir}/options.html`);
 

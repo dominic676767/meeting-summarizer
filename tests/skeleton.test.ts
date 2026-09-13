@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import manifest from "../manifest.json";
+import manifest from "../src/manifest.json";
 
 describe("walking skeleton", () => {
   it("content scripts are scoped to Teams web-client domains only", () => {
