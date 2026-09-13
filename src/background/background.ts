@@ -7,6 +7,7 @@ import { summarizeTranscript } from "../pipeline/pipeline";
 import { createProviderClient } from "../providers/factory";
 import { loadSettings } from "../settings";
 import { writeArtifact } from "./artifact-writer";
+import { getHeld, holdTranscript, listHeld, releaseHeld, updateHeldReason } from "./held";
 import {
   dropSession,
   ensureSession,
@@ -63,20 +64,40 @@ export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | 
 
   const transcript = sessionToTranscript(s);
   try {
-    const settings = await loadSettings();
-    const client = createProviderClient(settings);
-    const { html } = await summarizeTranscript(transcript, settings, client);
-    await writeArtifact(html, artifactFilename(transcript));
+    await summarizeAndWrite(transcript);
     // Nothing is retained after the artifact is written (spec: single artifact).
     s.state = "done";
     s.accumulator = new TranscriptAccumulator();
     await persistSessions();
   } catch (err) {
     console.error(`meeting-summarizer: summarization failed (${trigger})`, err);
+    // A Transcript is unrecoverable once dropped — hold it for retry.
+    await holdTranscript(transcript, err instanceof Error ? err.message : String(err));
     s.state = "failed";
     await persistSessions();
   }
   await updateBadge(tabId);
+}
+
+/** Shared by first-run and Held-Transcript retry: pipeline → confirmed write. */
+async function summarizeAndWrite(transcript: Parameters<typeof summarizeTranscript>[0]) {
+  const settings = await loadSettings();
+  const client = createProviderClient(settings);
+  const { html } = await summarizeTranscript(transcript, settings, client);
+  await writeArtifact(html, artifactFilename(transcript));
+}
+
+async function retryHeld(id: string): Promise<void> {
+  const entry = await getHeld(id);
+  if (!entry) return;
+  try {
+    await summarizeAndWrite(entry.transcript);
+    // Release ONLY after the downloads API confirmed the write.
+    await releaseHeld(id);
+  } catch (err) {
+    await updateHeldReason(id, err instanceof Error ? err.message : String(err));
+    throw err;
+  }
 }
 
 async function statusFor(tabId: number): Promise<StatusReply> {
@@ -107,6 +128,19 @@ browser.runtime.onMessage.addListener((raw: unknown, sender) => {
       const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
       if (tab?.id !== undefined) await finishMeeting(tab.id, "manual");
       return statusFor(tab?.id ?? -1);
+    })();
+  }
+  if (msg.type === "list-held") {
+    return (async () => ({ held: await listHeld() }))();
+  }
+  if (msg.type === "retry-held") {
+    return (async () => {
+      try {
+        await retryHeld(msg.id);
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
     })();
   }
   return undefined;
