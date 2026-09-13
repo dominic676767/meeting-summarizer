@@ -4,6 +4,8 @@
 import { createTeamsAdapter } from "../adapters/teams";
 import type { ContentMessage } from "../messages";
 
+console.log(`meeting-summarizer: content script loaded in ${window.location.host} (frame: ${window !== window.top})`);
+
 const adapter = createTeamsAdapter();
 const DEBOUNCE_MS = 400;
 

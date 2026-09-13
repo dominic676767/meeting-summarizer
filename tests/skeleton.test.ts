@@ -7,7 +7,11 @@ describe("walking skeleton", () => {
     expect(matches).toEqual([
       "https://teams.microsoft.com/*",
       "https://teams.live.com/*",
+      "https://teams.cloud.microsoft/*",
+      "https://*.teams.microsoft.com/*",
     ]);
+    // The Teams meeting UI can live inside an iframe.
+    expect(manifest.content_scripts.every((cs) => cs.all_frames)).toBe(true);
   });
 
   it("requests only storage and downloads permissions", () => {
