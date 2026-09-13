@@ -1,6 +1,107 @@
-// Background event page: owns Transcript accumulation, triggers, artifact writes.
-// Walking skeleton — wiring lands with the capture and end-to-end tickets.
+// Background event page: owns Transcript accumulation, triggers, and badges.
+// Summarization + artifact writing are wired in the end-to-end slice.
+import type { Message, StatusReply } from "../messages";
+import {
+  dropSession,
+  ensureSession,
+  getSession,
+  persistSessions,
+  sessionToTranscript,
+} from "./sessions";
 
-browser.runtime.onInstalled.addListener(() => {
-  console.log("meeting-summarizer installed");
+async function updateBadge(tabId: number): Promise<void> {
+  const s = await getSession(tabId);
+  let text = "";
+  let color = "#0e8a16";
+  if (s?.inMeeting) {
+    if (s.accumulator.size === 0) {
+      text = "!";
+      color = "#d73a4a"; // in a meeting, no captions arriving
+    } else {
+      text = s.accumulator.size > 999 ? "999" : String(s.accumulator.size);
+    }
+  }
+  await browser.action.setBadgeBackgroundColor({ color, tabId });
+  await browser.action.setBadgeText({ text, tabId });
+}
+
+async function handleContentMessage(msg: Message, tabId: number): Promise<void> {
+  if (msg.type === "captions-update") {
+    const s = await ensureSession(tabId, msg.platform);
+    if (msg.title) s.title = msg.title;
+    s.accumulator.upsertAll(msg.updates, Date.now());
+    await persistSessions();
+    await updateBadge(tabId);
+  } else if (msg.type === "meeting-status") {
+    const s = await ensureSession(tabId, msg.platform);
+    if (msg.title) s.title = msg.title;
+    s.inMeeting = msg.inMeeting;
+    await persistSessions();
+    await updateBadge(tabId);
+  } else if (msg.type === "meeting-ended") {
+    await finishMeeting(tabId, "auto");
+  }
+}
+
+/**
+ * Converging trigger for auto-detect, tab close, and Summarize-now.
+ * Idempotent: a Transcript is summarized at most once (double-fire guard).
+ * The actual pipeline invocation lands with the end-to-end slice.
+ */
+export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | "tab-closed") {
+  const s = await getSession(tabId);
+  if (!s || s.state !== "capturing" || s.accumulator.size === 0) return;
+  s.state = "summarizing";
+  await persistSessions();
+  console.log(
+    `meeting-summarizer: finishing meeting (${trigger}), ${s.accumulator.size} segments`,
+    sessionToTranscript(s).title,
+  );
+  // Pipeline + downloads wiring arrives with the end-to-end ticket.
+  s.state = "done";
+  await persistSessions();
+  await updateBadge(tabId);
+}
+
+async function statusFor(tabId: number): Promise<StatusReply> {
+  const s = await getSession(tabId);
+  return {
+    inMeeting: s?.inMeeting ?? false,
+    segmentCount: s?.accumulator.size ?? 0,
+    title: s?.title ?? null,
+    capturing: (s?.inMeeting ?? false) && (s?.accumulator.size ?? 0) > 0,
+    state: s?.state ?? "idle",
+  };
+}
+
+browser.runtime.onMessage.addListener((raw: unknown, sender) => {
+  const msg = raw as Message;
+  if (sender.tab?.id !== undefined) {
+    return handleContentMessage(msg, sender.tab.id);
+  }
+  // Popup messages
+  if (msg.type === "get-status") {
+    return (async () => {
+      const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+      return statusFor(tab?.id ?? -1);
+    })();
+  }
+  if (msg.type === "summarize-now") {
+    return (async () => {
+      const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+      if (tab?.id !== undefined) await finishMeeting(tab.id, "manual");
+      return statusFor(tab?.id ?? -1);
+    })();
+  }
+  return undefined;
+});
+
+browser.tabs.onRemoved.addListener((tabId) => {
+  void (async () => {
+    const s = await getSession(tabId);
+    if (s && s.state === "capturing" && s.accumulator.size > 0) {
+      await finishMeeting(tabId, "tab-closed");
+    }
+    await dropSession(tabId);
+  })();
 });
