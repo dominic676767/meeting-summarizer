@@ -5,11 +5,71 @@
     <style>
       body { font: 13px system-ui, sans-serif; margin: 16px; max-width: 640px; }
       h1 { font-size: 16px; }
+      h2 { font-size: 14px; margin-top: 20px; }
+      fieldset { border: 1px solid #ddd; border-radius: 4px; margin: 10px 0; }
+      label { display: block; margin: 8px 0 2px; font-weight: 600; }
+      input[type="text"], input[type="password"], select { width: 100%; box-sizing: border-box; padding: 4px 6px; font: inherit; }
+      .note { color: #555; font-size: 12px; margin: 6px 0; }
+      .hidden { display: none; }
+      button { font: inherit; padding: 6px 14px; margin-top: 14px; }
+      #saved { color: #0e8a16; margin-left: 8px; }
     </style>
   </head>
   <body>
     <h1>Meeting Summarizer — Settings</h1>
-    <p id="placeholder">Provider and template settings arrive in a later slice.</p>
+
+    <h2>Provider</h2>
+    <label for="provider">LLM used to summarize your meetings</label>
+    <select id="provider">
+      <option value="anthropic">Claude (Anthropic API)</option>
+      <option value="openai">OpenAI</option>
+      <option value="ollama">Ollama (local)</option>
+      <option value="bedrock">AWS Bedrock</option>
+    </select>
+
+    <fieldset id="panel-anthropic">
+      <legend>Claude</legend>
+      <label for="anthropic-key">API key</label>
+      <input type="password" id="anthropic-key" autocomplete="off" />
+      <label for="anthropic-model">Model</label>
+      <input type="text" id="anthropic-model" />
+    </fieldset>
+
+    <fieldset id="panel-openai" class="hidden">
+      <legend>OpenAI</legend>
+      <label for="openai-key">API key</label>
+      <input type="password" id="openai-key" autocomplete="off" />
+      <label for="openai-model">Model</label>
+      <input type="text" id="openai-model" />
+    </fieldset>
+
+    <fieldset id="panel-ollama" class="hidden">
+      <legend>Ollama</legend>
+      <p class="note">
+        One-time setup: run Ollama with <code>OLLAMA_ORIGINS=moz-extension://*</code> so this
+        extension may call it.
+      </p>
+      <label for="ollama-url">Base URL</label>
+      <input type="text" id="ollama-url" />
+      <label for="ollama-model">Model</label>
+      <input type="text" id="ollama-model" />
+    </fieldset>
+
+    <fieldset id="panel-bedrock" class="hidden">
+      <legend>AWS Bedrock</legend>
+      <p class="note">Bedrock API key (bearer token) only — AWS SigV4 credentials are not supported.</p>
+      <label for="bedrock-key">API key</label>
+      <input type="password" id="bedrock-key" autocomplete="off" />
+      <label for="bedrock-region">Region</label>
+      <input type="text" id="bedrock-region" />
+      <label for="bedrock-model">Model ID</label>
+      <input type="text" id="bedrock-model" />
+    </fieldset>
+
+    <div id="summary-section"></div>
+
+    <button id="save">Save</button><span id="saved" class="hidden">Saved.</span>
+
     <script src="options.js" type="module"></script>
   </body>
 </html>
