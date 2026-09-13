@@ -8,7 +8,9 @@ const SELECTORS = {
   captionAuthor: '[data-tid="author"]',
   captionText: '[data-tid="closed-caption-text"]',
   captionsRenderer: '[data-tid="closed-captions-renderer"]',
-  hangupButton: '#hangup-button, [data-tid="hangup-main-btn"]',
+  // Broad hangup match also covers the mini call monitor shown while
+  // navigating elsewhere in Teams during a live call.
+  hangupButton: '#hangup-button, [data-tid="hangup-main-btn"], [data-tid*="hangup"], [id*="hangup"]',
   postCall:
     '[data-tid="rejoin-button"], [data-tid="call-rating-flex-container"], [data-tid="call-end-screen"]',
   callTitle: '[data-tid="call-title"], [data-tid="call-header-title"]',

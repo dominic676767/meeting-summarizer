@@ -13,6 +13,18 @@ let timer: ReturnType<typeof setTimeout> | undefined;
 let lastSent = new Map<string, string>(); // key → speaker\ntext, to send only changes
 let wasInMeeting = false;
 let endedSent = false;
+let leaveTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** Grace period after call controls disappear before declaring Meeting End —
+ * covers post-call screens we don't recognize without misfiring on
+ * transient DOM re-renders. */
+const LEAVE_GRACE_MS = 10_000;
+
+function sendEnded(title: string | null): void {
+  if (endedSent) return;
+  endedSent = true;
+  send({ type: "meeting-ended", platform: adapter.platform, title });
+}
 
 function send(msg: ContentMessage): void {
   void browser.runtime.sendMessage(msg).catch(() => {
@@ -37,14 +49,22 @@ function tick(): void {
 
   if (inMeeting !== wasInMeeting) {
     wasInMeeting = inMeeting;
-    if (inMeeting) endedSent = false;
+    if (inMeeting) {
+      endedSent = false;
+      clearTimeout(leaveTimer);
+    } else {
+      // Call controls vanished: fire Meeting End after a grace period unless
+      // they come back (works regardless of what post-call screen Teams shows).
+      clearTimeout(leaveTimer);
+      leaveTimer = setTimeout(() => {
+        if (!adapter.isInMeeting(document)) sendEnded(adapter.meetingTitle(document));
+      }, LEAVE_GRACE_MS);
+    }
     send({ type: "meeting-status", platform: adapter.platform, title, inMeeting });
   }
 
-  if (!endedSent && adapter.isMeetingEnded(document)) {
-    endedSent = true;
-    send({ type: "meeting-ended", platform: adapter.platform, title });
-  }
+  // Recognized post-call screens end the meeting immediately, no grace needed.
+  if (adapter.isMeetingEnded(document)) sendEnded(title);
 }
 
 const observer = new MutationObserver(() => {
