@@ -1,6 +1,12 @@
-// Background event page: owns Transcript accumulation, triggers, and badges.
-// Summarization + artifact writing are wired in the end-to-end slice.
+// Background event page: owns Transcript accumulation, triggers, artifact
+// writes, and badges.
+import { TranscriptAccumulator } from "../adapters/accumulator";
 import type { Message, StatusReply } from "../messages";
+import { artifactFilename } from "../pipeline/filename";
+import { summarizeTranscript } from "../pipeline/pipeline";
+import { createProviderClient } from "../providers/factory";
+import { loadSettings } from "../settings";
+import { writeArtifact } from "./artifact-writer";
 import {
   dropSession,
   ensureSession,
@@ -45,21 +51,31 @@ async function handleContentMessage(msg: Message, tabId: number): Promise<void> 
 
 /**
  * Converging trigger for auto-detect, tab close, and Summarize-now.
- * Idempotent: a Transcript is summarized at most once (double-fire guard).
- * The actual pipeline invocation lands with the end-to-end slice.
+ * Idempotent: a Transcript is summarized at most once (double-fire guard —
+ * the state test-and-set below is the guard).
  */
 export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | "tab-closed") {
   const s = await getSession(tabId);
   if (!s || s.state !== "capturing" || s.accumulator.size === 0) return;
   s.state = "summarizing";
   await persistSessions();
-  console.log(
-    `meeting-summarizer: finishing meeting (${trigger}), ${s.accumulator.size} segments`,
-    sessionToTranscript(s).title,
-  );
-  // Pipeline + downloads wiring arrives with the end-to-end ticket.
-  s.state = "done";
-  await persistSessions();
+  await updateBadge(tabId);
+
+  const transcript = sessionToTranscript(s);
+  try {
+    const settings = await loadSettings();
+    const client = createProviderClient(settings);
+    const { html } = await summarizeTranscript(transcript, settings, client);
+    await writeArtifact(html, artifactFilename(transcript));
+    // Nothing is retained after the artifact is written (spec: single artifact).
+    s.state = "done";
+    s.accumulator = new TranscriptAccumulator();
+    await persistSessions();
+  } catch (err) {
+    console.error(`meeting-summarizer: summarization failed (${trigger})`, err);
+    s.state = "failed";
+    await persistSessions();
+  }
   await updateBadge(tabId);
 }
 
