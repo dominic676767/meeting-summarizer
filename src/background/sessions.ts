@@ -15,7 +15,7 @@ export interface MeetingSession {
 }
 
 const sessions = new Map<number, MeetingSession>();
-let rehydrated = false;
+let rehydration: Promise<void> | undefined;
 
 interface PersistedSession {
   platform: string;
@@ -26,9 +26,15 @@ interface PersistedSession {
   entries: ReturnType<TranscriptAccumulator["toJSON"]>;
 }
 
-async function rehydrate(): Promise<void> {
-  if (rehydrated) return;
-  rehydrated = true;
+// Concurrent startup messages share one rehydration promise, so a second
+// caller can never race past an in-flight storage read and overwrite the
+// rehydrated Transcript.
+function rehydrate(): Promise<void> {
+  rehydration ??= doRehydrate();
+  return rehydration;
+}
+
+async function doRehydrate(): Promise<void> {
   try {
     const stored = (await browser.storage.session.get("sessions")) as {
       sessions?: Record<string, PersistedSession>;
@@ -75,7 +81,9 @@ export async function getSession(tabId: number): Promise<MeetingSession | undefi
 export async function ensureSession(tabId: number, platform: string): Promise<MeetingSession> {
   await rehydrate();
   let s = sessions.get(tabId);
-  if (!s || s.state === "done") {
+  // A done session ended normally; a failed one is already safe in the Held
+  // Transcript store — either way, new captions mean a new Meeting.
+  if (!s || s.state === "done" || s.state === "failed") {
     s = {
       platform,
       title: null,

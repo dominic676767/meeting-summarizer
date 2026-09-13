@@ -27,6 +27,9 @@ export function cleanDocumentTitle(raw: string): string | null {
 
 export function createTeamsAdapter(): PlatformAdapter {
   // Stable identity for caption elements across in-place text mutations.
+  // Keys are prefixed with a per-instance id so captions from different
+  // frames (all_frames) or a reloaded page never collide in the accumulator.
+  const instanceId = Math.random().toString(36).slice(2, 8);
   const keys = new WeakMap<Element, string>();
   let nextKey = 0;
 
@@ -39,7 +42,7 @@ export function createTeamsAdapter(): PlatformAdapter {
       for (const item of items) {
         let key = keys.get(item);
         if (!key) {
-          key = `c${nextKey++}`;
+          key = `${instanceId}-c${nextKey++}`;
           keys.set(item, key);
         }
         const speaker =

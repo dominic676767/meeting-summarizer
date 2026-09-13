@@ -78,3 +78,22 @@ describe("map-reduce chunking", () => {
     expect(flat.map((s) => s.text)).toEqual(segments.map((s) => s.text));
   });
 });
+
+describe("reduce-step budgeting", () => {
+  it("collapses chunk summaries recursively until the final prompt fits the budget", async () => {
+    const t = longTranscript(80);
+    // Verbose chunk replies force the naive reduce prompt over budget.
+    const client = fakeClient({
+      contextBudget: 3_000,
+      reply: (prompt, call) =>
+        prompt.includes("in-order summaries") || prompt.includes("Portion")
+          ? `LEVEL_SUMMARY_${call}`
+          : `CHUNK_${call}: ${"detail ".repeat(120)}`,
+    });
+    await summarizeTranscript(t, settings, client);
+    // Every prompt the provider saw respected its context budget.
+    for (const p of client.prompts) {
+      expect(p.length).toBeLessThanOrEqual(3_000);
+    }
+  });
+});

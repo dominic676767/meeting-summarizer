@@ -22,14 +22,22 @@ const LEAVE_GRACE_MS = 10_000;
 
 function sendEnded(title: string | null): void {
   if (endedSent) return;
-  endedSent = true;
-  send({ type: "meeting-ended", platform: adapter.platform, title });
+  endedSent = true; // optimistic, rolled back below on failure
+  send({ type: "meeting-ended", platform: adapter.platform, title }).catch(() => {
+    // Transient failure (background waking up): retry until delivered —
+    // a lost end signal means a lost summary.
+    endedSent = false;
+    setTimeout(() => sendEnded(title), 2_000);
+  });
 }
 
-function send(msg: ContentMessage): void {
-  void browser.runtime.sendMessage(msg).catch(() => {
-    // Background asleep mid-navigation; next tick retries naturally.
-  });
+function send(msg: ContentMessage): Promise<void> {
+  return browser.runtime.sendMessage(msg).then(
+    () => undefined,
+    () => {
+      throw new Error("sendMessage failed");
+    },
+  );
 }
 
 function tick(): void {
@@ -44,7 +52,11 @@ function tick(): void {
     return true;
   });
   if (updates.length > 0) {
-    send({ type: "captions-update", platform: adapter.platform, title, updates });
+    send({ type: "captions-update", platform: adapter.platform, title, updates }).catch(() => {
+      // Delivery failed: forget these signatures so the next tick resends
+      // them instead of silently dropping Caption Segments.
+      for (const u of updates) lastSent.delete(u.key);
+    });
   }
 
   if (inMeeting !== wasInMeeting) {

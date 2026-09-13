@@ -31,8 +31,13 @@ async function updateBadge(tabId: number): Promise<void> {
       text = s.accumulator.size > 999 ? "999" : String(s.accumulator.size);
     }
   }
-  await action.setBadgeBackgroundColor({ color, tabId });
-  await action.setBadgeText({ text, tabId });
+  try {
+    await action.setBadgeBackgroundColor({ color, tabId });
+    await action.setBadgeText({ text, tabId });
+  } catch {
+    // Tab already gone (e.g. summarizing on tab close) — cosmetic only,
+    // never allowed to abort a summarization.
+  }
 }
 
 async function handleContentMessage(msg: Message, tabId: number): Promise<void> {
@@ -90,16 +95,26 @@ async function summarizeAndWrite(transcript: Parameters<typeof summarizeTranscri
   await writeArtifact(html, artifactFilename(transcript));
 }
 
+// Guard against concurrent retries of the same Held Transcript (double-click,
+// popup re-open) producing duplicate artifacts.
+const retriesInFlight = new Set<string>();
+
 async function retryHeld(id: string): Promise<void> {
-  const entry = await getHeld(id);
-  if (!entry) return;
+  if (retriesInFlight.has(id)) return;
+  retriesInFlight.add(id);
   try {
-    await summarizeAndWrite(entry.transcript);
-    // Release ONLY after the downloads API confirmed the write.
-    await releaseHeld(id);
-  } catch (err) {
-    await updateHeldReason(id, err instanceof Error ? err.message : String(err));
-    throw err;
+    const entry = await getHeld(id);
+    if (!entry) return;
+    try {
+      await summarizeAndWrite(entry.transcript);
+      // Release ONLY after the downloads API confirmed the write.
+      await releaseHeld(id);
+    } catch (err) {
+      await updateHeldReason(id, err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+  } finally {
+    retriesInFlight.delete(id);
   }
 }
 

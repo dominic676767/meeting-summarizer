@@ -107,3 +107,17 @@ describe("Teams Platform Adapter", () => {
     expect(acc.size).toBe(2);
   });
 });
+
+describe("caption keys across frames and reloads", () => {
+  it("two adapter instances (frames / reloads) never produce colliding keys", () => {
+    loadFixture("teams-captions.html");
+    const a = createTeamsAdapter().readCaptions(document);
+    const b = createTeamsAdapter().readCaptions(document); // fresh instance = reload/other frame
+    const acc = new TranscriptAccumulator();
+    acc.upsertAll(a, 1000);
+    acc.upsertAll(b, 2000);
+    // Same DOM read twice by independent instances must not overwrite entries.
+    expect(acc.size).toBe(4);
+    expect(new Set([...a, ...b].map((c) => c.key)).size).toBe(4);
+  });
+});
