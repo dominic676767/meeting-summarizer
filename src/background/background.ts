@@ -16,6 +16,9 @@ import {
   sessionToTranscript,
 } from "./sessions";
 
+// MV2 exposes browserAction; keep forward-compat with MV3's action.
+const action = browser.browserAction ?? (browser as unknown as { action: typeof browser.browserAction }).action;
+
 async function updateBadge(tabId: number): Promise<void> {
   const s = await getSession(tabId);
   let text = "";
@@ -28,8 +31,8 @@ async function updateBadge(tabId: number): Promise<void> {
       text = s.accumulator.size > 999 ? "999" : String(s.accumulator.size);
     }
   }
-  await browser.action.setBadgeBackgroundColor({ color, tabId });
-  await browser.action.setBadgeText({ text, tabId });
+  await action.setBadgeBackgroundColor({ color, tabId });
+  await action.setBadgeText({ text, tabId });
 }
 
 async function handleContentMessage(msg: Message, tabId: number): Promise<void> {

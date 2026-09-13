@@ -16,7 +16,8 @@ await build({
     options: "src/options/options.ts",
   },
   bundle: true,
-  format: "esm",
+  // MV2 background/content scripts are classic scripts, not modules.
+  format: "iife",
   target: "firefox115",
   outdir,
   sourcemap: false,

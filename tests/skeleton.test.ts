@@ -14,7 +14,11 @@ describe("walking skeleton", () => {
     expect(manifest.content_scripts.every((cs) => cs.all_frames)).toBe(true);
   });
 
-  it("requests only storage and downloads permissions", () => {
-    expect(manifest.permissions).toEqual(["storage", "downloads"]);
+  it("requests only storage, downloads, and provider-API host permissions", () => {
+    const apiPermissions = manifest.permissions.filter((p) => !p.includes("://"));
+    expect(apiPermissions).toEqual(["storage", "downloads"]);
+    // MV2: content scripts inject without user-granted host permissions
+    // (MV3 gates them behind a manual opt-in — the bug this fixed).
+    expect(manifest.manifest_version).toBe(2);
   });
 });
