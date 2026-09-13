@@ -66,7 +66,28 @@
       <input type="text" id="bedrock-model" />
     </fieldset>
 
-    <div id="summary-section"></div>
+    <h2>Summary</h2>
+    <label for="shape">Summary shape</label>
+    <select id="shape">
+      <option value="structured">Structured (TL;DR, decisions, action items, open questions)</option>
+      <option value="narrative">Narrative recap</option>
+    </select>
+    <p class="note">
+      Templates are fully editable — <code>{{transcript}}</code> is replaced with the meeting
+      transcript. Defaults answer in the transcript's language; edit one line to force English.
+    </p>
+
+    <fieldset>
+      <legend>Structured template</legend>
+      <textarea id="template-structured" rows="10" style="width: 100%; box-sizing: border-box; font: 12px monospace;"></textarea>
+      <button id="reset-structured" type="button">Reset to default</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Narrative template</legend>
+      <textarea id="template-narrative" rows="6" style="width: 100%; box-sizing: border-box; font: 12px monospace;"></textarea>
+      <button id="reset-narrative" type="button">Reset to default</button>
+    </fieldset>
 
     <button id="save">Save</button><span id="saved" class="hidden">Saved.</span>
 
