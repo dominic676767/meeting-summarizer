@@ -81,11 +81,13 @@ components:
 
 **Creative North Star: "The Status Readout"**
 
-Meeting Summarizer is not an app you look at; it is an instrument you glance at. Its entire visible chrome — a 300px popup and a settings page — exists to report one thing quickly and honestly: is the meeting being captured, is something wrong, is a summary waiting? Color is the readout. It appears only to carry state, and everywhere else the interface is deliberately quiet: system font, black-on-white text, hairline dividers, and the browser's own controls. The design's ambition is to feel like part of Firefox rather than a product bolted onto it.
+Meeting Summarizer is not an app you look at; it is an instrument you glance at. Its entire visible chrome — a 300px popup and a settings page — exists to report one thing quickly and honestly: is the meeting being captured, is something wrong, is a summary waiting? Color is the readout. It appears only to carry state, and everywhere else the interface is deliberately quiet: system font, black-on-white text, hairline dividers, and the browser's own controls. The design's ambition is to feel like part of the browser's own chrome rather than a product bolted onto it.
 
 The system is flat by conviction, not by omission. There are no shadows, no gradients, no fills, no rounded "cards" — depth is a single 1px hairline where one section ends and another begins. Density is tight in the chrome (the popup earns its 300px) and generous in the one place made for reading, the Summary Artifact, which opens to a comfortable 760px measure at 15px/1.5. That split is intentional: the tool is compact, the document it produces is calm.
 
 The current implementation leans entirely on native browser controls and the system font. That is documented here as the present state and a sensible default, but it is **provisional** — future work may add light custom styling to buttons and inputs, provided it stays within the utilitarian, meaning-only-color character below. What is *not* provisional is the restraint: color earns its place by meaning something, and flatness is the resting state.
+
+Because the world is built from `system-ui` and the browser's own controls, it survives the Chromium migration (ADR-0003) unchanged: the same tokens render as native Chrome/Edge chrome rather than native Firefox chrome, which is the point of leaning on the platform in the first place. The one asset that does not travel is the toolbar mark — see Shapes.
 
 **Key Characteristics:**
 - Color only ever reports state (active / warning / error); nothing decorative is colored.
@@ -153,7 +155,17 @@ Spacing rhythm is a small, tight scale (4 / 8 / 12 / 16px) in the chrome and rem
 
 ## Shapes
 
-The form language is near-rectangular. The only radius in the entire system is `4px`, applied to the Settings fieldsets — a barely-softened corner that reads as "grouped," not "styled." Buttons, inputs, and selects currently use the browser's native shape (whatever the OS renders); this is provisional and may be given a light explicit radius later, but any such radius should stay at or below the 4px fieldset value to preserve the flat, squared character. Nothing in the system is pill-shaped, circular, or heavily rounded.
+The form language is near-rectangular. The only radius in the entire system is `4px`, applied to the Settings fieldsets — a barely-softened corner that reads as "grouped," not "styled." Buttons, inputs, and selects currently use the browser's native shape (whatever the OS renders); this is provisional and may be given a light explicit radius later, but any such radius should stay at or below the 4px fieldset value to preserve the flat, squared character. Nothing in the system's chrome is pill-shaped or heavily rounded.
+
+### The Mark
+
+The toolbar icon (`src/icon.svg`) is the readout compressed to 32px: three ink bars — a short indented line, a full-width line, a short line — reading as caption lines condensing into one summary line, with a single Signal Green dot at the top-left as the live-capture signal. It is the one place a circle appears, and it earns it by being the same status dot the popup reports in words. Bars are 5 units tall on a 32-unit grid with `2.5` radius, sized so the three lines hold their weight at 16px.
+
+Ink strokes use `fill="context-fill"`, so the mark inherits the toolbar's own foreground and adapts to light and dark themes; only the green signal is a fixed value.
+
+**The One Signal Rule.** The mark carries exactly one colored element — the capture dot. If the icon ever needs a second state (paused, failed), it changes *that dot's* color and nothing else.
+
+*Migration constraint:* `context-fill` and SVG extension icons are Firefox-only. The Chromium target (ADR-0003) requires raster PNG icons, so the mark must be exported at 16/32/48/128px with the ink resolved to a literal neutral, and the light/dark adaptation re-solved (Chromium has no `context-fill` equivalent; supply a light and dark variant or pick a neutral that reads on both).
 
 ## Components
 
@@ -182,6 +194,12 @@ The heart of "The Status Readout." A single line of 13px text whose color is its
 - **Idle:** Muted Gray (`#555555`) — "Not in a meeting."
 The meeting title sits below in Muted Gray, 12px, subordinate to the status.
 
+### Popup Footer
+
+- Divided from the content above by a Faint Divider (`#eeeeee`) top rule with `12px` above and `10px` below — the only structural division inside the popup.
+- Holds the **Settings** button (the popup's route to the options page) and, above it, an unconfigured-provider hint in Muted Gray at 12px that hides itself once credentials exist.
+- The hint is the popup's only instructional copy. It is a one-liner, never a panel, and it disappears permanently rather than being dismissible.
+
 ### Held Transcripts List (signature)
 - A borderless list; each row is a flex line (`justify-content: space-between`, `align-items: center`, `gap: 8px`) separated by a Faint Divider top rule.
 - The failure reason is Fault Red (`#aa0000`) at 11px — small, sober, informative.
@@ -207,3 +225,5 @@ The meeting title sits below in Muted Gray, 12px, subordinate to the status.
 - **Don't** round corners beyond the 4px fieldset radius, or make anything pill-shaped or circular.
 - **Don't** widen the chrome into a "dashboard"; the popup is a readout, Settings is a single form column.
 - **Don't** load web fonts, icon fonts, or external assets into any surface, and never into the artifact.
+- **Don't** use Unicode glyphs or emoji to carry state (`●`, `⚠`). They announce as noise to screen readers and render as color emoji on many platforms, injecting non-state color. The status class and its words carry the state; the drawn mark is the only icon.
+- **Don't** let a status change be visible-only. Any element whose text reports state carries a live region, so the readout reaches assistive tech as well as the eye.

@@ -76,6 +76,22 @@
       "css": ".ds-held { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 4px 0; border-top: 1px solid #eeeeee; list-style: none; font: 13px system-ui, sans-serif; } .ds-held-reason { color: #aa0000; font-size: 11px; } .ds-btn { font: 13px system-ui, sans-serif; padding: 4px 10px; }"
     },
     {
+      "name": "Popup Footer",
+      "kind": "nav",
+      "refersTo": "button",
+      "description": "The popup's route to Settings, divided by a faint hairline, with a self-hiding hint shown only until a provider is configured.",
+      "html": "<footer class=\"ds-footer\"><p class=\"ds-hint\">Set your LLM provider in Settings to get started.</p><button class=\"ds-btn\">Settings</button></footer>",
+      "css": ".ds-footer { margin-top: 12px; padding-top: 10px; border-top: 1px solid #eeeeee; font: 13px system-ui, sans-serif; } .ds-hint { color: #555555; font-size: 12px; margin: 0 0 8px; } .ds-btn { font: inherit; padding: 6px 14px; }"
+    },
+    {
+      "name": "The Mark",
+      "kind": "custom",
+      "refersTo": "status-active",
+      "description": "Toolbar icon: caption lines condensing to one summary line, with the single Signal Green capture dot. Firefox-only as SVG/context-fill; Chromium needs raster export.",
+      "html": "<svg class=\"ds-mark\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 32 32\" width=\"48\" height=\"48\" role=\"img\" aria-label=\"Meeting Summarizer\"><g fill=\"#1a1a1a\"><rect x=\"12.5\" y=\"4\" width=\"15.5\" height=\"5\" rx=\"2.5\"/><rect x=\"4\" y=\"13.5\" width=\"24\" height=\"5\" rx=\"2.5\"/><rect x=\"4\" y=\"23\" width=\"13\" height=\"5\" rx=\"2.5\"/></g><circle cx=\"6.5\" cy=\"6.5\" r=\"3.5\" fill=\"#0e8a16\"/></svg>",
+      "css": ".ds-mark { display: block; }"
+    },
+    {
       "name": "Summary Artifact",
       "kind": "custom",
       "refersTo": "body",
@@ -86,7 +102,7 @@
   ],
   "narrative": {
     "northStar": "The Status Readout",
-    "overview": "Meeting Summarizer is not an app you look at; it is an instrument you glance at. Its entire visible chrome — a 300px popup and a settings page — exists to report one thing quickly and honestly: is the meeting being captured, is something wrong, is a summary waiting? Color is the readout. It appears only to carry state, and everywhere else the interface is deliberately quiet: system font, black-on-white text, hairline dividers, and the browser's own controls. The design's ambition is to feel like part of Firefox rather than a product bolted onto it.\n\nThe system is flat by conviction, not by omission. There are no shadows, no gradients, no fills, no rounded \"cards\" — depth is a single 1px hairline where one section ends and another begins. Density is tight in the chrome and generous in the one place made for reading, the Summary Artifact, which opens to a comfortable 760px measure at 15px/1.5.\n\nThe current implementation leans entirely on native browser controls and the system font. That is the present state and a sensible default, but it is provisional — future work may add light custom styling, provided it stays within the utilitarian, meaning-only-color character. What is not provisional is the restraint: color earns its place by meaning something, and flatness is the resting state.",
+    "overview": "Meeting Summarizer is not an app you look at; it is an instrument you glance at. Its entire visible chrome — a 300px popup and a settings page — exists to report one thing quickly and honestly: is the meeting being captured, is something wrong, is a summary waiting? Color is the readout. It appears only to carry state, and everywhere else the interface is deliberately quiet: system font, black-on-white text, hairline dividers, and the browser's own controls. The design's ambition is to feel like part of the browser's own chrome rather than a product bolted onto it.\n\nThe system is flat by conviction, not by omission. There are no shadows, no gradients, no fills, no rounded \"cards\" — depth is a single 1px hairline where one section ends and another begins. Density is tight in the chrome and generous in the one place made for reading, the Summary Artifact, which opens to a comfortable 760px measure at 15px/1.5.\n\nThe current implementation leans entirely on native browser controls and the system font. That is the present state and a sensible default, but it is provisional — future work may add light custom styling, provided it stays within the utilitarian, meaning-only-color character. What is not provisional is the restraint: color earns its place by meaning something, and flatness is the resting state. Because the world is built from system-ui and native controls, it survives the Chromium migration (ADR-0003) unchanged; the one asset that does not travel is the toolbar mark, whose context-fill and SVG format are Firefox-only.",
     "keyCharacteristics": [
       "Color only ever reports state (active / warning / error); nothing decorative is colored.",
       "Flat throughout — depth is a single 1px hairline, never a shadow.",
@@ -97,7 +113,8 @@
     "rules": [
       { "name": "The Meaning-Only Color Rule", "body": "Color exists to report state, never to decorate. If a colored element does not tell the user something about capture, saving, or failure, it should be grayscale. Green means working, red means attention, dark red means a past fault; everything else is ink and gray.", "section": "colors" },
       { "name": "The Weight-Before-Color Rule", "body": "In grayscale zones, importance is expressed by moving to the 600 label weight, not by adding color. Color is spent only on state.", "section": "typography" },
-      { "name": "The Hairline Rule", "body": "Separation is a 1px solid line, never a shadow, fill, or card. Two weights only: #dddddd for structural divisions, #eeeeee for list rows.", "section": "elevation" }
+      { "name": "The Hairline Rule", "body": "Separation is a 1px solid line, never a shadow, fill, or card. Two weights only: #dddddd for structural divisions, #eeeeee for list rows.", "section": "elevation" },
+      { "name": "The One Signal Rule", "body": "The mark carries exactly one colored element — the capture dot. If the icon ever needs a second state (paused, failed), it changes that dot's color and nothing else.", "section": "shapes" }
     ],
     "dos": [
       "Do spend color only on meeting state — Signal Green for active/success, Alert Red for warnings (with weight 600), Fault Red for past failures.",
@@ -112,7 +129,9 @@
       "Don't introduce a decorative brand color or color any element that isn't reporting state.",
       "Don't round corners beyond the 4px fieldset radius, or make anything pill-shaped or circular.",
       "Don't widen the chrome into a \"dashboard\"; the popup is a readout, Settings is a single form column.",
-      "Don't load web fonts, icon fonts, or external assets into any surface, and never into the artifact."
+      "Don't load web fonts, icon fonts, or external assets into any surface, and never into the artifact.",
+      "Don't use Unicode glyphs or emoji to carry state (●, ⚠). They announce as noise to screen readers and render as color emoji on many platforms, injecting non-state color. The status class and its words carry the state; the drawn mark is the only icon.",
+      "Don't let a status change be visible-only. Any element whose text reports state carries a live region, so the readout reaches assistive tech as well as the eye."
     ]
   }
 }
