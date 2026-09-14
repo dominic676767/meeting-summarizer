@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-13T00:00:00Z",
+  "title": "Design System: Meeting Summarizer",
+  "extensions": {
+    "colorMeta": {
+      "ink": { "role": "neutral", "displayName": "Ink", "canonical": "#1a1a1a", "tonalRamp": ["#000000", "#1a1a1a", "#333333", "#4d4d4d", "#666666", "#999999", "#cccccc", "#f2f2f2"] },
+      "muted": { "role": "neutral", "displayName": "Muted Gray", "canonical": "#555555", "tonalRamp": ["#171717", "#2b2b2b", "#404040", "#555555", "#737373", "#999999", "#c2c2c2", "#ebebeb"] },
+      "meta": { "role": "neutral", "displayName": "Meta Gray", "canonical": "#666666", "tonalRamp": ["#1f1f1f", "#333333", "#4d4d4d", "#666666", "#808080", "#a6a6a6", "#cccccc", "#f0f0f0"] },
+      "border": { "role": "neutral", "displayName": "Divider", "canonical": "#dddddd", "tonalRamp": ["#4d4d4d", "#707070", "#949494", "#b3b3b3", "#cccccc", "#dddddd", "#ebebeb", "#f7f7f7"] },
+      "border-faint": { "role": "neutral", "displayName": "Faint Divider", "canonical": "#eeeeee", "tonalRamp": ["#666666", "#8a8a8a", "#adadad", "#c9c9c9", "#dedede", "#eeeeee", "#f5f5f5", "#fbfbfb"] },
+      "surface": { "role": "neutral", "displayName": "Surface", "canonical": "#ffffff", "tonalRamp": ["#d9d9d9", "#e6e6e6", "#efefef", "#f5f5f5", "#f9f9f9", "#fcfcfc", "#fefefe", "#ffffff"] },
+      "status-active": { "role": "primary", "displayName": "Signal Green", "canonical": "#0e8a16", "tonalRamp": ["#04220a", "#083f13", "#0b5b1c", "#0e8a16", "#25a83a", "#5cc568", "#a3e0a8", "#dcf5de"] },
+      "status-warning": { "role": "secondary", "displayName": "Alert Red", "canonical": "#d73a4a", "tonalRamp": ["#3a0a10", "#5e1119", "#8a1926", "#d73a4a", "#e56174", "#ee8f9c", "#f6bcc4", "#fce3e7"] },
+      "status-error": { "role": "tertiary", "displayName": "Fault Red", "canonical": "#aa0000", "tonalRamp": ["#2e0000", "#500000", "#780000", "#aa0000", "#cc2a2a", "#dd6060", "#eea0a0", "#f8d8d8"] }
+    },
+    "typographyMeta": {
+      "headline": { "displayName": "Headline", "purpose": "Summary Artifact title (h1); the primary reading heading." },
+      "title": { "displayName": "Title", "purpose": "Artifact section headings (h2), opened with top margin." },
+      "body": { "displayName": "Body", "purpose": "Artifact reading text and transcript segments; tuned for sustained reading." },
+      "label": { "displayName": "Label", "purpose": "Chrome workhorse: form labels, popup section headings, speaker names, summary trigger. Weight marks importance in grayscale." },
+      "meta": { "displayName": "Meta", "purpose": "Artifact metadata line (date, platform, segment count)." },
+      "mono": { "displayName": "Mono", "purpose": "Editable prompt-template text only; signals raw, changeable content." }
+    },
+    "shadows": [],
+    "motion": [],
+    "breakpoints": []
+  },
+  "components": [
+    {
+      "name": "Action Button",
+      "kind": "button",
+      "refersTo": "button",
+      "description": "Native browser button used for Save / Reset / Summarize now; styling is provisional and currently UA-default.",
+      "html": "<button class=\"ds-btn\">Save</button>",
+      "css": ".ds-btn { font: 13px system-ui, sans-serif; padding: 6px 14px; }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Full-width native text/password/select field for provider credentials and model IDs.",
+      "html": "<input class=\"ds-input\" type=\"text\" value=\"claude-sonnet-4\" />",
+      "css": ".ds-input { font: 13px system-ui, sans-serif; padding: 4px 6px; box-sizing: border-box; width: 100%; }"
+    },
+    {
+      "name": "Provider Fieldset",
+      "kind": "card",
+      "refersTo": "fieldset",
+      "description": "The only rounded element in the system (4px). Groups one provider's credentials; only the active one is shown.",
+      "html": "<fieldset class=\"ds-fieldset\"><legend>Claude</legend><label class=\"ds-label\" for=\"k\">API key</label><input class=\"ds-input\" id=\"k\" type=\"password\" /><p class=\"ds-note\">Bedrock API key (bearer token) only.</p></fieldset>",
+      "css": ".ds-fieldset { border: 1px solid #dddddd; border-radius: 4px; padding: 8px 10px; font: 13px system-ui, sans-serif; } .ds-label { display: block; margin: 8px 0 2px; font-weight: 600; } .ds-input { width: 100%; box-sizing: border-box; padding: 4px 6px; font: inherit; } .ds-note { color: #555555; font-size: 12px; margin: 6px 0; }"
+    },
+    {
+      "name": "Template Editor",
+      "kind": "input",
+      "refersTo": "textarea-template",
+      "description": "Monospace textarea for editing a summary prompt template; monospace signals raw editable text.",
+      "html": "<textarea class=\"ds-template\" rows=\"4\">Summarize this meeting.\\n\\nTranscript:\\n{{transcript}}</textarea>",
+      "css": ".ds-template { width: 100%; box-sizing: border-box; font: 12px monospace; }"
+    },
+    {
+      "name": "Status Readout",
+      "kind": "custom",
+      "refersTo": "status-active",
+      "description": "The signature line: 13px text whose color is its meaning — green active, red warning (bold), gray idle.",
+      "html": "<div class=\"ds-status ds-status--active\">Capturing 142 segments…</div>\n<div class=\"ds-status ds-status--warning\">Live captions are off</div>\n<div class=\"ds-status ds-status--idle\">Not in a meeting.</div>",
+      "css": ".ds-status { font: 13px system-ui, sans-serif; margin: 2px 0; } .ds-status--active { color: #0e8a16; } .ds-status--warning { color: #d73a4a; font-weight: 600; } .ds-status--idle { color: #555555; }"
+    },
+    {
+      "name": "Held Transcript Row",
+      "kind": "custom",
+      "refersTo": "status-error",
+      "description": "A flex list row for a transcript whose summary failed; the sober Fault Red reason sits between title and retry.",
+      "html": "<li class=\"ds-held\"><span>Weekly Sync</span><span class=\"ds-held-reason\">provider error</span><button class=\"ds-btn\">Retry</button></li>",
+      "css": ".ds-held { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 4px 0; border-top: 1px solid #eeeeee; list-style: none; font: 13px system-ui, sans-serif; } .ds-held-reason { color: #aa0000; font-size: 11px; } .ds-btn { font: 13px system-ui, sans-serif; padding: 4px 10px; }"
+    },
+    {
+      "name": "Summary Artifact",
+      "kind": "custom",
+      "refersTo": "body",
+      "description": "The product's deliverable: a self-contained document, summary first, full transcript folded into a details/summary at the bottom.",
+      "html": "<div class=\"ds-artifact\"><h1 class=\"ds-art-title\">Weekly Sync</h1><p class=\"ds-art-meta\">2026-09-13 · teams · 142 caption segments</p><h2 class=\"ds-art-h2\">TL;DR</h2><p>Shipped the Teams adapter; Bedrock keys still pending.</p><details class=\"ds-details\"><summary>Full transcript</summary><p class=\"ds-seg\"><span class=\"ds-speaker\">Alex:</span> Let's begin.</p></details></div>",
+      "css": ".ds-artifact { font: 15px/1.5 system-ui, sans-serif; color: #1a1a1a; max-width: 760px; } .ds-art-title { font-size: 1.4rem; margin: 0; } .ds-art-meta { color: #666666; font-size: 0.85rem; margin: .25rem 0 0; } .ds-art-h2 { font-size: 1.15rem; margin-top: 1.5rem; } .ds-details { margin-top: 2rem; border-top: 1px solid #dddddd; padding-top: 1rem; } .ds-details summary { cursor: pointer; font-weight: 600; } .ds-seg { margin: .35rem 0; } .ds-speaker { font-weight: 600; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Status Readout",
+    "overview": "Meeting Summarizer is not an app you look at; it is an instrument you glance at. Its entire visible chrome — a 300px popup and a settings page — exists to report one thing quickly and honestly: is the meeting being captured, is something wrong, is a summary waiting? Color is the readout. It appears only to carry state, and everywhere else the interface is deliberately quiet: system font, black-on-white text, hairline dividers, and the browser's own controls. The design's ambition is to feel like part of Firefox rather than a product bolted onto it.\n\nThe system is flat by conviction, not by omission. There are no shadows, no gradients, no fills, no rounded \"cards\" — depth is a single 1px hairline where one section ends and another begins. Density is tight in the chrome and generous in the one place made for reading, the Summary Artifact, which opens to a comfortable 760px measure at 15px/1.5.\n\nThe current implementation leans entirely on native browser controls and the system font. That is the present state and a sensible default, but it is provisional — future work may add light custom styling, provided it stays within the utilitarian, meaning-only-color character. What is not provisional is the restraint: color earns its place by meaning something, and flatness is the resting state.",
+    "keyCharacteristics": [
+      "Color only ever reports state (active / warning / error); nothing decorative is colored.",
+      "Flat throughout — depth is a single 1px hairline, never a shadow.",
+      "System font, native controls; the UI reads as part of the browser.",
+      "Compact chrome (13px), calm document (15px/1.5).",
+      "Fully self-contained output: the Summary Artifact ships inline CSS and no external assets."
+    ],
+    "rules": [
+      { "name": "The Meaning-Only Color Rule", "body": "Color exists to report state, never to decorate. If a colored element does not tell the user something about capture, saving, or failure, it should be grayscale. Green means working, red means attention, dark red means a past fault; everything else is ink and gray.", "section": "colors" },
+      { "name": "The Weight-Before-Color Rule", "body": "In grayscale zones, importance is expressed by moving to the 600 label weight, not by adding color. Color is spent only on state.", "section": "typography" },
+      { "name": "The Hairline Rule", "body": "Separation is a 1px solid line, never a shadow, fill, or card. Two weights only: #dddddd for structural divisions, #eeeeee for list rows.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do spend color only on meeting state — Signal Green for active/success, Alert Red for warnings (with weight 600), Fault Red for past failures.",
+      "Do express importance with the 600 label weight in grayscale zones rather than reaching for color.",
+      "Do separate sections with a single 1px hairline — #dddddd structurally, #eeeeee for list rows.",
+      "Do keep the chrome compact (13px, 4–16px spacing) and the Summary Artifact calm (15px/1.5, ~760px measure).",
+      "Do keep the Summary Artifact fully self-contained: inline CSS, no external fonts, scripts, or images.",
+      "Do use the system font for interface text and monospace only for editable template text."
+    ],
+    "donts": [
+      "Don't add shadows, gradients, fills, or elevation of any kind — the system is flat.",
+      "Don't introduce a decorative brand color or color any element that isn't reporting state.",
+      "Don't round corners beyond the 4px fieldset radius, or make anything pill-shaped or circular.",
+      "Don't widen the chrome into a \"dashboard\"; the popup is a readout, Settings is a single form column.",
+      "Don't load web fonts, icon fonts, or external assets into any surface, and never into the artifact."
+    ]
+  }
+}

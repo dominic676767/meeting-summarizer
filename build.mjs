@@ -27,5 +27,6 @@ await build({
 await cp("src/manifest.json", `${outdir}/manifest.json`);
 await cp("src/popup/popup.html", `${outdir}/popup.html`);
 await cp("src/options/options.html", `${outdir}/options.html`);
+await cp("src/icon.svg", `${outdir}/icon.svg`);
 
 console.log("built → dist/");

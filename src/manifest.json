@@ -26,9 +26,14 @@
       "all_frames": true
     }
   ],
+  "icons": {
+    "48": "icon.svg",
+    "96": "icon.svg"
+  },
   "browser_action": {
     "default_popup": "popup.html",
-    "default_title": "Meeting Summarizer"
+    "default_title": "Meeting Summarizer",
+    "default_icon": "icon.svg"
   },
   "options_ui": {
     "page": "options.html"

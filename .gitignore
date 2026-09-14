@@ -2,3 +2,4 @@
 .scratch/
 node_modules/
 dist/
+.impeccable/hook.cache.json

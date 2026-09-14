@@ -15,20 +15,26 @@
       #held { margin-top: 12px; }
       #held ul { list-style: none; padding: 0; margin: 6px 0 0; }
       #held li { display: flex; justify-content: space-between; gap: 8px; align-items: center; padding: 4px 0; border-top: 1px solid #eee; }
-      .reason { color: #a00; font-size: 11px; }
+      .reason { color: #aa0000; font-size: 12px; }
       h2 { font-size: 12px; margin: 0; color: #555; }
+      footer { margin-top: 12px; padding-top: 10px; border-top: 1px solid #eee; }
+      #hint { color: #555; font-size: 12px; margin: 0 0 8px; }
     </style>
   </head>
   <body>
     <main>
       <h1>Meeting Summarizer</h1>
-      <div id="status" class="idle">Not in a meeting.</div>
+      <div id="status" class="idle" role="status" aria-live="polite">Not in a meeting.</div>
       <div id="title"></div>
       <button id="summarize" hidden>Summarize now</button>
       <div id="held" hidden>
         <h2>Held transcripts</h2>
         <ul id="held-list"></ul>
       </div>
+      <footer>
+        <p id="hint" hidden>Set your LLM provider in Settings to get started.</p>
+        <button id="open-settings">Settings</button>
+      </footer>
     </main>
     <script src="popup.js" type="module"></script>
   </body>
