@@ -56,6 +56,10 @@ The auto-detected condition (call controls disappearing, call-ended DOM state, o
 
 The user-selected engine that turns an Audio Recording into Utterances. Distinct from [[Provider]] — most LLM backends have no speech-to-text API. Local WASM Whisper is the default (nothing leaves the machine); cloud engines are opt-in.
 
+### Meeting Language
+
+The language the user declares their meetings are spoken in, passed to whichever [[Transcription Provider]] is selected as its language hint. Declared rather than detected: nothing in the pipeline detects it, and an engine given no hint silently assumes English — so an undeclared German meeting comes back *mistranscribed*, and the Prompt Templates then faithfully summarize the wrong words. It describes the Meeting, not the engine, so it is one setting rather than one per engine.
+
 ### Provider
 
 The user-selected LLM backend that turns a Transcript into a Summary. Candidates: Claude (Anthropic API), OpenAI, Ollama (local), AWS Bedrock.
