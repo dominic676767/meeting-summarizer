@@ -104,7 +104,7 @@ A grayscale interface with a three-color semantic accent set that only ever sign
 The product has no decorative brand color. Its "primary" expression is the semantic status set — the one place color is allowed.
 
 - **Signal Green** (`#0e8a16`): the active/success signal. Used for the "Capturing…" status in the popup and the "Saved." confirmation in Settings. Presence of this green means the tool is working.
-- **Alert Red** (`#d73a4a`): the warning signal, always paired with weight-600 text. Used when live captions are off (the state that makes the whole tool inert), including the toolbar badge's red `!`.
+- **Alert Red** (`#d73a4a`): carries two meanings, and the pairing tells them apart. As the **warning** signal it is always set in weight-600 text — live captions are off (the state that makes the whole tool inert), or a meeting is being lost unrecorded — including the toolbar badge's red `!`. As the **live-recording** indicator it appears only as a filled dot beside Ink-weight text, never as colored type. Text means attention; a dot means live.
 - **Fault Red** (`#aa0000`): the deeper error tone reserved for a Held Transcript's failure reason — a quieter, more sober red than the live warning, because it reports a past failure rather than an active one.
 
 ### Neutral
@@ -116,7 +116,9 @@ The product has no decorative brand color. Its "primary" expression is the seman
 - **Surface** (`#ffffff`): the implicit background everywhere; never tinted.
 
 ### Named Rules
-**The Meaning-Only Color Rule.** Color exists to report state, never to decorate. If a colored element does not tell the user something about capture, saving, or failure, it should be grayscale. Green means working, red means attention, dark red means a past fault; everything else is ink and gray.
+**The Meaning-Only Color Rule.** Color exists to report state, never to decorate. If a colored element does not tell the user something about capture, saving, or failure, it should be grayscale. Green means working, red means attention *or* live capture, dark red means a past fault; everything else is ink and gray.
+
+**The Text-or-Dot Rule.** Alert Red is the one color with two jobs, and its form disambiguates them: **red type** (weight 600) is a warning the user must act on; a **red dot** beside ordinary Ink text is the live-recording indicator, borrowing the universal convention every recorder shares. Never set recording state in red type, and never signal a warning with a bare dot. Approved as an amendment to this system, 2026-09-14.
 
 ## Typography
 

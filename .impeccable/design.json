@@ -11,7 +11,7 @@
       "border-faint": { "role": "neutral", "displayName": "Faint Divider", "canonical": "#eeeeee", "tonalRamp": ["#666666", "#8a8a8a", "#adadad", "#c9c9c9", "#dedede", "#eeeeee", "#f5f5f5", "#fbfbfb"] },
       "surface": { "role": "neutral", "displayName": "Surface", "canonical": "#ffffff", "tonalRamp": ["#d9d9d9", "#e6e6e6", "#efefef", "#f5f5f5", "#f9f9f9", "#fcfcfc", "#fefefe", "#ffffff"] },
       "status-active": { "role": "primary", "displayName": "Signal Green", "canonical": "#0e8a16", "tonalRamp": ["#04220a", "#083f13", "#0b5b1c", "#0e8a16", "#25a83a", "#5cc568", "#a3e0a8", "#dcf5de"] },
-      "status-warning": { "role": "secondary", "displayName": "Alert Red", "canonical": "#d73a4a", "tonalRamp": ["#3a0a10", "#5e1119", "#8a1926", "#d73a4a", "#e56174", "#ee8f9c", "#f6bcc4", "#fce3e7"] },
+      "status-warning": { "role": "secondary", "displayName": "Alert Red", "purpose": "Warning as weight-600 red type; live recording as a red dot beside Ink text. Form disambiguates the two meanings (The Text-or-Dot Rule).", "canonical": "#d73a4a", "tonalRamp": ["#3a0a10", "#5e1119", "#8a1926", "#d73a4a", "#e56174", "#ee8f9c", "#f6bcc4", "#fce3e7"] },
       "status-error": { "role": "tertiary", "displayName": "Fault Red", "canonical": "#aa0000", "tonalRamp": ["#2e0000", "#500000", "#780000", "#aa0000", "#cc2a2a", "#dd6060", "#eea0a0", "#f8d8d8"] }
     },
     "typographyMeta": {
@@ -111,7 +111,8 @@
       "Fully self-contained output: the Summary Artifact ships inline CSS and no external assets."
     ],
     "rules": [
-      { "name": "The Meaning-Only Color Rule", "body": "Color exists to report state, never to decorate. If a colored element does not tell the user something about capture, saving, or failure, it should be grayscale. Green means working, red means attention, dark red means a past fault; everything else is ink and gray.", "section": "colors" },
+      { "name": "The Meaning-Only Color Rule", "body": "Color exists to report state, never to decorate. If a colored element does not tell the user something about capture, saving, or failure, it should be grayscale. Green means working, red means attention or live capture, dark red means a past fault; everything else is ink and gray.", "section": "colors" },
+      { "name": "The Text-or-Dot Rule", "body": "Alert Red is the one color with two jobs, and its form disambiguates them: red type (weight 600) is a warning the user must act on; a red dot beside ordinary Ink text is the live-recording indicator, borrowing the universal convention every recorder shares. Never set recording state in red type, and never signal a warning with a bare dot.", "section": "colors" },
       { "name": "The Weight-Before-Color Rule", "body": "In grayscale zones, importance is expressed by moving to the 600 label weight, not by adding color. Color is spent only on state.", "section": "typography" },
       { "name": "The Hairline Rule", "body": "Separation is a 1px solid line, never a shadow, fill, or card. Two weights only: #dddddd for structural divisions, #eeeeee for list rows.", "section": "elevation" },
       { "name": "The One Signal Rule", "body": "The mark carries exactly one colored element — the capture dot. If the icon ever needs a second state (paused, failed), it changes that dot's color and nothing else.", "section": "shapes" }

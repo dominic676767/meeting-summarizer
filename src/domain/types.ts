@@ -59,6 +59,13 @@ export interface Transcript {
    * must never be read as a claim of recorded audio.
    */
   provenance?: TranscriptProvenance;
+  /**
+   * Which engine produced the words, recorded when the Transcript is built.
+   * Whether it reaches the Summary Artifact is the reader's choice, not ours:
+   * naming it aids reproducibility but discloses the author's tooling to
+   * everyone the file is forwarded to, so it is omitted unless opted in.
+   */
+  engine?: { id: string; model: string };
   segments: TranscriptSegment[];
 }
 
@@ -124,6 +131,12 @@ export interface Settings {
   ollama: { baseUrl: string; model: string };
   bedrock: { apiKey: string; region: string; model: string };
   transcription: TranscriptionSettings;
+  /**
+   * Name the transcription engine and model in the Summary Artifact. Off by
+   * default: it helps a reader judge the words, but an artifact gets forwarded,
+   * and the author never chose to tell its recipients what they run.
+   */
+  nameEngineInArtifact: boolean;
 }
 
 /** A Transcript whose summarization failed, retained for retry. */

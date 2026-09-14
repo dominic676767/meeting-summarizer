@@ -8,6 +8,10 @@ import { renderTemplate } from "./templates";
 export interface PipelineSettings {
   shape: SummaryShape;
   templates: PromptTemplates;
+  /** Opt-in: name the transcription engine and model in the artifact. Off by
+   * default, because a forwarded artifact would otherwise disclose tooling the
+   * reader never chose to share. */
+  nameEngineInArtifact?: boolean;
 }
 
 /** Any pipeline failure surfaces as PipelineError → the Held Transcript path. */
@@ -39,7 +43,11 @@ export async function summarizeTranscript(
       ? await complete(client, singleShot)
       : await mapReduce(transcript, settings, client);
 
-  return { html: renderArtifact(summary, transcript) };
+  return {
+    html: renderArtifact(summary, transcript, {
+      nameEngine: settings.nameEngineInArtifact === true,
+    }),
+  };
 }
 
 async function complete(client: ProviderClient, prompt: string): Promise<string> {

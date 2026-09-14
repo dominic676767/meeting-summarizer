@@ -10,7 +10,7 @@ import type {
   OffscreenTranscribeReply,
   StatusReply,
 } from "../messages";
-import type { HeldRecording, Utterance } from "../domain/types";
+import type { HeldRecording, Settings, Utterance } from "../domain/types";
 import { artifactFilename } from "../pipeline/filename";
 import { summarizeTranscript } from "../pipeline/pipeline";
 import { createProviderClient } from "../providers/factory";
@@ -217,7 +217,7 @@ export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | 
     // takes the names from.
     s.audioWords = outcome.utterances.length > 0;
     if (s.audioWords) {
-      transcript = fuseTranscript(captionTranscript, outcome.utterances);
+      transcript = { ...fuseTranscript(captionTranscript, outcome.utterances), engine: outcome.engine };
     } else if (!outcome.cancelled) {
       // A transcription outage must cost a retry, not the meeting: hold the
       // Audio Recording so the user can retry it — after switching Transcription
@@ -285,6 +285,13 @@ function reasonOf(err: unknown): string {
  * still needs to tell a failure (hold the audio for retry) from the user
  * choosing captions over the wait (nothing went wrong, nothing to retry).
  */
+/** The engine that ran, as the artifact names it when the user opts in. */
+function engineOf(t: Settings["transcription"]): { id: string; model: string } {
+  return t.provider === "openai"
+    ? { id: "OpenAI", model: t.openai.model }
+    : { id: "local Whisper", model: t.localWhisper.model };
+}
+
 async function transcribeRecording(
   tabId: number,
   s: MeetingSession,
@@ -301,7 +308,7 @@ async function transcribeRecording(
       tabId,
     } satisfies OffscreenMessage)) as OffscreenTranscribeReply;
     if (reply.error) console.error(`meeting-summarizer: transcription failed: ${reply.error}`);
-    return reply;
+    return { ...reply, engine: engineOf(settings.transcription) };
   } catch (err) {
     console.error("meeting-summarizer: transcription failed", err);
     return { utterances: [], cancelled: false, error: reasonOf(err) };

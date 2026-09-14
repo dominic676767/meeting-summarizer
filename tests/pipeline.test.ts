@@ -190,3 +190,55 @@ describe("Summary Artifact provenance", () => {
     expect(html).toContain("Full captions");
   });
 });
+
+describe("Meta line: duration and the opt-in engine clause", () => {
+  const START = Date.UTC(2026, 8, 13, 10, 0, 0);
+  const engine = { id: "local Whisper", model: "base" };
+
+  const base = () =>
+    transcript({
+      startedAt: START,
+      endedAt: START + 1_845_000, // 30:45
+      provenance: "captions-only",
+      engine,
+      segments: [seg("Alice", "hello", START + 1_000)],
+    });
+
+  it("states how long the meeting was", async () => {
+    const { html } = await summarizeTranscript(base(), settings, fakeClient());
+    expect(html).toContain("30:45");
+  });
+
+  it("claims no duration when the Meeting was never seen to end", async () => {
+    // Rather than inventing one from render time.
+    const { html } = await summarizeTranscript(
+      transcript({ startedAt: START, endedAt: undefined, segments: [seg("A", "hi", START)] }),
+      settings,
+      fakeClient(),
+    );
+    expect(html).not.toMatch(/· \d+:\d\d ·/);
+  });
+
+  it("omits the engine by default, so a forwarded artifact discloses nothing", async () => {
+    const { html } = await summarizeTranscript(base(), settings, fakeClient());
+    expect(html).not.toContain("local Whisper");
+  });
+
+  it("names the engine only once the reader opts in", async () => {
+    const { html } = await summarizeTranscript(
+      base(),
+      { ...settings, nameEngineInArtifact: true },
+      fakeClient(),
+    );
+    expect(html).toContain("local Whisper base");
+  });
+
+  it("opting in cannot name an engine the Transcript never recorded", async () => {
+    const { html } = await summarizeTranscript(
+      transcript({ startedAt: START, endedAt: START + 60_000, engine: undefined }),
+      { ...settings, nameEngineInArtifact: true },
+      fakeClient(),
+    );
+    expect(html).not.toContain("undefined");
+  });
+});

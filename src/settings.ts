@@ -14,6 +14,7 @@ export const DEFAULT_SETTINGS: Settings = {
   bedrock: { apiKey: "", region: "us-east-1", model: "anthropic.claude-sonnet-4-20250514-v1:0" },
   // Local WASM Whisper is the working default: no API key, and the audio never
   // leaves the machine (ADR-0004). Cloud transcription is strictly opt-in.
+  nameEngineInArtifact: false,
   transcription: {
     provider: "local-whisper",
     localWhisper: { model: "base" },

@@ -52,6 +52,7 @@ async function init(): Promise<void> {
   $<HTMLSelectElement>("whisper-model").value = s.transcription.localWhisper.model;
   $<HTMLInputElement>("transcription-openai-key").value = s.transcription.openai.apiKey;
   $<HTMLInputElement>("transcription-openai-model").value = s.transcription.openai.model;
+  $<HTMLInputElement>("name-engine").checked = s.nameEngineInArtifact;
   $<HTMLSelectElement>("shape").value = s.shape;
   $<HTMLTextAreaElement>("template-structured").value = s.templates.structured;
   $<HTMLTextAreaElement>("template-narrative").value = s.templates.narrative;
@@ -94,6 +95,7 @@ $("save").addEventListener("click", async () => {
       model: $<HTMLInputElement>("transcription-openai-model").value.trim(),
     },
   };
+  s.nameEngineInArtifact = $<HTMLInputElement>("name-engine").checked;
   s.shape = $<HTMLSelectElement>("shape").value as SummaryShape;
   s.templates = {
     structured: $<HTMLTextAreaElement>("template-structured").value,

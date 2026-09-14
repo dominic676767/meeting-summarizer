@@ -144,6 +144,9 @@ export interface OffscreenStatusReply {
 
 export interface OffscreenTranscribeReply {
   utterances: Utterance[];
+  /** Which engine actually produced these words, for the artifact's optional
+   * engine clause. Recorded from the run, not re-read from settings later. */
+  engine?: { id: string; model: string };
   /** The user chose captions over waiting — not a failure. */
   cancelled: boolean;
   error: string | null;

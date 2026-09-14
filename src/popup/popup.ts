@@ -236,8 +236,17 @@ function render(status: StatusReply): void {
       statusEl.className = "warning";
       statusEl.textContent = "Recording — no captions, so speakers won't be named. Turn captions on.";
     } else {
+      // Text-or-Dot: recording is a red dot beside Ink text, never red type —
+      // red type means a warning to act on. The dot is decorative to assistive
+      // tech because the adjacent words already say "Recording".
       statusEl.className = "recording";
-      statusEl.textContent = `Recording — ${elapsed(status.recordingStartedAt ?? Date.now())}`;
+      statusEl.replaceChildren(
+        Object.assign(document.createElement("span"), {
+          className: "rec-dot",
+          ariaHidden: "true",
+        }),
+        document.createTextNode(`Recording — ${elapsed(status.recordingStartedAt ?? Date.now())}`),
+      );
     }
   } else if (status.state === "detected") {
     statusEl.className = "warning";

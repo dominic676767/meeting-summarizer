@@ -46,7 +46,7 @@
     <fieldset id="panel-ollama" class="hidden">
       <legend>Ollama</legend>
       <p class="note">
-        One-time setup: run Ollama with <code>OLLAMA_ORIGINS=moz-extension://*</code> so this
+        One-time setup: run Ollama with <code>OLLAMA_ORIGINS=chrome-extension://*</code> so this
         extension may call it.
       </p>
       <label for="ollama-url">Base URL</label>
@@ -113,6 +113,18 @@
         Use a model that returns per-segment timestamps (<code>whisper-1</code>). Speaker names come
         from live captions matched against those timings, so a model without them costs you the
         names.
+      </p>
+    </fieldset>
+
+    <fieldset>
+      <legend>What the saved summary discloses</legend>
+      <label style="font-weight: 400">
+        <input type="checkbox" id="name-engine" style="width: auto" />
+        Name the transcription engine and model in the saved file
+      </label>
+      <p class="note">
+        Off by default. It helps a reader judge how much to trust the words, but a summary you
+        forward would then tell its recipients which engine and model you run.
       </p>
     </fieldset>
 

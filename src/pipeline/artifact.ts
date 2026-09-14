@@ -109,10 +109,41 @@ function formatOffset(ms: number): string {
 }
 
 /**
+ * The Meta line: what this document is, in the order a reader needs it — when,
+ * where, how long, how much, and what it was made of. Duration is included
+ * because a 12-minute standup and a two-hour review deserve different scrutiny,
+ * and a duration far shorter than the meeting is the visible trace of a capture
+ * that started late.
+ *
+ * The engine is named only when the reader opted in: it aids reproducibility but
+ * discloses their tooling to everyone the file reaches.
+ */
+function metaLine(transcript: Transcript, provenanceClause: string, nameEngine: boolean): string {
+  const parts = [
+    new Date(transcript.endedAt ?? transcript.startedAt).toISOString().slice(0, 10),
+    escapeHtml(transcript.platform),
+  ];
+  // Absent endedAt means we never saw the Meeting close, so no duration is
+  // claimed rather than one invented from the render time.
+  if (transcript.endedAt !== undefined) {
+    parts.push(formatOffset(transcript.endedAt - transcript.startedAt));
+  }
+  parts.push(`${transcript.segments.length} segments`, provenanceClause);
+  if (nameEngine && transcript.engine) {
+    parts.push(`${escapeHtml(transcript.engine.id)} ${escapeHtml(transcript.engine.model)}`);
+  }
+  return parts.join(" · ");
+}
+
+/**
  * Renders the Summary Artifact: self-contained HTML with the Summary followed
  * by the full Transcript in a collapsible section. Inline CSS, no external assets.
  */
-export function renderArtifact(summaryMarkdown: string, transcript: Transcript): string {
+export function renderArtifact(
+  summaryMarkdown: string,
+  transcript: Transcript,
+  opts: { nameEngine?: boolean } = {},
+): string {
   const date = new Date(transcript.endedAt ?? transcript.startedAt);
   // An unstated provenance is indistinguishable from the best case, so a
   // Transcript that carries no claim is read as the weakest one.
@@ -133,7 +164,7 @@ export function renderArtifact(summaryMarkdown: string, transcript: Transcript):
 </head>
 <body>
 <h1>${escapeHtml(transcript.title)}</h1>
-<p class="meta">${date.toISOString().slice(0, 10)} · ${escapeHtml(transcript.platform)} · ${transcript.segments.length} segments · ${provenance.clause}</p>
+<p class="meta">${metaLine(transcript, provenance.clause, opts.nameEngine === true)}</p>
 ${transcript.provenance === "audio-unattributed" ? noteUnverifiedOwners(summary) : summary}
 <details>
 <summary>${provenance.sectionLabel}</summary>
