@@ -1,0 +1,16 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "flat-type-hierarchy",
+        "value": "*",
+        "files": [
+          "src/options/options.html"
+        ],
+        "createdAt": "2026-09-14T04:15:02.516Z"
+      }
+    ]
+  }
+}
