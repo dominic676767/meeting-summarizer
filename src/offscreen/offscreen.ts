@@ -9,8 +9,8 @@ import type {
   OffscreenTranscribeReply,
   TranscriptionProgress,
 } from "../messages";
-import { createLocalWhisperProvider } from "../transcription/local-whisper";
-import { TranscriptionCancelled } from "../transcription/provider";
+import { createTranscriptionProviderFor } from "../transcription/factory";
+import { TranscriptionCancelled, type TranscriptionProvider } from "../transcription/provider";
 import { deleteRecording, openAudioStore, readRecording, type AudioStore } from "./audio-store";
 
 let recorder: MediaRecorder | undefined;
@@ -132,12 +132,15 @@ async function transcribe(
   if (running) return { utterances: [], cancelled: true, error: "transcription already running" };
   const report = progressReporter(msg.tabId, Date.now());
   const abort = new AbortController();
-  const provider = createLocalWhisperProvider({
-    model: msg.model,
-    workerUrl: ext.runtime.getURL("whisper-worker.js"),
-  });
-  running = { provider, abort };
+  let provider: (TranscriptionProvider & { close(): void }) | undefined;
   try {
+    // Inside the try because selecting an unconfigured engine — a cloud one with
+    // no key — fails here, and that failure must reach the caller as a held
+    // recording rather than a rejected message.
+    provider = createTranscriptionProviderFor(msg.transcription, {
+      workerUrl: ext.runtime.getURL("whisper-worker.js"),
+    });
+    running = { provider, abort };
     const data = await readRecording(msg.recordingId);
     const utterances = await provider.transcribe(
       { data, startOffsetMs: msg.startOffsetMs },
@@ -172,7 +175,7 @@ async function transcribe(
       error: err instanceof Error ? err.message : String(err),
     };
   } finally {
-    provider.close();
+    provider?.close();
     running = undefined;
   }
 }

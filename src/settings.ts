@@ -13,8 +13,14 @@ export const DEFAULT_SETTINGS: Settings = {
   ollama: { baseUrl: "http://localhost:11434", model: "llama3.1" },
   bedrock: { apiKey: "", region: "us-east-1", model: "anthropic.claude-sonnet-4-20250514-v1:0" },
   // Local WASM Whisper is the working default: no API key, and the audio never
-  // leaves the machine (ADR-0004).
-  transcription: { provider: "local-whisper", localWhisper: { model: "base" } },
+  // leaves the machine (ADR-0004). Cloud transcription is strictly opt-in.
+  transcription: {
+    provider: "local-whisper",
+    localWhisper: { model: "base" },
+    // whisper-1 by default because it is the transcription model that returns
+    // per-segment timestamps, and fusion attributes speakers by time overlap.
+    openai: { apiKey: "", model: "whisper-1" },
+  },
 };
 
 export async function loadSettings(): Promise<Settings> {
@@ -36,6 +42,10 @@ export async function loadSettings(): Promise<Settings> {
       localWhisper: {
         ...DEFAULT_SETTINGS.transcription.localWhisper,
         ...s.transcription?.localWhisper,
+      },
+      openai: {
+        ...DEFAULT_SETTINGS.transcription.openai,
+        ...s.transcription?.openai,
       },
     },
   };

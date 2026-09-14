@@ -12,6 +12,10 @@ import { loadSettings, saveSettings } from "../settings";
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const providerSelect = $<HTMLSelectElement>("provider");
 const PROVIDERS: ProviderId[] = ["anthropic", "openai", "ollama", "bedrock"];
+// Kept on their own prefix: the two axes share vendor names, and the point of
+// this page is that they are not the same setting.
+const transcriptionSelect = $<HTMLSelectElement>("transcription-provider");
+const TRANSCRIPTION_PROVIDERS: TranscriptionProviderId[] = ["local-whisper", "openai"];
 
 function showPanel(provider: string): void {
   for (const p of PROVIDERS) {
@@ -19,7 +23,16 @@ function showPanel(provider: string): void {
   }
 }
 
+function showTranscriptionPanel(provider: string): void {
+  for (const p of TRANSCRIPTION_PROVIDERS) {
+    $(`panel-transcription-${p}`).classList.toggle("hidden", p !== provider);
+  }
+}
+
 providerSelect.addEventListener("change", () => showPanel(providerSelect.value));
+transcriptionSelect.addEventListener("change", () =>
+  showTranscriptionPanel(transcriptionSelect.value),
+);
 
 async function init(): Promise<void> {
   const s = await loadSettings();
@@ -34,8 +47,11 @@ async function init(): Promise<void> {
   $<HTMLInputElement>("bedrock-key").value = s.bedrock.apiKey;
   $<HTMLInputElement>("bedrock-region").value = s.bedrock.region;
   $<HTMLInputElement>("bedrock-model").value = s.bedrock.model;
-  $<HTMLSelectElement>("transcription-provider").value = s.transcription.provider;
+  transcriptionSelect.value = s.transcription.provider;
+  showTranscriptionPanel(s.transcription.provider);
   $<HTMLSelectElement>("whisper-model").value = s.transcription.localWhisper.model;
+  $<HTMLInputElement>("transcription-openai-key").value = s.transcription.openai.apiKey;
+  $<HTMLInputElement>("transcription-openai-model").value = s.transcription.openai.model;
   $<HTMLSelectElement>("shape").value = s.shape;
   $<HTMLTextAreaElement>("template-structured").value = s.templates.structured;
   $<HTMLTextAreaElement>("template-narrative").value = s.templates.narrative;
@@ -69,9 +85,13 @@ $("save").addEventListener("click", async () => {
     model: $<HTMLInputElement>("bedrock-model").value.trim(),
   };
   s.transcription = {
-    provider: $<HTMLSelectElement>("transcription-provider").value as TranscriptionProviderId,
+    provider: transcriptionSelect.value as TranscriptionProviderId,
     localWhisper: {
       model: $<HTMLSelectElement>("whisper-model").value as WhisperModelSize,
+    },
+    openai: {
+      apiKey: $<HTMLInputElement>("transcription-openai-key").value.trim(),
+      model: $<HTMLInputElement>("transcription-openai-model").value.trim(),
     },
   };
   s.shape = $<HTMLSelectElement>("shape").value as SummaryShape;

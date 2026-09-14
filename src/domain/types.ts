@@ -90,12 +90,29 @@ export interface PromptTemplates {
 
 export type ProviderId = "anthropic" | "openai" | "ollama" | "bedrock";
 
-/** The engine that turns an Audio Recording into Utterances. Deliberately a
- * separate axis from ProviderId: most LLM backends have no speech-to-text API. */
-export type TranscriptionProviderId = "local-whisper";
+/**
+ * The engine that turns an Audio Recording into Utterances. Deliberately a
+ * separate axis from ProviderId: most LLM backends have no speech-to-text API,
+ * so the ids that appear in both lists are a coincidence of vendor, not a shared
+ * setting — `openai` here is a transcription endpoint with its own key.
+ */
+export type TranscriptionProviderId = "local-whisper" | "openai";
 
 /** Whisper model size — the accuracy-against-time trade the user picks. */
 export type WhisperModelSize = "tiny" | "base" | "small";
+
+/**
+ * Transcription Provider selection and per-engine settings. A separate axis from
+ * the Provider settings: a Claude or Bedrock key can summarize a Meeting but
+ * cannot transcribe one, so no key is ever shared between the two.
+ */
+export interface TranscriptionSettings {
+  provider: TranscriptionProviderId;
+  localWhisper: { model: WhisperModelSize };
+  /** The cloud engine's own credentials. Not the `openai` Provider key: that one
+   * is spent on summarization, and a user may opt into one without the other. */
+  openai: { apiKey: string; model: string };
+}
 
 /** Settings persisted in browser.storage.local. */
 export interface Settings {
@@ -106,12 +123,7 @@ export interface Settings {
   openai: { apiKey: string; model: string };
   ollama: { baseUrl: string; model: string };
   bedrock: { apiKey: string; region: string; model: string };
-  /** Transcription Provider selection and its settings, separate from the
-   * Provider above so a Claude key is never mistaken for transcription. */
-  transcription: {
-    provider: TranscriptionProviderId;
-    localWhisper: { model: WhisperModelSize };
-  };
+  transcription: TranscriptionSettings;
 }
 
 /** A Transcript whose summarization failed, retained for retry. */

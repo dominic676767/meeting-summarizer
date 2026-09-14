@@ -8,12 +8,10 @@
 // decoding and the ability to spawn a worker.
 import type { WhisperModelSize } from "../domain/types";
 import {
-  createTranscriptionProvider,
   TranscriptionError,
   type DecodedAudio,
   type EngineSpan,
   type TranscriptionEngine,
-  type TranscriptionProvider,
 } from "./provider";
 import {
   WHISPER_SAMPLE_RATE,
@@ -125,23 +123,5 @@ export function createLocalWhisperEngine(opts: {
       // A terminated worker never replies, so nothing may be left waiting.
       failAll(new TranscriptionError("local Whisper stopped"));
     },
-  };
-}
-
-/** The default Transcription Provider, ready to transcribe an Audio Recording. */
-export function createLocalWhisperProvider(opts: {
-  model: WhisperModelSize;
-  workerUrl: string;
-}): TranscriptionProvider & { close(): void } {
-  const engine = createLocalWhisperEngine(opts);
-  const provider = createTranscriptionProvider({
-    name: "local-whisper",
-    engine,
-    decode: decodeToMono,
-  });
-  return {
-    name: provider.name,
-    transcribe: (recording, hooks) => provider.transcribe(recording, hooks),
-    close: () => void engine.close?.(),
   };
 }

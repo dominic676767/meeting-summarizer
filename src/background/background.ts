@@ -296,7 +296,7 @@ async function transcribeRecording(
     const reply = (await ext.runtime.sendMessage({
       type: "offscreen-transcribe",
       recordingId: s.recordingId,
-      model: settings.transcription.localWhisper.model,
+      transcription: settings.transcription,
       startOffsetMs: captureStartOffset(s),
       tabId,
     } satisfies OffscreenMessage)) as OffscreenTranscribeReply;
@@ -405,7 +405,7 @@ async function transcribeHeldRecording(entry: HeldRecording): Promise<Utterance[
     const reply = (await ext.runtime.sendMessage({
       type: "offscreen-transcribe",
       recordingId: entry.recordingId,
-      model: settings.transcription.localWhisper.model,
+      transcription: settings.transcription,
       startOffsetMs: entry.startOffsetMs,
       // No live session owns a retried Meeting, so progress has no session to
       // land on; the popup reports the retry on the row the user clicked.

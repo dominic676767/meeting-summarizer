@@ -2,7 +2,7 @@
 
 A lightweight Chromium extension (Chrome/Edge) that records a Microsoft Teams web meeting's **tab audio**, transcribes it with **local WASM Whisper**, summarizes the meeting with **your LLM of choice** (Claude, OpenAI, Ollama, AWS Bedrock), and saves a single self-contained HTML summary — with the full transcript collapsible inside — to `Downloads/meeting-summaries/`.
 
-Pure WebExtension: no companion app, no backend. Transcription runs on your machine, so the only things that leave it are the LLM call (nothing at all, with Ollama) and the one-time Whisper model download.
+Pure WebExtension: no companion app, no backend. Transcription runs on your machine by default, so the only things that leave it are the LLM call (nothing at all, with Ollama) and the one-time Whisper model download. Cloud transcription exists but is opt-in and off until you choose it.
 
 Speaker attribution is not wired up yet: base Whisper performs no diarization, so transcript lines read as *Unknown speaker* until captions are fused with the audio. A meeting with no recording still gets a caption-only summary.
 
@@ -35,6 +35,8 @@ If summarization fails (provider outage, missing key), the transcript is **held*
 Configured separately from the summary Provider, because most LLM backends have no speech-to-text API — a Claude or Bedrock key cannot transcribe audio.
 
 Local Whisper is the default and needs no key. Pick a model size in Settings — tiny (~40 MB, fastest), base (~75 MB, default), small (~250 MB, most accurate). The model is fetched once from Hugging Face and cached by the browser; later meetings transcribe without re-downloading. Transcription currently assumes the meeting is in **English**.
+
+**OpenAI transcription** is the opt-in cloud alternative: faster and more accurate, at the cost of uploading the meeting's audio. It takes its own key in the Transcription section of Settings — separate from the OpenAI key used for summarizing — and a model that returns per-segment timestamps (`whisper-1`), because speaker names come from matching those timings against the captions. Switching engine changes what the next meeting uses; nothing else about the flow changes.
 
 ## Summary shapes
 

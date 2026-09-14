@@ -1,6 +1,11 @@
 // Message protocol between content scripts, background, offscreen, and popup.
 import type { CaptionSnapshot } from "./adapters/adapter";
-import type { HeldRecording, HeldTranscript, Utterance, WhisperModelSize } from "./domain/types";
+import type {
+  HeldRecording,
+  HeldTranscript,
+  TranscriptionSettings,
+  Utterance,
+} from "./domain/types";
 
 /**
  * The state vocabulary the popup and the in-page capture prompt share.
@@ -41,7 +46,10 @@ export type OffscreenMessage =
   | {
       type: "offscreen-transcribe";
       recordingId: string;
-      model: WhisperModelSize;
+      /** The whole Transcription Provider selection, resolved by the service
+       * worker at transcribe time: the offscreen document runs the engine the
+       * user has chosen now, never one remembered from a previous attempt. */
+      transcription: TranscriptionSettings;
       /** ms from the Meeting start to Capture Start; keeps Utterance timings
        * absolute relative to the Meeting rather than to the recording. */
       startOffsetMs: number;

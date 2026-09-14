@@ -70,13 +70,16 @@
     <label for="transcription-provider">Engine that turns the meeting's audio into words</label>
     <select id="transcription-provider">
       <option value="local-whisper">Local Whisper (on this machine, no API key)</option>
+      <option value="openai">OpenAI (cloud — uploads your meeting audio)</option>
     </select>
     <p class="note">
-      Separate from the LLM above, and deliberately so: Claude and Bedrock have no speech-to-text
-      API, so they can summarize a meeting but cannot transcribe one.
+      <strong>This is not the LLM above.</strong> Summarizing and transcribing are two different
+      jobs with two different engines and two separate keys. Claude (Anthropic), AWS Bedrock and
+      Ollama have <strong>no speech-to-text API at all</strong>: a key for any of them can summarize
+      a meeting but can never transcribe one. Only the engines in this list transcribe.
     </p>
 
-    <fieldset id="panel-local-whisper">
+    <fieldset id="panel-transcription-local-whisper">
       <legend>Local Whisper</legend>
       <p class="note">
         The model is downloaded once on first use and cached by the browser; later meetings
@@ -89,6 +92,28 @@
         <option value="base">Base — balanced (~75 MB)</option>
         <option value="small">Small — most accurate, slowest (~250 MB)</option>
       </select>
+    </fieldset>
+
+    <fieldset id="panel-transcription-openai" class="hidden">
+      <legend>OpenAI transcription</legend>
+      <p class="note">
+        Faster and more accurate than local Whisper, at a price: the meeting's audio is
+        <strong>uploaded to OpenAI</strong>. Do not choose this for a confidential meeting — local
+        Whisper keeps the audio on this machine.
+      </p>
+      <p class="note">
+        This key is stored separately from the OpenAI key in the Provider section above, and is used
+        only for transcription. The same OpenAI key works for both, but you enter it in each place.
+      </p>
+      <label for="transcription-openai-key">API key</label>
+      <input type="password" id="transcription-openai-key" autocomplete="off" />
+      <label for="transcription-openai-model">Model</label>
+      <input type="text" id="transcription-openai-model" />
+      <p class="note">
+        Use a model that returns per-segment timestamps (<code>whisper-1</code>). Speaker names come
+        from live captions matched against those timings, so a model without them costs you the
+        names.
+      </p>
     </fieldset>
 
     <h2>Summary</h2>
