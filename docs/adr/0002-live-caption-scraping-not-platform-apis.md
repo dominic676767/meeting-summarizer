@@ -1,5 +1,7 @@
 # Live caption scraping, not platform APIs
 
+**Status: accepted; scope narrowed by ADR-0004.** Captions are no longer the source of transcript *words* — recorded tab audio is. Scraping survives as the Speaker Track (who spoke when), because audio transcription yields only anonymous diarization. Everything below still applies to that narrowed role, including the per-platform brittleness.
+
 Transcripts are built by content scripts scraping the live-caption DOM of each meeting platform's web client (Teams first, then Google Meet, then Zoom web) — not by fetching official transcripts from platform cloud APIs. Official transcripts sit behind OAuth flows and org-admin settings most users can't touch; caption scraping works for any user who can turn captions on, and yields speaker names for free.
 
 ## Consequences

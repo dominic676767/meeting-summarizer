@@ -1,28 +1,56 @@
 # Context: meeting-summarizer
 
-A lightweight Firefox WebExtension (pure JS/TS) that scrapes live captions from browser-based meeting clients, summarizes the meeting with a user-chosen LLM when the meeting ends, and delivers the summary.
+A lightweight Chromium extension (pure JS/TS) that records a browser meeting's tab audio, transcribes it with a user-chosen transcription engine, fuses the words with scraped live captions for speaker attribution, summarizes the meeting with a user-chosen LLM when the meeting ends, and delivers the summary as a local HTML file.
 
 ## Glossary
 
 ### Caption Segment
 
-One unit of live-caption text scraped from the meeting client's DOM: speaker name + utterance text + capture timestamp. The raw material everything else is built from.
+One unit of live-caption text scraped from the meeting client's DOM: speaker name + utterance text + capture timestamp. From v2 its **words are no longer the source of truth** — it is the Speaker Track's raw material (see [[Speaker Track]]).
+
+### Audio Recording
+
+The captured tab audio for one Meeting, encoded incrementally to browser-managed storage (never held whole in memory). The source of truth for *what was said*. Discarded once the Summary Artifact is written.
+
+### Speaker Track
+
+The ordered Caption Segments of one Meeting, used only for *who spoke when* — speaker names and timings. Retained because raw audio transcription yields anonymous diarization ("Speaker 1") and action items need real owners.
+
+### Utterance
+
+One transcribed span of speech: text, start/end offsets relative to the Meeting start, and an optional diarization label from the Transcription Provider. The Transcription Provider's output unit.
+
+### Fused Transcript
+
+The Transcript produced by attributing Utterances to speakers by overlapping their time ranges with the Speaker Track. Accurate words (from audio) plus real names (from captions). Replaces the caption-only Transcript as the pipeline's input.
 
 ### Transcript
 
-The ordered accumulation of Caption Segments for one Meeting. Exists only in memory/extension storage until the Summary Artifact is written; it is never stored as a separate file. Not to be confused with the meeting platform's official cloud transcript, which this project never touches.
+The ordered, speaker-attributed record of one Meeting that the summarization pipeline consumes. In v2 this is a Fused Transcript; where audio is unavailable it degrades to the caption-only form (see [[Degraded Capture]]). Never stored as a separate file. Not the meeting platform's official cloud transcript, which this project never touches.
+
+### Degraded Capture
+
+A Meeting where no Audio Recording exists — the user never started capture, or capture failed — so the Transcript falls back to caption words alone. The Summary Artifact states plainly that it was produced from captions, not audio.
 
 ### Meeting
 
-One captioned session in a supported platform's web client, from first captured Caption Segment to detected meeting end. Platform support is phased: Teams first, then Google Meet, then Zoom web.
+One session in a supported platform's web client, from capture start to detected Meeting End. Platform support is phased: Teams first, then Google Meet, then Zoom web.
 
 ### Platform Adapter
 
-The per-platform module that knows how to find caption elements in that platform's DOM and how to detect meeting end. One adapter per supported platform.
+The per-platform module that knows how to find caption elements in that platform's DOM and how to detect Meeting End. One adapter per supported platform.
+
+### Capture Start
+
+The user-initiated moment recording begins. Chromium's `tabCapture` requires an explicit extension invocation, so this cannot be automatic; the extension prompts when it detects a Meeting.
 
 ### Meeting End
 
-The auto-detected condition (call-ended DOM state or tab closed) that triggers summarization. Detection logic is owned by the Platform Adapter.
+The auto-detected condition (call controls disappearing, call-ended DOM state, or tab closed) that stops the Audio Recording and triggers transcription then summarization. Detection logic is owned by the Platform Adapter.
+
+### Transcription Provider
+
+The user-selected engine that turns an Audio Recording into Utterances. Distinct from [[Provider]] — most LLM backends have no speech-to-text API. Local WASM Whisper is the default (nothing leaves the machine); cloud engines are opt-in.
 
 ### Provider
 
@@ -43,3 +71,7 @@ The single persistent output of a Meeting: a local HTML file containing the Summ
 ### Held Transcript
 
 A Transcript whose summarization failed (Provider error, etc.). It is retained in extension storage for user-triggered retry rather than discarded — a Transcript is unrecoverable once dropped. A Held Transcript is released only when its Summary Artifact is successfully written.
+
+### Held Recording
+
+An Audio Recording whose *transcription* failed. Retained for retry for the same reason as a [[Held Transcript]]: the meeting is unrecoverable once its audio is dropped. Released only once transcription succeeds and its Transcript takes over the retry chain.
