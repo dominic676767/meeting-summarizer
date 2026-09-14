@@ -1,6 +1,7 @@
-// Held Transcript store (browser.storage.local): a Transcript whose
+// Held Transcript store (ext.storage.local): a Transcript whose
 // summarization failed is retained for retry — never dropped. An entry is
 // released only after the Summary Artifact write is confirmed.
+import { ext } from "../platform";
 import type { HeldTranscript, Transcript } from "../domain/types";
 
 type HeldMap = Record<string, HeldTranscript>;
@@ -16,7 +17,7 @@ function withLock<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 async function readAll(): Promise<HeldMap> {
-  const stored = (await browser.storage.local.get("held")) as { held?: HeldMap };
+  const stored = (await ext.storage.local.get("held")) as { held?: HeldMap };
   return stored.held ?? {};
 }
 
@@ -30,7 +31,7 @@ export function holdTranscript(transcript: Transcript, reason: string): Promise<
       failedAt: Date.now(),
     };
     held[entry.id] = entry;
-    await browser.storage.local.set({ held });
+    await ext.storage.local.set({ held });
     return entry;
   });
 }
@@ -49,7 +50,7 @@ export function releaseHeld(id: string): Promise<void> {
   return withLock(async () => {
     const held = await readAll();
     delete held[id];
-    await browser.storage.local.set({ held });
+    await ext.storage.local.set({ held });
   });
 }
 
@@ -61,6 +62,6 @@ export function updateHeldReason(id: string, reason: string): Promise<void> {
     if (!entry) return;
     entry.reason = reason;
     entry.failedAt = Date.now();
-    await browser.storage.local.set({ held });
+    await ext.storage.local.set({ held });
   });
 }

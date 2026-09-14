@@ -1,4 +1,5 @@
 // Popup: live capture status, Summarize now, Held Transcript retry.
+import { ext } from "../platform";
 import type { HeldListReply, PopupMessage, StatusReply } from "../messages";
 import type { Settings } from "../domain/types";
 import { loadSettings } from "../settings";
@@ -12,7 +13,7 @@ const hintEl = document.getElementById("hint")!;
 const settingsBtn = document.getElementById("open-settings") as HTMLButtonElement;
 
 function send<T>(msg: PopupMessage): Promise<T> {
-  return browser.runtime.sendMessage(msg) as Promise<T>;
+  return ext.runtime.sendMessage(msg) as Promise<T>;
 }
 
 /** A retry is in flight; suppress list rebuilds so focus and button state survive. */
@@ -118,7 +119,7 @@ summarizeBtn.addEventListener("click", async () => {
   render(await send<StatusReply>({ type: "summarize-now" }));
 });
 
-settingsBtn.addEventListener("click", () => void browser.runtime.openOptionsPage());
+settingsBtn.addEventListener("click", () => void ext.runtime.openOptionsPage());
 
 void refreshHint();
 void refresh();

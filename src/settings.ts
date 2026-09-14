@@ -1,6 +1,7 @@
-// Settings persistence in browser.storage.local (ADR-0001: no native host,
+// Settings persistence in extension local storage (ADR-0001: no native host,
 // keys live here).
 import type { Settings } from "./domain/types";
+import { ext } from "./platform";
 import { DEFAULT_TEMPLATES } from "./pipeline/templates";
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -14,7 +15,7 @@ export const DEFAULT_SETTINGS: Settings = {
 };
 
 export async function loadSettings(): Promise<Settings> {
-  const stored = (await browser.storage.local.get("settings")) as { settings?: Partial<Settings> };
+  const stored = (await ext.storage.local.get("settings")) as { settings?: Partial<Settings> };
   const s = stored.settings ?? {};
   return {
     ...DEFAULT_SETTINGS,
@@ -28,5 +29,5 @@ export async function loadSettings(): Promise<Settings> {
 }
 
 export async function saveSettings(settings: Settings): Promise<void> {
-  await browser.storage.local.set({ settings });
+  await ext.storage.local.set({ settings });
 }

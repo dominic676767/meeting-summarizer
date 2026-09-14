@@ -17,8 +17,11 @@ describe("walking skeleton", () => {
   it("requests only storage, downloads, and provider-API host permissions", () => {
     const apiPermissions = manifest.permissions.filter((p) => !p.includes("://"));
     expect(apiPermissions).toEqual(["storage", "downloads"]);
-    // MV2: content scripts inject without user-granted host permissions
-    // (MV3 gates them behind a manual opt-in — the bug this fixed).
-    expect(manifest.manifest_version).toBe(2);
+  });
+
+  it("targets Chromium Manifest V3 with a service worker", () => {
+    // ADR-0003: Firefox retired because it cannot capture tab audio at all.
+    expect(manifest.manifest_version).toBe(3);
+    expect(manifest.background.service_worker).toBeTruthy();
   });
 });

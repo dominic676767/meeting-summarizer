@@ -1,22 +1,24 @@
 # Meeting Summarizer
 
-A lightweight Firefox extension that captures **live captions** from Microsoft Teams web meetings, summarizes the meeting with **your LLM of choice** (Claude, OpenAI, Ollama, AWS Bedrock), and saves a single self-contained HTML summary — with the full transcript collapsible inside — to `Downloads/meeting-summaries/`.
+A lightweight Chromium extension (Chrome/Edge) that captures **live captions** from Microsoft Teams web meetings, summarizes the meeting with **your LLM of choice** (Claude, OpenAI, Ollama, AWS Bedrock), and saves a single self-contained HTML summary — with the full transcript collapsible inside — to `Downloads/meeting-summaries/`.
 
 Pure WebExtension: no companion app, no backend, nothing leaves your machine except the LLM call (or nothing at all, with Ollama).
 
-## Install (temporary, for development)
+## Install (unpacked, for development)
 
 ```sh
 npm install
 npm run build
 ```
 
-Then in Firefox: `about:debugging` → *This Firefox* → *Load Temporary Add-on…* → pick `dist/manifest.json`.
+Then in Chrome or Edge: `chrome://extensions` → enable **Developer mode** → *Load unpacked* → pick the `dist/` folder.
+
+Unlike a Firefox temporary add-on, an unpacked Chromium extension survives browser restarts; click *Reload* on its card after each `npm run build`.
 
 ## Use
 
 1. Open Settings (extension options), pick a Provider and paste its API key.
-   - **Ollama**: run it with `OLLAMA_ORIGINS=moz-extension://*` so the extension may call it.
+   - **Ollama**: run it with `OLLAMA_ORIGINS=chrome-extension://*` so the extension may call it.
    - **Bedrock**: use a Bedrock API key (bearer token). AWS SigV4 credentials are not supported.
 2. Join a Teams meeting at `teams.microsoft.com` and **turn on live captions** (More → Language and speech → Turn on live captions).
 3. The toolbar badge counts captured caption segments (a red `!` means captions are off).

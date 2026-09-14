@@ -1,13 +1,15 @@
 // Background event page: owns Transcript accumulation, triggers, artifact
 // writes, and badges.
+import { ext } from "../platform";
 import { TranscriptAccumulator } from "../adapters/accumulator";
-import type { Message, StatusReply } from "../messages";
+import type { CaptureState, Message, StatusReply } from "../messages";
 import { artifactFilename } from "../pipeline/filename";
 import { summarizeTranscript } from "../pipeline/pipeline";
 import { createProviderClient } from "../providers/factory";
 import { loadSettings } from "../settings";
 import { writeArtifact } from "./artifact-writer";
 import { getHeld, holdTranscript, listHeld, releaseHeld, updateHeldReason } from "./held";
+import type { SessionState } from "./sessions";
 import {
   dropSession,
   ensureSession,
@@ -16,8 +18,8 @@ import {
   sessionToTranscript,
 } from "./sessions";
 
-// MV2 exposes browserAction; keep forward-compat with MV3's action.
-const action = browser.browserAction ?? (browser as unknown as { action: typeof browser.browserAction }).action;
+// MV3 exposes `action`; the MV2 `browserAction` shim is gone with Firefox (ADR-0003).
+const action = ext.action;
 
 async function updateBadge(tabId: number): Promise<void> {
   const s = await getSession(tabId);
@@ -118,6 +120,27 @@ async function retryHeld(id: string): Promise<void> {
   }
 }
 
+/**
+ * SessionState is what the background tracks; CaptureState is the wider
+ * vocabulary the popup and in-page capture prompt share. They diverge because
+ * audio capture states have no session equivalent yet — "capturing" here means
+ * captions are accumulating, which the shared vocabulary calls "detected".
+ */
+function toCaptureState(state: SessionState | undefined): CaptureState {
+  switch (state) {
+    case "capturing":
+      return "detected";
+    case "summarizing":
+      return "summarizing";
+    case "done":
+      return "done";
+    case "failed":
+      return "failed";
+    default:
+      return "idle";
+  }
+}
+
 async function statusFor(tabId: number): Promise<StatusReply> {
   const s = await getSession(tabId);
   return {
@@ -125,11 +148,16 @@ async function statusFor(tabId: number): Promise<StatusReply> {
     segmentCount: s?.accumulator.size ?? 0,
     title: s?.title ?? null,
     capturing: (s?.inMeeting ?? false) && (s?.accumulator.size ?? 0) > 0,
-    state: s?.state ?? "idle",
+    state: toCaptureState(s?.state),
+    // No Audio Recording exists until ticket #12 lands, so every Transcript is
+    // still caption-only. Reported honestly rather than defaulted optimistically.
+    recording: false,
+    recordingStartedAt: null,
+    degraded: true,
   };
 }
 
-browser.runtime.onMessage.addListener((raw: unknown, sender) => {
+ext.runtime.onMessage.addListener((raw: unknown, sender) => {
   const msg = raw as Message;
   if (sender.tab?.id !== undefined) {
     return handleContentMessage(msg, sender.tab.id);
@@ -137,13 +165,13 @@ browser.runtime.onMessage.addListener((raw: unknown, sender) => {
   // Popup messages
   if (msg.type === "get-status") {
     return (async () => {
-      const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+      const [tab] = await ext.tabs.query({ active: true, currentWindow: true });
       return statusFor(tab?.id ?? -1);
     })();
   }
   if (msg.type === "summarize-now") {
     return (async () => {
-      const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+      const [tab] = await ext.tabs.query({ active: true, currentWindow: true });
       if (tab?.id !== undefined) await finishMeeting(tab.id, "manual");
       return statusFor(tab?.id ?? -1);
     })();
@@ -164,7 +192,7 @@ browser.runtime.onMessage.addListener((raw: unknown, sender) => {
   return undefined;
 });
 
-browser.tabs.onRemoved.addListener((tabId) => {
+ext.tabs.onRemoved.addListener((tabId) => {
   void (async () => {
     const s = await getSession(tabId);
     if (s && s.state === "capturing" && s.accumulator.size > 0) {

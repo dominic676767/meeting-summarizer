@@ -1,17 +1,10 @@
 {
-  "manifest_version": 2,
+  "manifest_version": 3,
   "name": "Meeting Summarizer",
   "version": "0.1.1",
   "description": "Captures live captions from Teams web meetings, summarizes them with your LLM of choice, and saves a local HTML summary to Downloads.",
-  "browser_specific_settings": {
-    "gecko": {
-      "id": "meeting-summarizer@dominic676767.github.io",
-      "strict_min_version": "115.0"
-    }
-  },
   "background": {
-    "scripts": ["background.js"],
-    "persistent": true
+    "service_worker": "background.js"
   },
   "content_scripts": [
     {
@@ -30,7 +23,7 @@
     "48": "icon.svg",
     "96": "icon.svg"
   },
-  "browser_action": {
+  "action": {
     "default_popup": "popup.html",
     "default_title": "Meeting Summarizer",
     "default_icon": "icon.svg"
@@ -40,7 +33,9 @@
   },
   "permissions": [
     "storage",
-    "downloads",
+    "downloads"
+  ],
+  "host_permissions": [
     "https://api.anthropic.com/*",
     "https://api.openai.com/*",
     "http://localhost/*",

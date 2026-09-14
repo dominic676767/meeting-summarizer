@@ -1,7 +1,8 @@
-// Per-tab Meeting session state, mirrored to storage.session so an event-page
-// suspension can't lose a Transcript mid-meeting.
+// Per-tab Meeting session state, mirrored to storage.session so a service
+// worker suspension can't lose a Transcript mid-meeting.
 import { TranscriptAccumulator } from "../adapters/accumulator";
 import type { Transcript } from "../domain/types";
+import { ext } from "../platform";
 
 export type SessionState = "capturing" | "summarizing" | "done" | "failed";
 
@@ -36,7 +37,7 @@ function rehydrate(): Promise<void> {
 
 async function doRehydrate(): Promise<void> {
   try {
-    const stored = (await browser.storage.session.get("sessions")) as {
+    const stored = (await ext.storage.session.get("sessions")) as {
       sessions?: Record<string, PersistedSession>;
     };
     for (const [tabId, p] of Object.entries(stored.sessions ?? {})) {
@@ -67,7 +68,7 @@ export async function persistSessions(): Promise<void> {
         entries: s.accumulator.toJSON(),
       };
     }
-    await browser.storage.session.set({ sessions: obj });
+    await ext.storage.session.set({ sessions: obj });
   } catch {
     // storage.session unavailable — in-memory only.
   }

@@ -1,6 +1,7 @@
 // Content script for the Teams web client: observes the caption DOM via the
 // Teams Platform Adapter and streams Caption Snapshots + meeting status to
 // the background. Runs only on Teams domains (manifest match patterns).
+import { ext } from "../platform";
 import { createTeamsAdapter } from "../adapters/teams";
 import type { ContentMessage } from "../messages";
 
@@ -32,7 +33,7 @@ function sendEnded(title: string | null): void {
 }
 
 function send(msg: ContentMessage): Promise<void> {
-  return browser.runtime.sendMessage(msg).then(
+  return ext.runtime.sendMessage(msg).then(
     () => undefined,
     () => {
       throw new Error("sendMessage failed");
