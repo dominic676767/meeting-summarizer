@@ -21,10 +21,31 @@ let leaveTimer: ReturnType<typeof setTimeout> | undefined;
  * transient DOM re-renders. */
 const LEAVE_GRACE_MS = 10_000;
 
+/**
+ * True once this script has been orphaned — the extension was reloaded or
+ * updated, leaving a script from the previous generation running in a page it
+ * can no longer talk to. `runtime.id` is what disappears.
+ */
+function orphaned(): boolean {
+  return !ext.runtime?.id;
+}
+
+/**
+ * Stop working. An orphaned script cannot deliver anything, so retrying is not
+ * resilience — it is an endless stream of "Extension context invalidated" for a
+ * meeting the new generation is already watching.
+ */
+function shutDown(): void {
+  clearTimeout(timer);
+  clearTimeout(leaveTimer);
+  observer.disconnect();
+}
+
 function sendEnded(title: string | null): void {
-  if (endedSent) return;
+  if (endedSent || orphaned()) return;
   endedSent = true; // optimistic, rolled back below on failure
   send({ type: "meeting-ended", platform: adapter.platform, title }).catch(() => {
+    if (orphaned()) return shutDown();
     // Transient failure (background waking up): retry until delivered —
     // a lost end signal means a lost summary.
     endedSent = false;
@@ -42,6 +63,7 @@ function send(msg: ContentMessage): Promise<void> {
 }
 
 function tick(): void {
+  if (orphaned()) return shutDown();
   const title = adapter.meetingTitle(document);
   const inMeeting = adapter.isInMeeting(document);
 
@@ -73,7 +95,12 @@ function tick(): void {
         if (!adapter.isInMeeting(document)) sendEnded(adapter.meetingTitle(document));
       }, LEAVE_GRACE_MS);
     }
-    send({ type: "meeting-status", platform: adapter.platform, title, inMeeting });
+    // Status is re-sent on every transition, so a lost one costs nothing and
+    // needs no retry — but it still needs catching, or it surfaces as an
+    // uncaught rejection in the page's console.
+    send({ type: "meeting-status", platform: adapter.platform, title, inMeeting }).catch(() => {
+      if (orphaned()) shutDown();
+    });
   }
 
   // Recognized post-call screens end the meeting immediately, no grace needed.

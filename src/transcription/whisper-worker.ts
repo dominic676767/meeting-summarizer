@@ -82,51 +82,26 @@ type Asr = (samples: Float32Array, options: Record<string, unknown>) => Promise<
 
 let asr: Promise<Asr> | undefined;
 
-/**
- * Quantized first, unquantized as the fallback. `q8` is a quarter the download
- * and the reason a local engine is usable at all, but its quantized decoder is
- * rejected outright by some ONNX Runtime versions — observed as "Can't create a
- * session … TransposeDQWeightsForMatMulNBits Missing required scale". That is a
- * hard failure at load, not degraded output, so there is no risk in trying the
- * small one first: either it creates a session or it does not.
- *
- * `fp32` is several times the download and slower, so it is never chosen when
- * `q8` works, and the user is told which one ran rather than left wondering why
- * the first meeting downloaded far more than the settings page said.
- */
-const DTYPES = ["q8", "fp32"] as const;
-
-function loadWith(size: WhisperModelSize, dtype: (typeof DTYPES)[number]): Promise<Asr> {
-  return pipeline("automatic-speech-recognition", WHISPER_MODEL_REPOS[size], {
-    dtype,
+function load(size: WhisperModelSize): Promise<Asr> {
+  // Not `??=` alone: a rejected promise cached here would fail every retry for
+  // the life of the worker, so a failed load is forgotten rather than memoized.
+  asr ??= (pipeline("automatic-speech-recognition", WHISPER_MODEL_REPOS[size], {
+    dtype: "q8",
     device: "wasm",
+    // Graph optimization off. This runtime's `TransposeDQWeightsForMatMulNBits`
+    // pass rejects the whisper decoder's quantized embedding outright — "Can't
+    // create a session … Missing required scale:
+    // model.decoder.embed_tokens.weight_merged_0_scale" — and it fails
+    // identically at every dtype, because the pass runs before the weights are
+    // read. Skipping the optimizer costs some inference speed; not skipping it
+    // means no local transcription at all.
+    session_options: { graphOptimizationLevel: "disabled" },
     progress_callback: (p: unknown) => {
       const e = p as { status?: string; file?: string; loaded?: number; total?: number };
       if (e.status !== "progress" || typeof e.file !== "string") return;
       reportModelProgress(e.file, e.loaded ?? 0, typeof e.total === "number" ? e.total : null);
     },
-  }) as unknown as Promise<Asr>;
-}
-
-function load(size: WhisperModelSize): Promise<Asr> {
-  // Not `??=` alone: a rejected promise cached here would fail every retry for
-  // the life of the worker, so a failed load is forgotten rather than memoized.
-  asr ??= (async () => {
-    let lastError: unknown;
-    for (const dtype of DTYPES) {
-      try {
-        const loaded = await loadWith(size, dtype);
-        if (dtype !== DTYPES[0]) {
-          console.warn(`meeting-summarizer: ${DTYPES[0]} model unusable, fell back to ${dtype}`);
-        }
-        return loaded;
-      } catch (err) {
-        lastError = err;
-        console.warn(`meeting-summarizer: ${dtype} whisper model failed to load`, err);
-      }
-    }
-    throw lastError;
-  })().catch((err) => {
+  }) as unknown as Promise<Asr>).catch((err) => {
     asr = undefined;
     throw err;
   });
