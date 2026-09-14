@@ -217,6 +217,9 @@ function render(status: StatusReply): void {
   // Skipping degrades rather than loses: the caption-only summary still lands.
   // Never labelled "Cancel", which would imply losing the meeting.
   skipBtn.hidden = status.state !== "transcribing";
+  // Cleared every render: a stale tooltip would keep explaining a problem that
+  // is no longer happening.
+  statusEl.title = "";
   degradedEl.hidden = !(status.state === "done" && status.degraded);
   if (status.state !== "transcribing") {
     detailEl.hidden = true;
@@ -227,8 +230,13 @@ function render(status: StatusReply): void {
     renderTranscribing(status.transcription);
   } else if (status.state === "recording") {
     if (status.captureWarning) {
+      // Name the problem and say what survives it, rather than appending a raw
+      // internal reason to user-facing copy. Recording genuinely continues
+      // after a failed chunk write, so this must not claim it stopped.
       statusEl.className = "warning";
-      statusEl.textContent = `Recording — storage problem, audio may be incomplete: ${status.captureWarning}`;
+      statusEl.textContent =
+        "Recording — some audio could not be saved. Captions are still being captured, so a summary will still land.";
+      statusEl.title = status.captureWarning;
     } else if (status.segmentCount === 0) {
       // Captions are no longer the transcript, so their absence no longer costs
       // the meeting — it costs the names on the action items. Still a warning
@@ -250,7 +258,12 @@ function render(status: StatusReply): void {
     }
   } else if (status.state === "detected") {
     statusEl.className = "warning";
-    statusEl.textContent = "Meeting detected — not recording.";
+    // A capture that failed to start leaves this state with a reason attached.
+    // Saying only "not recording" would strand the user with no way to know why.
+    statusEl.textContent = status.captureWarning
+      ? "Meeting detected — recording could not start."
+      : "Meeting detected — not recording.";
+    if (status.captureWarning) statusEl.title = status.captureWarning;
   } else if (status.state === "summarizing") {
     statusEl.className = "capturing";
     statusEl.textContent = "Summarizing…";

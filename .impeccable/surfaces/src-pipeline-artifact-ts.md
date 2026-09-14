@@ -57,7 +57,30 @@ Rules the implementation must not bend:
 
 Assert the Meta clause per level the same way — each level's clause present, and the caption-only artifact asserted *not* to contain the audio clause. A provenance bug that silently upgrades a caption-only summary to "from recorded audio" is the exact defect this ticket exists to prevent, so it needs a failing test rather than a careful reviewer.
 
+## Settled by the user, 2026-09-14
+
+Both questions this brief previously left open are now decided. Confirmed independently in two sessions rather than relayed between agents.
+
+**1. Meeting duration is included** in the Meta line. Provenance reads better against a length, and a reader judging a summary wants to know whether it covers ten minutes or two hours.
+
+**2. The transcription engine and model are omitted by default**, with an opt-in setting. The reasoning is an asymmetry, and the implementation must preserve it: a public user with no opinion inherits the default, and for a product whose whole story is "nothing leaves your machine", naming the local engine in a file people forward is a disclosure they never chose. Reproducibility is the minority need, so it opts in; privacy is the default.
+
+### Meta line order
+
+`{date} · {platform} · {duration} · {provenance clause}` and, only when the setting is on, ` · {engine} {model}` last. Engine goes last because it is the most technical and least load-bearing fact in the line; provenance must never be pushed out of the reader's first glance by it.
+
+`2026-09-14 · teams · 47 min · from recorded audio, speakers from captions · Whisper base.en`
+
+### The opt-in setting
+
+Lives in Settings under the Summary section, not in the artifact. It exists only to control artifact content, which is why it is specced here.
+
+- Label: **"Name the transcription engine in saved summaries"**
+- Unchecked by default.
+- Note beneath, 12px Muted: "Off by default — a summary you forward would otherwise tell the recipient which engine and model ran on your machine."
+
+Write the label as what it does, not as a privacy warning; the note carries the reason. A checkbox labelled "Protect my privacy" would make the honest default sound like a feature rather than the baseline.
+
 ## Unresolved
 
-- Whether the Meeting duration belongs in the Meta line at all; it is proposed above because provenance reads better against a length, but it is a new fact in that line.
-- Whether a forwarded artifact should also name the transcription engine and model. Useful for reproducibility, but it leaks the reader's tooling choices to recipients — the user's call.
+- Nothing outstanding. Both prior questions are settled above.

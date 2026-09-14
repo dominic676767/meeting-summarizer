@@ -118,19 +118,17 @@
       </p>
     </fieldset>
 
-    <fieldset>
-      <legend>What the saved summary discloses</legend>
-      <label style="font-weight: 400">
-        <input type="checkbox" id="name-engine" style="width: auto" />
-        Name the transcription engine and model in the saved file
-      </label>
-      <p class="note">
-        Off by default. It helps a reader judge how much to trust the words, but a summary you
-        forward would then tell its recipients which engine and model you run.
-      </p>
-    </fieldset>
-
     <h2>Summary</h2>
+
+    <label style="font-weight: 400">
+      <input type="checkbox" id="name-engine" style="width: auto" />
+      Name the transcription engine in saved summaries
+    </label>
+    <p class="note">
+      Off by default — a summary you forward would otherwise tell the recipient which engine and
+      model ran on your machine.
+    </p>
+
     <label for="shape">Summary shape</label>
     <select id="shape">
       <option value="structured">Structured (TL;DR, decisions, action items, open questions)</option>
