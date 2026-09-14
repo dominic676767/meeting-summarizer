@@ -44,9 +44,9 @@ function engineOf(opts: { failWith?: Error; spans?: EngineSpan[] }): Transcripti
 const provider = (engine: TranscriptionEngine, name = "fake") =>
   createTranscriptionProvider({ name, engine, decode });
 
-/** Capture Start was the Meeting start in these cases: the retry has to preserve
- * the offset it was held with, whatever it is. */
-const recording = () => ({ data: new Blob(), startOffsetMs: 0 });
+/** One Capture Span starting at the Meeting start: the retry has to preserve the
+ * offsets it was held with, whatever they are. */
+const recording = () => ({ spans: [{ data: new Blob(), startOffsetMs: 0 }] });
 
 describe("Held Recording retry", () => {
   it("the same audio retried on another Transcription Provider yields the Fused Transcript", async () => {
@@ -86,7 +86,9 @@ describe("Held Recording retry", () => {
     // so a retry attributes the words to the turns they actually fell in.
     const speakerTrack = meeting(seg("Bob", "agreed", START + 95_000));
     const engine = engineOf({ spans: [{ text: "Agreed.", startSec: 5, endSec: 8 }] });
-    const utterances = await provider(engine).transcribe({ data: new Blob(), startOffsetMs: 90_000 });
+    const utterances = await provider(engine).transcribe({
+      spans: [{ data: new Blob(), startOffsetMs: 90_000 }],
+    });
 
     expect(utterances).toEqual([{ text: "Agreed.", startMs: 95_000, endMs: 98_000 }]);
     expect(fuseTranscript(speakerTrack, utterances).segments[0]?.speaker).toBe("Bob");
@@ -96,7 +98,7 @@ describe("Held Recording retry", () => {
     const audio = new Blob(["encoded audio"]);
     const engine = engineOf({ failWith: new Error("model download failed") });
     const err = await provider(engine)
-      .transcribe({ data: audio, startOffsetMs: 0 })
+      .transcribe({ spans: [{ data: audio, startOffsetMs: 0 }] })
       .catch((e) => e);
 
     expect(err).toBeInstanceOf(TranscriptionError);
@@ -125,10 +127,13 @@ const stored: Record<string, unknown> = {};
 
 const store = await import("../src/background/held-recordings");
 
-const toHold = (recordingId: string) => ({
+const toHold = (recordingId: string, ...spanOffsetsMs: number[]) => ({
   recordingId,
   transcript: meeting(seg("Alice", "hello", START + 1_000)),
-  startOffsetMs: 0,
+  spans: (spanOffsetsMs.length ? spanOffsetsMs : [0]).map((startOffsetMs) => ({
+    spanId: `${recordingId}.${startOffsetMs}`,
+    startOffsetMs,
+  })),
 });
 
 describe("Held Recording store", () => {
@@ -160,6 +165,35 @@ describe("Held Recording store", () => {
     const held = await store.listHeldRecordings();
     expect(held).toHaveLength(1);
     expect(held[0]?.reason).toBe("second failure");
+  });
+
+  it("holds every Capture Span of the Meeting, so a retry transcribes all of them", async () => {
+    // Stop/start/stop/start: three spans. A hold that carried only the last one
+    // would lose the first two the moment the artifact write released the audio.
+    await store.holdRecording(toHold("tab-1", 0, 300_000, 900_000), "out of memory");
+    const entry = await store.getHeldRecording("tab-1");
+    expect(entry?.spans).toEqual([
+      { spanId: "tab-1.0", startOffsetMs: 0 },
+      { spanId: "tab-1.300000", startOffsetMs: 300_000 },
+      { spanId: "tab-1.900000", startOffsetMs: 900_000 },
+    ]);
+  });
+
+  it("reads an entry held before Capture Spans existed as the one span it is", async () => {
+    // The old shape: one Audio Recording keyed by the recording id, one Capture
+    // Start offset. Stranding it unretriable would drop a meeting nobody can get
+    // back, so it is read as a single span.
+    stored.heldRecordings = {
+      "tab-legacy": {
+        recordingId: "tab-legacy",
+        transcript: meeting(seg("Alice", "hello", START + 1_000)),
+        startOffsetMs: 90_000,
+        reason: "out of memory",
+        failedAt: START,
+      },
+    };
+    const entry = await store.getHeldRecording("tab-legacy");
+    expect(entry?.spans).toEqual([{ spanId: "tab-legacy", startOffsetMs: 90_000 }]);
   });
 
   it("a released recording is no longer held, so its audio can be discarded", async () => {

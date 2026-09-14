@@ -2,7 +2,7 @@
 // summarization failed is retained for retry — never dropped. An entry is
 // released only after the Summary Artifact write is confirmed.
 import { ext } from "../platform";
-import type { HeldTranscript, Transcript } from "../domain/types";
+import type { CaptureSpan, HeldTranscript, Transcript } from "../domain/types";
 
 type HeldMap = Record<string, HeldTranscript>;
 
@@ -16,14 +16,41 @@ function withLock<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
+/**
+ * An entry as storage may hold it, read as one that knows about Capture Spans.
+ *
+ * Before spans existed, a held Transcript's audio was a single file keyed by
+ * `recordingId`. Reading it as the one span it is matters for cleanup and only
+ * cleanup: without it the artifact write that releases this Transcript would
+ * name no file to delete and leave that recording on the user's disk forever.
+ * The offset is irrelevant here — these words are already transcribed, so
+ * nothing reads it back.
+ */
+function normalize(entry: HeldTranscript): HeldTranscript {
+  if (!entry.recordingId || entry.spans) return entry;
+  return { ...entry, spans: [{ spanId: entry.recordingId, startOffsetMs: 0 }] };
+}
+
 async function readAll(): Promise<HeldMap> {
   const stored = (await ext.storage.local.get("held")) as { held?: HeldMap };
-  return stored.held ?? {};
+  const held: HeldMap = {};
+  for (const [id, entry] of Object.entries(stored.held ?? {})) {
+    held[id] = normalize(entry);
+  }
+  return held;
+}
+
+/** The Audio Recording a held Transcript's words came from, still on disk: the
+ * Meeting's key and every one of its Capture Spans, so the artifact write that
+ * releases the audio releases all of it. */
+export interface HeldFrom {
+  recordingId: string;
+  spans: CaptureSpan[];
 }
 
 /**
- * Hold a Transcript for retry. `recordingId` names the Audio Recording the words
- * came from, and doubles as the entry's identity: one Meeting with an Audio
+ * Hold a Transcript for retry. `recording` names the Audio Recording the words
+ * came from, and its id doubles as the entry's identity: one Meeting with an Audio
  * Recording therefore holds at most one Transcript, so a crash between holding a
  * retried Transcript and releasing its Held Recording costs a repeated
  * transcription rather than a duplicate Summary Artifact.
@@ -31,18 +58,18 @@ async function readAll(): Promise<HeldMap> {
 export function holdTranscript(
   transcript: Transcript,
   reason: string,
-  recordingId?: string,
+  recording?: HeldFrom,
 ): Promise<HeldTranscript> {
   return withLock(async () => {
     const held = await readAll();
     const entry: HeldTranscript = {
-      id: recordingId
-        ? `rec-${recordingId}`
+      id: recording
+        ? `rec-${recording.recordingId}`
         : `${transcript.endedAt ?? Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       transcript,
       reason,
       failedAt: Date.now(),
-      ...(recordingId ? { recordingId } : {}),
+      ...(recording ? { recordingId: recording.recordingId, spans: recording.spans } : {}),
     };
     held[entry.id] = entry;
     await ext.storage.local.set({ held });

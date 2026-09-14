@@ -11,7 +11,7 @@ import type {
 } from "../messages";
 import { createTranscriptionProviderFor } from "../transcription/factory";
 import { TranscriptionCancelled, type TranscriptionProvider } from "../transcription/provider";
-import { deleteRecording, openAudioStore, readRecording, type AudioStore } from "./audio-store";
+import { deleteSpan, openAudioStore, readSpan, type AudioStore } from "./audio-store";
 
 let recorder: MediaRecorder | undefined;
 let context: AudioContext | undefined;
@@ -31,7 +31,10 @@ interface TabCaptureConstraints {
   audio: { mandatory: { chromeMediaSource: "tab"; chromeMediaSourceId: string } };
 }
 
-async function start(streamId: string, recordingId: string): Promise<void> {
+/** Records one Capture Span into its own file. A second Capture Start in the same
+ * Meeting arrives with a different span id, so it cannot touch what the first one
+ * wrote (ADR-0005). */
+async function start(streamId: string, spanId: string): Promise<void> {
   if (recorder) return; // already recording; start is idempotent
   lastError = null;
   const constraints: TabCaptureConstraints = {
@@ -49,7 +52,7 @@ async function start(streamId: string, recordingId: string): Promise<void> {
 
   encodedBytes = 0;
   writeChain = Promise.resolve();
-  store = await openAudioStore(recordingId);
+  store = await openAudioStore(spanId);
   recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
   recorder.ondataavailable = (e) => {
     if (e.data.size === 0) return;
@@ -141,9 +144,21 @@ async function transcribe(
       workerUrl: ext.runtime.getURL("whisper-worker.js"),
     });
     running = { provider, abort };
-    const data = await readRecording(msg.recordingId);
+    // Every span of the Meeting, in order, each with the offset that keeps its
+    // words where they actually fell in the Meeting.
+    const spans = await Promise.all(
+      msg.spans.map(async (span) => ({
+        data: await readSpan(span.spanId),
+        startOffsetMs: span.startOffsetMs,
+      })),
+    );
+    // A span with no bytes is a Capture Start that recorded nothing (stopped
+    // before the first chunk flushed, or its file went missing). It holds no
+    // words, and handing it to the decoder would fail the whole run — costing
+    // every other span of the Meeting for the sake of an empty one.
+    const recorded = spans.filter((span) => span.data.size > 0);
     const utterances = await provider.transcribe(
-      { data, startOffsetMs: msg.startOffsetMs },
+      { spans: recorded },
       {
         signal: abort.signal,
         onModelProgress: (loadedBytes, totalBytes) =>
@@ -185,7 +200,7 @@ ext.runtime.onMessage.addListener((raw: unknown) => {
   if (msg.type === "offscreen-start") {
     return (async () => {
       try {
-        await start(msg.streamId, msg.recordingId);
+        await start(msg.streamId, msg.spanId);
       } catch (err) {
         lastError = err instanceof Error ? err.message : String(err);
         await stop();
@@ -212,8 +227,10 @@ ext.runtime.onMessage.addListener((raw: unknown) => {
     running?.provider.close();
     return Promise.resolve({ ok: true });
   }
-  if (msg.type === "offscreen-discard-recording") {
-    return deleteRecording(msg.recordingId).then(() => ({ ok: true }));
+  if (msg.type === "offscreen-discard-spans") {
+    // Every span, not just the last: a Meeting that recorded three must leave no
+    // orphan behind.
+    return Promise.all(msg.spanIds.map((id) => deleteSpan(id))).then(() => ({ ok: true }));
   }
   return undefined;
 });

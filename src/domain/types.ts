@@ -87,6 +87,22 @@ export interface Utterance {
   diarizationLabel?: string;
 }
 
+/**
+ * One stretch of audio recorded between a Capture Start and the next stop: its
+ * own file, plus where in the Meeting it began.
+ *
+ * A Meeting can have several, because the user may take a sensitive stretch off
+ * the record and resume afterwards. Each is a separate file (ADR-0005), and its
+ * `startOffsetMs` is what keeps its Utterance timings absolute relative to the
+ * Meeting start once the spans are transcribed and concatenated.
+ */
+export interface CaptureSpan {
+  /** Storage key of this span's audio. Unique within the Meeting. */
+  spanId: string;
+  /** ms from the Meeting start to this span's Capture Start. */
+  startOffsetMs: number;
+}
+
 export type SummaryShape = "structured" | "narrative";
 
 /** User-editable text sent to the Provider. One template per summary shape. */
@@ -152,6 +168,10 @@ export interface HeldTranscript {
    * the Meeting has no Audio Recording at all.
    */
   recordingId?: string;
+  /** Every Capture Span still on disk for this Meeting, so the artifact write
+   * that releases the audio releases all of it. Absent on an entry held before
+   * spans existed, which is one span keyed by `recordingId`. */
+  spans?: CaptureSpan[];
 }
 
 /**
@@ -161,8 +181,8 @@ export interface HeldTranscript {
  * the retry chain.
  */
 export interface HeldRecording {
-  /** Storage key of the audio, and the entry's identity: one Meeting's
-   * recording can only ever be held once. */
+  /** The Meeting's recording key, and the entry's identity: one Meeting's
+   * recording can only ever be held once, however many spans it has. */
   recordingId: string;
   /**
    * The Meeting's caption-only Transcript — its metadata and the Speaker Track a
@@ -170,9 +190,13 @@ export interface HeldRecording {
    * session that carried it does not survive a browser restart.
    */
   transcript: Transcript;
-  /** ms from the Meeting start to Capture Start, so a retry's Utterance offsets
-   * stay absolute relative to the Meeting. */
-  startOffsetMs: number;
+  /**
+   * Every Capture Span of the Meeting, in Capture Start order. A Held Recording
+   * covers the whole Meeting, not the last stretch of it: a retry that
+   * transcribed only one span of three would drop the rest silently, which is the
+   * defect this shape exists to make impossible.
+   */
+  spans: CaptureSpan[];
   reason: string;
   failedAt: number;
 }

@@ -11,16 +11,29 @@
 // browser, no WASM, and no real audio.
 import type { Utterance } from "../domain/types";
 
-/** An Audio Recording handed to a Transcription Provider. */
-export interface AudioRecording {
-  /** The encoded audio for one Meeting, as the recorder wrote it. */
+/** One Capture Span's audio, as the recorder wrote it. */
+export interface RecordedSpan {
+  /** The encoded audio for this span. */
   data: Blob;
   /**
-   * ms from the Meeting start to Capture Start. Utterance offsets are absolute
-   * relative to the *Meeting* start, and recording begins whenever the user
-   * clicked — which is usually after the Meeting began.
+   * ms from the Meeting start to this span's Capture Start. Utterance offsets are
+   * absolute relative to the *Meeting* start, and recording begins whenever the
+   * user clicked — which is usually after the Meeting began, and again after
+   * every stretch they kept off the record.
    */
   startOffsetMs: number;
+}
+
+/**
+ * An Audio Recording handed to a Transcription Provider: one Meeting's Capture
+ * Spans, in Capture Start order.
+ *
+ * A list rather than one blob because stopping and resuming capture produces one
+ * WebM container per span (ADR-0005). The gap between two spans is audio the user
+ * chose not to record; nothing is invented to fill it.
+ */
+export interface AudioRecording {
+  spans: RecordedSpan[];
 }
 
 export interface TranscriptionHooks {
@@ -117,11 +130,13 @@ async function attempt<T>(what: string, run: () => Promise<T>): Promise<T> {
 /**
  * Builds a Transcription Provider from an engine and a decoder.
  *
- * A recording longer than the engine's input limit is transcribed in windows of
- * that length and every span is shifted by its window's position plus Capture
- * Start, so Utterance timings stay absolute across chunk boundaries. Fusion
- * matches on those timings, so an uncorrected offset would silently misattribute
- * every word after the first boundary.
+ * Every Capture Span is transcribed in order and their Utterances concatenated.
+ * A span longer than the engine's input limit is transcribed in windows of that
+ * length, and each engine span is shifted by its window's position *plus its own
+ * span's Capture Start*, so Utterance timings stay absolute relative to the
+ * Meeting across both chunk and span boundaries. Fusion matches on those
+ * timings, so an uncorrected offset would silently misattribute every word after
+ * the first boundary.
  */
 export function createTranscriptionProvider(
   deps: TranscriptionProviderDeps,
@@ -133,28 +148,43 @@ export function createTranscriptionProvider(
       abortIfCancelled(hooks?.signal);
       await attempt("model load failed", () => engine.load(hooks?.onModelProgress));
 
-      abortIfCancelled(hooks?.signal);
-      const { samples, sampleRate } = await attempt("audio decode failed", () =>
-        decode(recording.data, engine.sampleRate),
-      );
-      const totalMs = msFor(samples.length, sampleRate);
-      const windowSamples = Math.max(1, Math.round((engine.maxInputMs / 1000) * sampleRate));
+      // Every span is decoded before any is transcribed, so the progress total is
+      // the Meeting's whole recorded audio instead of whichever span is in hand —
+      // a total that grew span by span would read as the wait getting longer. This
+      // costs no more memory than the single-file case did: the spans are the same
+      // audio, minus what the user kept off the record.
+      const decoded: { samples: Float32Array; sampleRate: number; startOffsetMs: number }[] = [];
+      for (const span of recording.spans) {
+        abortIfCancelled(hooks?.signal);
+        const audio = await attempt("audio decode failed", () =>
+          decode(span.data, engine.sampleRate),
+        );
+        decoded.push({ ...audio, startOffsetMs: span.startOffsetMs });
+      }
+      const totalMs = decoded.reduce((ms, d) => ms + msFor(d.samples.length, d.sampleRate), 0);
 
       const utterances: Utterance[] = [];
-      for (let offset = 0; offset < samples.length; offset += windowSamples) {
-        abortIfCancelled(hooks?.signal);
-        const end = Math.min(offset + windowSamples, samples.length);
-        // Absolute zero for this window: where the Meeting began, not where the
-        // window did.
-        const baseMs = recording.startOffsetMs + msFor(offset, sampleRate);
-        const spans = await attempt("engine failed", () =>
-          engine.transcribe(samples.subarray(offset, end)),
-        );
-        for (const span of spans) {
-          const utterance = toUtterance(span, baseMs);
-          if (utterance) utterances.push(utterance);
+      let doneMs = 0;
+      for (const { samples, sampleRate, startOffsetMs } of decoded) {
+        const windowSamples = Math.max(1, Math.round((engine.maxInputMs / 1000) * sampleRate));
+        for (let offset = 0; offset < samples.length; offset += windowSamples) {
+          abortIfCancelled(hooks?.signal);
+          const end = Math.min(offset + windowSamples, samples.length);
+          // Absolute zero for this window: where the Meeting began, not where the
+          // window did and not where this span's Capture Start was.
+          const baseMs = startOffsetMs + msFor(offset, sampleRate);
+          const spans = await attempt("engine failed", () =>
+            engine.transcribe(samples.subarray(offset, end)),
+          );
+          for (const span of spans) {
+            const utterance = toUtterance(span, baseMs);
+            if (utterance) utterances.push(utterance);
+          }
+          // Progress counts audio transcribed, not Meeting time elapsed: the gap
+          // between two spans was never recorded and is not work to be done.
+          hooks?.onAudioProgress?.(doneMs + msFor(end, sampleRate), totalMs);
         }
-        hooks?.onAudioProgress?.(msFor(end, sampleRate), totalMs);
+        doneMs += msFor(samples.length, sampleRate);
       }
       return utterances;
     },

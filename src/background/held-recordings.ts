@@ -4,9 +4,27 @@
 // once its Transcript exists, from which point the Held Transcript store owns
 // the retry chain.
 import { ext } from "../platform";
-import type { HeldRecording, Transcript } from "../domain/types";
+import type { CaptureSpan, HeldRecording, Transcript } from "../domain/types";
 
 type HeldMap = Record<string, HeldRecording>;
+
+/**
+ * An entry as storage may hold it. Before Capture Spans, a held Meeting was one
+ * Audio Recording keyed by `recordingId` with one Capture Start offset — which is
+ * one span, so it is read as one rather than stranded unretriable.
+ */
+type StoredRecording = Omit<HeldRecording, "spans"> & {
+  spans?: CaptureSpan[];
+  startOffsetMs?: number;
+};
+
+function normalize(entry: StoredRecording): HeldRecording {
+  const { startOffsetMs, ...rest } = entry;
+  return {
+    ...rest,
+    spans: entry.spans ?? [{ spanId: entry.recordingId, startOffsetMs: startOffsetMs ?? 0 }],
+  };
+}
 
 // Same discipline as the Held Transcript store: every mutation is a
 // read-modify-write over the whole map, so they are serialized — a hold racing a
@@ -20,20 +38,27 @@ function withLock<T>(fn: () => Promise<T>): Promise<T> {
 
 async function readAll(): Promise<HeldMap> {
   const stored = (await ext.storage.local.get("heldRecordings")) as {
-    heldRecordings?: HeldMap;
+    heldRecordings?: Record<string, StoredRecording>;
   };
-  return stored.heldRecordings ?? {};
+  const held: HeldMap = {};
+  for (const [id, entry] of Object.entries(stored.heldRecordings ?? {})) {
+    held[id] = normalize(entry);
+  }
+  return held;
 }
 
 export interface RecordingToHold {
   recordingId: string;
   /** The Meeting's caption-only Transcript, carrying the Speaker Track. */
   transcript: Transcript;
-  startOffsetMs: number;
+  /** Every Capture Span of the Meeting, in Capture Start order. A hold covers all
+   * of the Meeting's audio or the retry recovers only part of it. */
+  spans: CaptureSpan[];
 }
 
-/** Hold an Audio Recording for retry. Keyed by the recording itself, so a second
- * failure for the same Meeting updates the entry rather than holding it twice. */
+/** Hold an Audio Recording for retry. Keyed by the Meeting's recording id, so a
+ * second failure for the same Meeting updates the entry rather than holding it
+ * twice — however many spans that Meeting has. */
 export function holdRecording(
   recording: RecordingToHold,
   reason: string,
@@ -43,7 +68,7 @@ export function holdRecording(
     const entry: HeldRecording = {
       recordingId: recording.recordingId,
       transcript: recording.transcript,
-      startOffsetMs: recording.startOffsetMs,
+      spans: recording.spans,
       reason,
       failedAt: Date.now(),
     };

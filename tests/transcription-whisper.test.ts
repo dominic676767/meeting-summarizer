@@ -85,7 +85,7 @@ describe.skipIf(!process.env.WHISPER_INTEGRATION)("local Whisper, real model", (
       decode: async () => decodeWav(new Uint8Array(await readFile(FIXTURE))),
     });
 
-    const utterances = await provider.transcribe({ data: new Blob(), startOffsetMs: 0 });
+    const utterances = await provider.transcribe({ spans: [{ data: new Blob(), startOffsetMs: 0 }] });
 
     expect(utterances.length).toBeGreaterThan(0);
     expect(utterances.map((u) => u.text).join(" ").toLowerCase()).toContain(KNOWN_PHRASE);

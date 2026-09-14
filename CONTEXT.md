@@ -10,7 +10,11 @@ One unit of live-caption text scraped from the meeting client's DOM: speaker nam
 
 ### Audio Recording
 
-The captured tab audio for one Meeting, encoded incrementally to browser-managed storage (never held whole in memory). The source of truth for *what was said*. Discarded once the Summary Artifact is written.
+The captured tab audio for one Meeting: its [[Capture Span]]s, encoded incrementally to browser-managed storage (never held whole in memory). The source of truth for *what was said*. Every span of it is discarded once the Summary Artifact is written.
+
+### Capture Span
+
+One stretch of audio recorded between a [[Capture Start]] and the next stop — its own file, with its own offset from the Meeting start (ADR-0005). A Meeting has as many spans as the user started capture times, because they may keep a sensitive stretch off the record and resume afterwards. At Meeting End every span is transcribed in order and the resulting Utterances concatenated, each shifted by its own span's offset so timings stay absolute relative to the Meeting. The gap between two spans is not missing data: it is audio the user chose not to record, and nothing is invented to fill it.
 
 ### Speaker Track
 
@@ -74,4 +78,4 @@ A Transcript whose summarization failed (Provider error, etc.). It is retained i
 
 ### Held Recording
 
-An Audio Recording whose *transcription* failed. Retained for retry for the same reason as a [[Held Transcript]]: the meeting is unrecoverable once its audio is dropped. Released only once transcription succeeds and its Transcript takes over the retry chain.
+An Audio Recording whose *transcription* failed. Retained for retry for the same reason as a [[Held Transcript]]: the meeting is unrecoverable once its audio is dropped. Covers **every** [[Capture Span]] of the Meeting, so a retry transcribes all of them rather than the last stretch alone. Released only once transcription succeeds and its Transcript takes over the retry chain.

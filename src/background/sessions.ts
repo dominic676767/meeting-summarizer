@@ -2,7 +2,7 @@
 // worker suspension can't lose a Transcript mid-meeting.
 import { TranscriptAccumulator } from "../adapters/accumulator";
 import type { TranscriptionProgress } from "../messages";
-import type { Transcript } from "../domain/types";
+import type { CaptureSpan, Transcript } from "../domain/types";
 import { ext } from "../platform";
 
 export type SessionState = "capturing" | "transcribing" | "summarizing" | "done" | "failed";
@@ -18,18 +18,17 @@ export interface MeetingSession {
   recording: boolean;
   /** Epoch ms the current recording began; null when not recording. */
   recordingStartedAt: number | null;
-  /** An Audio Recording exists (or existed) for this Meeting — drives the
-   * Degraded Capture flag independently of whether recording is live now. */
-  recorded: boolean;
-  /** Storage key for this Meeting's Audio Recording; stable across stop/start. */
+  /** Recording key for this Meeting; stable across stop/start, and the prefix
+   * every one of its Capture Spans is named from. */
   recordingId: string | null;
   /**
-   * Capture Start for the Audio Recording now on disk, retained after the
-   * recorder stops. Utterance offsets are absolute relative to the *Meeting*
-   * start, and recording begins whenever the user clicked, so transcription
-   * needs the distance between the two.
+   * Every Capture Span recorded for this Meeting, in Capture Start order —
+   * the Meeting's Audio Recording. One entry per Capture Start, each with its own
+   * file and its own distance from the Meeting start, because Utterance offsets
+   * are absolute relative to the *Meeting* and recording begins whenever the user
+   * clicked. Empty means no audio, which is a Degraded Capture.
    */
-  recordingFrom: number | null;
+  spans: CaptureSpan[];
   /** Non-fatal capture problem (quota, recorder fault) to surface to the user. */
   captureWarning: string | null;
   /** The in-page prompt hides itself for the rest of this Meeting once dismissed. */
@@ -59,13 +58,37 @@ interface PersistedSession {
   state: SessionState;
   recording: boolean;
   recordingStartedAt: number | null;
-  recorded: boolean;
   recordingId: string | null;
-  recordingFrom: number | null;
+  /** Always written; absent only on a record from before Capture Spans. */
+  spans?: CaptureSpan[];
   captureWarning: string | null;
   promptDismissed: boolean;
   audioWords: boolean | null;
   entries: ReturnType<TranscriptAccumulator["toJSON"]>;
+  /** Written by versions before Capture Spans; read only by `spansOf`. */
+  recorded?: boolean;
+  recordingFrom?: number | null;
+}
+
+/**
+ * A persisted session's Capture Spans, tolerating one written before spans
+ * existed: that shape recorded a single Audio Recording keyed by `recordingId`
+ * and one Capture Start (`recordingFrom`), which is exactly one span. Reading it
+ * as such is what stops an extension update mid-Meeting from orphaning audio the
+ * user is still recording.
+ */
+function spansOf(p: PersistedSession): CaptureSpan[] {
+  if (p.spans) return p.spans;
+  if (!p.recorded || !p.recordingId) return [];
+  const startOffsetMs = Math.max(0, (p.recordingFrom ?? p.startedAt) - p.startedAt);
+  return [{ spanId: p.recordingId, startOffsetMs }];
+}
+
+/** Whether an Audio Recording exists for this Meeting: at least one Capture Span
+ * was recorded. Drives the Degraded Capture flag independently of whether the
+ * recorder is live now. */
+export function hasRecording(s: MeetingSession): boolean {
+  return s.spans.length > 0;
 }
 
 // Concurrent startup messages share one rehydration promise, so a second
@@ -90,9 +113,8 @@ async function doRehydrate(): Promise<void> {
         state: p.state,
         recording: p.recording ?? false,
         recordingStartedAt: p.recordingStartedAt ?? null,
-        recorded: p.recorded ?? false,
         recordingId: p.recordingId ?? null,
-        recordingFrom: p.recordingFrom ?? null,
+        spans: spansOf(p),
         captureWarning: p.captureWarning ?? null,
         promptDismissed: p.promptDismissed ?? false,
         audioWords: p.audioWords ?? null,
@@ -117,9 +139,8 @@ export async function persistSessions(): Promise<void> {
         state: s.state,
         recording: s.recording,
         recordingStartedAt: s.recordingStartedAt,
-        recorded: s.recorded,
         recordingId: s.recordingId,
-        recordingFrom: s.recordingFrom,
+        spans: s.spans,
         captureWarning: s.captureWarning,
         promptDismissed: s.promptDismissed,
         audioWords: s.audioWords,
@@ -151,9 +172,8 @@ export async function ensureSession(tabId: number, platform: string): Promise<Me
       state: "capturing",
       recording: false,
       recordingStartedAt: null,
-      recorded: false,
       recordingId: null,
-      recordingFrom: null,
+      spans: [],
       captureWarning: null,
       promptDismissed: false,
       audioWords: null,

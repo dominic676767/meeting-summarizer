@@ -10,7 +10,7 @@ import type {
   OffscreenTranscribeReply,
   StatusReply,
 } from "../messages";
-import type { HeldRecording, Settings, Utterance } from "../domain/types";
+import type { CaptureSpan, HeldRecording, Settings, Utterance } from "../domain/types";
 import { artifactFilename } from "../pipeline/filename";
 import { summarizeTranscript } from "../pipeline/pipeline";
 import { createProviderClient } from "../providers/factory";
@@ -18,6 +18,7 @@ import { loadSettings } from "../settings";
 import { fuseTranscript } from "../transcription/fusion";
 import { writeArtifact } from "./artifact-writer";
 import { deriveCaptureState, isDegraded } from "./capture-state";
+import { beginSpan, orderedSpans, spanIdsOf } from "./capture-spans";
 import { getHeld, holdTranscript, listHeld, releaseHeld, updateHeldReason } from "./held";
 import {
   getHeldRecording,
@@ -30,6 +31,7 @@ import {
   dropSession,
   ensureSession,
   getSession,
+  hasRecording,
   persistSessions,
   sessionToTranscript,
   type MeetingSession,
@@ -88,22 +90,44 @@ function getMediaStreamId(targetTabId: number): Promise<string> {
   return ext.tabCapture.getMediaStreamId({ targetTabId });
 }
 
+// A Capture Start takes several awaits to reach `recording = true`, and the
+// keyboard shortcut can fire again inside that window. Without this the second
+// invocation would record a Capture Span the offscreen recorder ignored (start is
+// idempotent there), leaving a span in the session with no audio behind it.
+const capturesStarting = new Set<number>();
+
+/**
+ * Begins a Capture Span. Every Capture Start writes its own audio file, so
+ * resuming capture after a stretch the user kept off the record cannot touch what
+ * an earlier span recorded (ADR-0005).
+ */
 async function startCapture(tabId: number): Promise<void> {
   const s = await getSession(tabId);
-  if (!s || s.recording) return; // idempotent: one recording per tab
+  if (!s || s.recording || capturesStarting.has(tabId)) return; // idempotent: one recording per tab
+  capturesStarting.add(tabId);
+  try {
+    await beginCaptureSpan(tabId, s);
+  } finally {
+    capturesStarting.delete(tabId);
+  }
+}
+
+async function beginCaptureSpan(tabId: number, s: MeetingSession): Promise<void> {
   const streamId = await getMediaStreamId(tabId);
   await ensureOffscreenDocument();
   const recordingId = s.recordingId ?? `${tabId}-${s.startedAt}`;
-  const reply = await sendToOffscreen({ type: "offscreen-start", streamId, recordingId });
+  const span = beginSpan(recordingId, s.startedAt, Date.now());
+  const reply = await sendToOffscreen({ type: "offscreen-start", streamId, spanId: span.spanId });
   if (!reply.recording) {
     // getUserMedia/redeem failed — surface it rather than pretend we started.
     s.captureWarning = reply.error ?? "capture failed to start";
   } else {
     s.recording = true;
     s.recordingStartedAt = reply.startedAt ?? Date.now();
-    s.recorded = true;
     s.recordingId = recordingId;
-    s.recordingFrom = s.recordingStartedAt;
+    // The span joins the Meeting's Audio Recording; the earlier ones stay exactly
+    // as they were recorded.
+    s.spans = orderedSpans([...s.spans, span]);
     s.captureWarning = reply.error;
   }
   await persistSessions();
@@ -196,16 +220,16 @@ export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | 
   // Meeting End stops the recorder before the transcribe → summarize sequence
   // runs, and regardless of whether audio was captured, so the Audio Recording
   // is always closed cleanly.
-  if (s.recording) await stopRecording(tabId, s.recorded);
+  if (s.recording) await stopRecording(tabId, hasRecording(s));
   if (s.state !== "capturing") return;
   // Audio alone can carry the Meeting: captions that were never turned on cost
   // speaker names, not the meeting.
-  if (s.accumulator.size === 0 && !s.recorded) return;
+  if (s.accumulator.size === 0 && !hasRecording(s)) return;
 
   const captionTranscript = sessionToTranscript(s);
   let transcript = captionTranscript;
 
-  if (s.recorded && s.recordingId) {
+  if (hasRecording(s) && s.recordingId) {
     s.state = "transcribing";
     s.transcription = null;
     await persistSessions();
@@ -224,11 +248,7 @@ export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | 
       // Provider if that is what it takes. The caption-only summary below still
       // lands, so the outage costs accuracy now rather than everything.
       await holdRecording(
-        {
-          recordingId: s.recordingId,
-          transcript: captionTranscript,
-          startOffsetMs: captureStartOffset(s),
-        },
+        { recordingId: s.recordingId, transcript: captionTranscript, spans: s.spans },
         outcome.error ?? "transcription produced no words",
       );
     }
@@ -254,24 +274,24 @@ export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | 
     s.state = "done";
     s.accumulator = new TranscriptAccumulator();
     await persistSessions();
-    if (s.recordingId) await discardRecording(s.recordingId);
+    // Every span of this Meeting, not just the last one: three spans recorded
+    // means three files to delete, or the ones left behind are orphans.
+    if (s.recordingId) await discardRecording(s.recordingId, s.spans);
   } catch (err) {
     console.error(`meeting-summarizer: summarization failed (${trigger})`, err);
     // A Transcript is unrecoverable once dropped — hold it for retry, together
     // with the recording it came from so the audio survives until an artifact
     // for it is actually written.
-    await holdTranscript(transcript, reasonOf(err), s.recordingId ?? undefined);
+    await holdTranscript(
+      transcript,
+      reasonOf(err),
+      s.recordingId ? { recordingId: s.recordingId, spans: s.spans } : undefined,
+    );
     s.state = "failed";
     await persistSessions();
   }
   await closeOffscreenDocument();
   await updateBadge(tabId);
-}
-
-/** ms from the Meeting start to Capture Start — the distance that keeps Utterance
- * offsets absolute relative to the Meeting rather than to the recording. */
-function captureStartOffset(s: MeetingSession): number {
-  return Math.max(0, (s.recordingFrom ?? s.startedAt) - s.startedAt);
 }
 
 function reasonOf(err: unknown): string {
@@ -302,9 +322,11 @@ async function transcribeRecording(
     await ensureOffscreenDocument();
     const reply = (await ext.runtime.sendMessage({
       type: "offscreen-transcribe",
-      recordingId: s.recordingId,
+      // Every span of the Meeting, in Capture Start order: the words of a stretch
+      // the user recorded before pausing are as much a part of this Meeting as the
+      // last one, and each span carries the offset that keeps its timings absolute.
+      spans: orderedSpans(s.spans),
       transcription: settings.transcription,
-      startOffsetMs: captureStartOffset(s),
       tabId,
     } satisfies OffscreenMessage)) as OffscreenTranscribeReply;
     if (reply.error) console.error(`meeting-summarizer: transcription failed: ${reply.error}`);
@@ -316,16 +338,24 @@ async function transcribeRecording(
 }
 
 /**
- * Delete an Audio Recording, once its Summary Artifact is written, so recordings
- * never accumulate on the user's disk. A recording still held for a transcription
- * retry is exempt: that retry is the only thing that can still turn this Meeting
- * into an accurate Transcript, and it needs the audio to do it.
+ * Delete an Audio Recording — every Capture Span of it — once its Summary Artifact
+ * is written, so recordings never accumulate on the user's disk. A Meeting that
+ * recorded three spans must leave no orphan behind.
+ *
+ * A recording still held for a transcription retry is exempt: that retry is the
+ * only thing that can still turn this Meeting into an accurate Transcript, and it
+ * needs the audio to do it.
  */
-async function discardRecording(recordingId: string): Promise<void> {
+async function discardRecording(recordingId: string, spans: CaptureSpan[]): Promise<void> {
+  const spanIds = spanIdsOf(spans);
+  if (spanIds.length === 0) return;
   if (await getHeldRecording(recordingId)) return;
   try {
     await ensureOffscreenDocument();
-    await ext.runtime.sendMessage({ type: "offscreen-discard-recording", recordingId });
+    await ext.runtime.sendMessage({
+      type: "offscreen-discard-spans",
+      spanIds,
+    } satisfies OffscreenMessage);
   } catch {
     // The audio stays where it is; nothing depends on the deletion succeeding.
   }
@@ -355,7 +385,7 @@ async function retryHeld(id: string): Promise<void> {
       await releaseHeld(id);
       // Same confirmation releases the audio: the Meeting's single artifact
       // exists, so nothing is left for the recording to serve.
-      if (entry.recordingId) await discardRecording(entry.recordingId);
+      if (entry.recordingId) await discardRecording(entry.recordingId, entry.spans ?? []);
     } catch (err) {
       await updateHeldReason(id, reasonOf(err));
       throw err;
@@ -393,7 +423,10 @@ async function retryHeldRecording(recordingId: string): Promise<void> {
       throw err;
     }
     const transcript = fuseTranscript(entry.transcript, utterances);
-    const held = await holdTranscript(transcript, "transcribed, summary pending", recordingId);
+    const held = await holdTranscript(transcript, "transcribed, summary pending", {
+      recordingId,
+      spans: entry.spans,
+    });
     await releaseHeldRecording(recordingId);
     // From here the Held Transcript machinery owns the rest of the chain,
     // including deleting the audio once the artifact write is confirmed.
@@ -411,9 +444,10 @@ async function transcribeHeldRecording(entry: HeldRecording): Promise<Utterance[
   try {
     const reply = (await ext.runtime.sendMessage({
       type: "offscreen-transcribe",
-      recordingId: entry.recordingId,
+      // All of the Meeting's spans: a retry that recovered only the last stretch
+      // would lose the rest, which is the failure this whole shape exists to stop.
+      spans: orderedSpans(entry.spans),
       transcription: settings.transcription,
-      startOffsetMs: entry.startOffsetMs,
       // No live session owns a retried Meeting, so progress has no session to
       // land on; the popup reports the retry on the row the user clicked.
       tabId: -1,
@@ -449,11 +483,14 @@ async function statusFor(tabId: number): Promise<StatusReply> {
       sessionState: s?.state,
       inMeeting: s?.inMeeting ?? false,
       recording: s?.recording ?? false,
-      recorded: s?.recorded ?? false,
+      recorded: s ? hasRecording(s) : false,
     }),
     recording: s?.recording ?? false,
     recordingStartedAt: s?.recordingStartedAt ?? null,
-    degraded: isDegraded({ recorded: s?.recorded ?? false, audioWords: s?.audioWords ?? null }),
+    degraded: isDegraded({
+      recorded: s ? hasRecording(s) : false,
+      audioWords: s?.audioWords ?? null,
+    }),
     captureWarning,
     transcription: s?.transcription ?? null,
   };
@@ -467,7 +504,7 @@ function captureStateFor(tabId: number): Promise<CaptureStateReply> {
         sessionState: s?.state,
         inMeeting: s?.inMeeting ?? false,
         recording: s?.recording ?? false,
-        recorded: s?.recorded ?? false,
+        recorded: s ? hasRecording(s) : false,
       }),
       title: s?.title ?? null,
       recording: s?.recording ?? false,
@@ -587,7 +624,7 @@ ext.commands.onCommand.addListener((command, tab) => {
 ext.tabs.onRemoved.addListener((tabId) => {
   void (async () => {
     const s = await getSession(tabId);
-    if (s && s.state === "capturing" && (s.accumulator.size > 0 || s.recorded)) {
+    if (s && s.state === "capturing" && (s.accumulator.size > 0 || hasRecording(s))) {
       await finishMeeting(tabId, "tab-closed");
     } else if (s?.recording) {
       await stopRecording(tabId);

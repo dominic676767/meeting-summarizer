@@ -41,7 +41,7 @@ function fakeFetch(body: unknown, status = 200) {
   return { fn, calls };
 }
 
-const recording = (startOffsetMs = 0) => ({ data: new Blob(), startOffsetMs });
+const recording = (startOffsetMs = 0) => ({ spans: [{ data: new Blob(), startOffsetMs }] });
 
 function openAiProvider(opts: {
   fetchFn: typeof fetch;

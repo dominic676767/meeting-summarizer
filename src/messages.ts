@@ -1,6 +1,7 @@
 // Message protocol between content scripts, background, offscreen, and popup.
 import type { CaptionSnapshot } from "./adapters/adapter";
 import type {
+  CaptureSpan,
   HeldRecording,
   HeldTranscript,
   TranscriptionSettings,
@@ -40,25 +41,31 @@ export type PopupMessage =
   | { type: "retry-held-recording"; recordingId: string };
 
 export type OffscreenMessage =
-  | { type: "offscreen-start"; streamId: string; recordingId: string }
+  /** One Capture Span per start: the span id is the audio file it writes, and a
+   * later Capture Start in the same Meeting names a different one (ADR-0005). */
+  | { type: "offscreen-start"; streamId: string; spanId: string }
   | { type: "offscreen-stop" }
   | { type: "offscreen-status" }
   | {
       type: "offscreen-transcribe";
-      recordingId: string;
+      /**
+       * Every Capture Span of the Meeting, in Capture Start order. Each carries
+       * its own offset from the Meeting start, which is what keeps Utterance
+       * timings absolute relative to the Meeting rather than to the span.
+       */
+      spans: CaptureSpan[];
       /** The whole Transcription Provider selection, resolved by the service
        * worker at transcribe time: the offscreen document runs the engine the
        * user has chosen now, never one remembered from a previous attempt. */
       transcription: TranscriptionSettings;
-      /** ms from the Meeting start to Capture Start; keeps Utterance timings
-       * absolute relative to the Meeting rather than to the recording. */
-      startOffsetMs: number;
       /** Echoed back on progress so the service worker can find the session
        * again after a suspension. */
       tabId: number;
     }
   | { type: "offscreen-cancel-transcribe" }
-  | { type: "offscreen-discard-recording"; recordingId: string };
+  /** Discards all of a Meeting's audio: a Meeting that recorded three spans must
+   * leave no orphan once its Summary Artifact is written. */
+  | { type: "offscreen-discard-spans"; spanIds: string[] };
 
 /** Pushed from the offscreen document to the service worker during the wait. */
 export type OffscreenEventMessage = {
