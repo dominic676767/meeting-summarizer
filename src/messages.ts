@@ -33,7 +33,7 @@ export type PopupMessage =
   | { type: "retry-held"; id: string };
 
 export type OffscreenMessage =
-  | { type: "offscreen-start"; streamId: string }
+  | { type: "offscreen-start"; streamId: string; recordingId: string }
   | { type: "offscreen-stop" }
   | { type: "offscreen-status" };
 
@@ -52,10 +52,16 @@ export interface StatusReply {
   recordingStartedAt: number | null;
   /**
    * This Meeting has no Audio Recording, so its Transcript will come from
-   * caption words alone. True for every run until the Transcription Provider
-   * lands, and the Summary Artifact must say so rather than imply audio.
+   * caption words alone. True until the user starts capture; the Summary
+   * Artifact must say so rather than imply audio.
    */
   degraded: boolean;
+  /**
+   * A non-fatal capture problem the user must know about (storage quota, a
+   * recorder fault) surfaced instead of a silent stop. Null when capture is
+   * healthy.
+   */
+  captureWarning: string | null;
 }
 
 /** What the in-page prompt needs, and nothing more. */

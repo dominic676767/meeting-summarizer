@@ -13,6 +13,19 @@ export interface MeetingSession {
   inMeeting: boolean;
   state: SessionState;
   accumulator: TranscriptAccumulator;
+  /** Audio is being recorded right now (offscreen recorder is live). */
+  recording: boolean;
+  /** Epoch ms the current recording began; null when not recording. */
+  recordingStartedAt: number | null;
+  /** An Audio Recording exists (or existed) for this Meeting — drives the
+   * Degraded Capture flag independently of whether recording is live now. */
+  recorded: boolean;
+  /** Storage key for this Meeting's Audio Recording; stable across stop/start. */
+  recordingId: string | null;
+  /** Non-fatal capture problem (quota, recorder fault) to surface to the user. */
+  captureWarning: string | null;
+  /** The in-page prompt hides itself for the rest of this Meeting once dismissed. */
+  promptDismissed: boolean;
 }
 
 const sessions = new Map<number, MeetingSession>();
@@ -24,6 +37,12 @@ interface PersistedSession {
   startedAt: number;
   inMeeting: boolean;
   state: SessionState;
+  recording: boolean;
+  recordingStartedAt: number | null;
+  recorded: boolean;
+  recordingId: string | null;
+  captureWarning: string | null;
+  promptDismissed: boolean;
   entries: ReturnType<TranscriptAccumulator["toJSON"]>;
 }
 
@@ -47,6 +66,12 @@ async function doRehydrate(): Promise<void> {
         startedAt: p.startedAt,
         inMeeting: p.inMeeting,
         state: p.state,
+        recording: p.recording ?? false,
+        recordingStartedAt: p.recordingStartedAt ?? null,
+        recorded: p.recorded ?? false,
+        recordingId: p.recordingId ?? null,
+        captureWarning: p.captureWarning ?? null,
+        promptDismissed: p.promptDismissed ?? false,
         accumulator: TranscriptAccumulator.fromJSON(p.entries),
       });
     }
@@ -65,6 +90,12 @@ export async function persistSessions(): Promise<void> {
         startedAt: s.startedAt,
         inMeeting: s.inMeeting,
         state: s.state,
+        recording: s.recording,
+        recordingStartedAt: s.recordingStartedAt,
+        recorded: s.recorded,
+        recordingId: s.recordingId,
+        captureWarning: s.captureWarning,
+        promptDismissed: s.promptDismissed,
         entries: s.accumulator.toJSON(),
       };
     }
@@ -91,6 +122,12 @@ export async function ensureSession(tabId: number, platform: string): Promise<Me
       startedAt: Date.now(),
       inMeeting: false,
       state: "capturing",
+      recording: false,
+      recordingStartedAt: null,
+      recorded: false,
+      recordingId: null,
+      captureWarning: null,
+      promptDismissed: false,
       accumulator: new TranscriptAccumulator(),
     };
     sessions.set(tabId, s);

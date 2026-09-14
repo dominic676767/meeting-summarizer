@@ -4,18 +4,19 @@
 // after 30s without playback and would kill a long recording.
 import { ext } from "../platform";
 import type { OffscreenMessage, OffscreenStatusReply } from "../messages";
+import { openAudioStore, type AudioStore } from "./audio-store";
 
 let recorder: MediaRecorder | undefined;
 let context: AudioContext | undefined;
 let stream: MediaStream | undefined;
+let store: AudioStore | undefined;
 let startedAt = 0;
-/** Encoded bytes seen so far. Proves the encoder is running without holding
- * the audio: no Transcription Provider exists yet to consume it (see the
- * capture surface brief), so chunks are counted and released rather than
- * accumulated. Retaining them is the next slice's job, together with the
- * Held Recording store. */
 let encodedBytes = 0;
 let lastError: string | null = null;
+// Chunk writes are chained so they land in emission order even though
+// MediaRecorder fires ondataavailable synchronously while a prior write is
+// still in flight.
+let writeChain: Promise<void> = Promise.resolve();
 
 /** Tab audio arrives as a stream whose constraints Chromium accepts only in
  * this non-standard form; the DOM lib has no type for them. */
@@ -23,7 +24,7 @@ interface TabCaptureConstraints {
   audio: { mandatory: { chromeMediaSource: "tab"; chromeMediaSourceId: string } };
 }
 
-async function start(streamId: string): Promise<void> {
+async function start(streamId: string, recordingId: string): Promise<void> {
   if (recorder) return; // already recording; start is idempotent
   lastError = null;
   const constraints: TabCaptureConstraints = {
@@ -40,9 +41,21 @@ async function start(streamId: string): Promise<void> {
   context.createMediaStreamSource(stream).connect(context.destination);
 
   encodedBytes = 0;
+  writeChain = Promise.resolve();
+  store = await openAudioStore(recordingId);
   recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
   recorder.ondataavailable = (e) => {
+    if (e.data.size === 0) return;
     encodedBytes += e.data.size;
+    const s = store;
+    if (!s) return;
+    // Append incrementally. A quota failure is recorded as a capture warning
+    // rather than swallowed, so the user learns before the meeting is lost.
+    writeChain = writeChain
+      .then(() => s.append(e.data))
+      .catch((err) => {
+        lastError = err instanceof Error ? err.message : String(err);
+      });
   };
   recorder.onerror = () => {
     lastError = "recorder error";
@@ -62,6 +75,10 @@ async function stop(): Promise<void> {
       r.stop();
     });
   }
+  // Let the last flushed chunks finish landing before the file is closed.
+  await writeChain;
+  await store?.close().catch(() => undefined);
+  store = undefined;
   stream?.getTracks().forEach((t) => t.stop());
   stream = undefined;
   await context?.close().catch(() => undefined);
@@ -82,7 +99,7 @@ ext.runtime.onMessage.addListener((raw: unknown) => {
   if (msg.type === "offscreen-start") {
     return (async () => {
       try {
-        await start(msg.streamId);
+        await start(msg.streamId, msg.recordingId);
       } catch (err) {
         lastError = err instanceof Error ? err.message : String(err);
         await stop();

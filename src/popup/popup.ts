@@ -6,6 +6,9 @@ import { loadSettings } from "../settings";
 
 const statusEl = document.getElementById("status")!;
 const titleEl = document.getElementById("title")!;
+const degradedEl = document.getElementById("degraded")!;
+const startBtn = document.getElementById("start") as HTMLButtonElement;
+const stopBtn = document.getElementById("stop") as HTMLButtonElement;
 const summarizeBtn = document.getElementById("summarize") as HTMLButtonElement;
 const heldSection = document.getElementById("held")!;
 const heldList = document.getElementById("held-list")!;
@@ -83,10 +86,40 @@ async function refreshHint(): Promise<void> {
   hintEl.hidden = isConfigured(await loadSettings());
 }
 
+/** Captured duration, mm:ss (or h:mm:ss past an hour), for the recording line. */
+function elapsed(since: number): string {
+  const secs = Math.max(0, Math.floor((Date.now() - since) / 1000));
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+
 function render(status: StatusReply): void {
   titleEl.textContent = status.title ?? "";
-  summarizeBtn.hidden = !(status.inMeeting && status.segmentCount > 0);
-  if (status.state === "summarizing") {
+  // Affordances follow the capture-prompt surface state table: Start only while
+  // a Meeting is detected, Stop + Summarize now only while recording.
+  startBtn.hidden = status.state !== "detected";
+  stopBtn.hidden = status.state !== "recording";
+  summarizeBtn.hidden = status.state !== "recording";
+  degradedEl.hidden = !(status.state === "done" && status.degraded);
+
+  if (status.state === "recording") {
+    if (status.captureWarning) {
+      statusEl.className = "warning";
+      statusEl.textContent = `Recording — storage problem, audio may be incomplete: ${status.captureWarning}`;
+    } else if (status.segmentCount === 0) {
+      statusEl.className = "warning";
+      statusEl.textContent = "Recording, but no captions arriving — turn captions on.";
+    } else {
+      statusEl.className = "recording";
+      statusEl.textContent = `Recording — ${elapsed(status.recordingStartedAt ?? Date.now())}`;
+    }
+  } else if (status.state === "detected") {
+    statusEl.className = "warning";
+    statusEl.textContent = "Meeting detected — not recording.";
+  } else if (status.state === "summarizing") {
     statusEl.className = "capturing";
     statusEl.textContent = "Summarizing…";
   } else if (status.state === "done") {
@@ -95,12 +128,6 @@ function render(status: StatusReply): void {
   } else if (status.state === "failed") {
     statusEl.className = "warning";
     statusEl.textContent = "Summarization failed — transcript held for retry below.";
-  } else if (status.capturing) {
-    statusEl.className = "capturing";
-    statusEl.textContent = `Capturing — ${status.segmentCount} segments`;
-  } else if (status.inMeeting) {
-    statusEl.className = "warning";
-    statusEl.textContent = "In a meeting but no captions arriving — turn captions on.";
   } else {
     statusEl.className = "idle";
     statusEl.textContent = "Not in a meeting.";
@@ -114,6 +141,14 @@ async function refresh(): Promise<void> {
   render(await send<StatusReply>({ type: "get-status" }));
   await refreshHeld();
 }
+
+startBtn.addEventListener("click", async () => {
+  render(await send<StatusReply>({ type: "start-capture" }));
+});
+
+stopBtn.addEventListener("click", async () => {
+  render(await send<StatusReply>({ type: "stop-capture" }));
+});
 
 summarizeBtn.addEventListener("click", async () => {
   render(await send<StatusReply>({ type: "summarize-now" }));

@@ -9,8 +9,11 @@
       #status { margin-bottom: 10px; }
       .capturing { color: #0e8a16; }
       .warning { color: #d73a4a; font-weight: 600; }
+      .recording { color: #24292e; }
       .idle { color: #555; }
       #title { color: #555; font-size: 12px; margin-bottom: 10px; }
+      #degraded { color: #555; font-size: 12px; margin: -4px 0 10px; }
+      .actions { display: flex; gap: 8px; }
       button { font: inherit; padding: 4px 10px; }
       #held { margin-top: 12px; }
       #held ul { list-style: none; padding: 0; margin: 6px 0 0; }
@@ -26,7 +29,12 @@
       <h1>Meeting Summarizer</h1>
       <div id="status" class="idle" role="status" aria-live="polite">Not in a meeting.</div>
       <div id="title"></div>
-      <button id="summarize" hidden>Summarize now</button>
+      <div id="degraded" hidden>Captions only — no audio was recorded.</div>
+      <div class="actions">
+        <button id="start" hidden>Start recording</button>
+        <button id="stop" hidden>Stop</button>
+        <button id="summarize" hidden>Summarize now</button>
+      </div>
       <div id="held" hidden>
         <h2>Held transcripts</h2>
         <ul id="held-list"></ul>

@@ -14,9 +14,17 @@ describe("walking skeleton", () => {
     expect(manifest.content_scripts.every((cs) => cs.all_frames)).toBe(true);
   });
 
-  it("requests only storage, downloads, and provider-API host permissions", () => {
+  it("requests storage, downloads, and the audio-capture permissions", () => {
     const apiPermissions = manifest.permissions.filter((p) => !p.includes("://"));
-    expect(apiPermissions).toEqual(["storage", "downloads"]);
+    // tabCapture + offscreen are what audio recording needs (ADR-0004): the
+    // stream id comes from tabCapture, the recorder lives in an offscreen doc.
+    expect(apiPermissions).toEqual(["storage", "downloads", "tabCapture", "offscreen"]);
+  });
+
+  it("registers a keyboard command so a real extension invocation can start capture", () => {
+    // A click on an injected in-page button cannot grant tabCapture; a bound
+    // command can, which is why the in-page prompt only summons the gesture.
+    expect(manifest.commands["start-capture"]).toBeTruthy();
   });
 
   it("targets Chromium Manifest V3 with a service worker", () => {

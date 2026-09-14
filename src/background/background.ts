@@ -2,14 +2,20 @@
 // writes, and badges.
 import { ext } from "../platform";
 import { TranscriptAccumulator } from "../adapters/accumulator";
-import type { CaptureState, Message, StatusReply } from "../messages";
+import type {
+  CaptureStateReply,
+  Message,
+  OffscreenMessage,
+  OffscreenStatusReply,
+  StatusReply,
+} from "../messages";
 import { artifactFilename } from "../pipeline/filename";
 import { summarizeTranscript } from "../pipeline/pipeline";
 import { createProviderClient } from "../providers/factory";
 import { loadSettings } from "../settings";
 import { writeArtifact } from "./artifact-writer";
+import { deriveCaptureState, isDegraded } from "./capture-state";
 import { getHeld, holdTranscript, listHeld, releaseHeld, updateHeldReason } from "./held";
-import type { SessionState } from "./sessions";
 import {
   dropSession,
   ensureSession,
@@ -21,11 +27,94 @@ import {
 // MV3 exposes `action`; the MV2 `browserAction` shim is gone with Firefox (ADR-0003).
 const action = ext.action;
 
+// --- Audio capture (offscreen document) --------------------------------------
+//
+// tabCapture requires an explicit extension invocation and hands back a
+// single-use stream id that expires within seconds, so the id is obtained here
+// on the user's gesture and redeemed immediately in the offscreen document
+// (ADR-0004). The service worker owns session state; the offscreen document
+// owns the stream, the recorder, and the AudioContext loopback.
+
+/** Only one offscreen document may exist; create it lazily with USER_MEDIA
+ * (not AUDIO_PLAYBACK, which self-closes after 30s and would kill a long call). */
+async function ensureOffscreenDocument(): Promise<void> {
+  if (await ext.offscreen.hasDocument()) return;
+  await ext.offscreen.createDocument({
+    url: "offscreen.html",
+    reasons: ["USER_MEDIA"],
+    justification: "Record meeting tab audio to transcribe what was actually said.",
+  });
+}
+
+async function sendToOffscreen(msg: OffscreenMessage): Promise<OffscreenStatusReply> {
+  return (await ext.runtime.sendMessage(msg)) as OffscreenStatusReply;
+}
+
+/** Promisified stream-id request; must run on the user's invocation for the
+ * given tab or Chromium refuses the capture. */
+function getMediaStreamId(targetTabId: number): Promise<string> {
+  return ext.tabCapture.getMediaStreamId({ targetTabId });
+}
+
+async function startCapture(tabId: number): Promise<void> {
+  const s = await getSession(tabId);
+  if (!s || s.recording) return; // idempotent: one recording per tab
+  const streamId = await getMediaStreamId(tabId);
+  await ensureOffscreenDocument();
+  const recordingId = s.recordingId ?? `${tabId}-${s.startedAt}`;
+  const reply = await sendToOffscreen({ type: "offscreen-start", streamId, recordingId });
+  if (!reply.recording) {
+    // getUserMedia/redeem failed — surface it rather than pretend we started.
+    s.captureWarning = reply.error ?? "capture failed to start";
+  } else {
+    s.recording = true;
+    s.recordingStartedAt = reply.startedAt ?? Date.now();
+    s.recorded = true;
+    s.recordingId = recordingId;
+    s.captureWarning = reply.error;
+  }
+  await persistSessions();
+  await updateBadge(tabId);
+}
+
+async function stopRecording(tabId: number): Promise<void> {
+  const s = await getSession(tabId);
+  if (!s) return;
+  try {
+    await sendToOffscreen({ type: "offscreen-stop" });
+    await ext.offscreen.closeDocument().catch(() => undefined);
+  } catch {
+    // Offscreen already gone (service-worker restart) — the recorder is stopped
+    // regardless; the Audio Recording written so far is preserved.
+  }
+  s.recording = false;
+  s.recordingStartedAt = null;
+  await persistSessions();
+  await updateBadge(tabId);
+}
+
+/** The bound Capture Start shortcut, as the user's platform renders it. */
+async function startShortcut(): Promise<string | null> {
+  try {
+    const commands = await ext.commands.getAll();
+    const cmd = commands.find((c) => c.name === "start-capture");
+    return cmd?.shortcut && cmd.shortcut !== "" ? cmd.shortcut : null;
+  } catch {
+    return null;
+  }
+}
+
 async function updateBadge(tabId: number): Promise<void> {
   const s = await getSession(tabId);
   let text = "";
   let color = "#0e8a16";
-  if (s?.inMeeting) {
+  if (s?.recording) {
+    // Always-visible recording indicator, Alert Red — the user approved red
+    // carrying both warning and "live" meanings. Distinct from the caption
+    // count, so live audio capture is never mistaken for caption scraping.
+    text = "REC";
+    color = "#d73a4a";
+  } else if (s?.inMeeting) {
     if (s.accumulator.size === 0) {
       text = "!";
       color = "#d73a4a"; // in a meeting, no captions arriving
@@ -67,7 +156,12 @@ async function handleContentMessage(msg: Message, tabId: number): Promise<void> 
  */
 export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | "tab-closed") {
   const s = await getSession(tabId);
-  if (!s || s.state !== "capturing" || s.accumulator.size === 0) return;
+  if (!s) return;
+  // Meeting End stops the recorder before the summarization sequence runs, and
+  // regardless of whether a caption summary follows, so the Audio Recording is
+  // always closed cleanly.
+  if (s.recording) await stopRecording(tabId);
+  if (s.state !== "capturing" || s.accumulator.size === 0) return;
   s.state = "summarizing";
   await persistSessions();
   await updateBadge(tabId);
@@ -120,52 +214,95 @@ async function retryHeld(id: string): Promise<void> {
   }
 }
 
-/**
- * SessionState is what the background tracks; CaptureState is the wider
- * vocabulary the popup and in-page capture prompt share. They diverge because
- * audio capture states have no session equivalent yet — "capturing" here means
- * captions are accumulating, which the shared vocabulary calls "detected".
- */
-function toCaptureState(state: SessionState | undefined): CaptureState {
-  switch (state) {
-    case "capturing":
-      return "detected";
-    case "summarizing":
-      return "summarizing";
-    case "done":
-      return "done";
-    case "failed":
-      return "failed";
-    default:
-      return "idle";
-  }
-}
-
 async function statusFor(tabId: number): Promise<StatusReply> {
   const s = await getSession(tabId);
+  let captureWarning = s?.captureWarning ?? null;
+  // Poll the offscreen recorder while live so a quota failure that develops
+  // mid-recording surfaces as a warning rather than a silent stop.
+  if (s?.recording) {
+    try {
+      const os = await sendToOffscreen({ type: "offscreen-status" });
+      if (os.error) captureWarning = os.error;
+    } catch {
+      // Offscreen not reachable — leave the last known warning in place.
+    }
+  }
   return {
     inMeeting: s?.inMeeting ?? false,
     segmentCount: s?.accumulator.size ?? 0,
     title: s?.title ?? null,
     capturing: (s?.inMeeting ?? false) && (s?.accumulator.size ?? 0) > 0,
-    state: toCaptureState(s?.state),
-    // No Audio Recording exists until ticket #12 lands, so every Transcript is
-    // still caption-only. Reported honestly rather than defaulted optimistically.
-    recording: false,
-    recordingStartedAt: null,
-    degraded: true,
+    state: deriveCaptureState({
+      sessionState: s?.state,
+      inMeeting: s?.inMeeting ?? false,
+      recording: s?.recording ?? false,
+      recorded: s?.recorded ?? false,
+    }),
+    recording: s?.recording ?? false,
+    recordingStartedAt: s?.recordingStartedAt ?? null,
+    degraded: isDegraded({ recorded: s?.recorded ?? false }),
+    captureWarning,
   };
+}
+
+function captureStateFor(tabId: number): Promise<CaptureStateReply> {
+  return (async () => {
+    const s = await getSession(tabId);
+    return {
+      state: deriveCaptureState({
+        sessionState: s?.state,
+        inMeeting: s?.inMeeting ?? false,
+        recording: s?.recording ?? false,
+        recorded: s?.recorded ?? false,
+      }),
+      title: s?.title ?? null,
+      recording: s?.recording ?? false,
+      recordingStartedAt: s?.recordingStartedAt ?? null,
+      dismissed: s?.promptDismissed ?? false,
+      shortcut: await startShortcut(),
+    };
+  })();
+}
+
+async function dismissPrompt(tabId: number): Promise<void> {
+  const s = await getSession(tabId);
+  if (!s) return;
+  s.promptDismissed = true;
+  await persistSessions();
 }
 
 ext.runtime.onMessage.addListener((raw: unknown, sender) => {
   const msg = raw as Message;
-  if (sender.tab?.id !== undefined) {
-    return handleContentMessage(msg, sender.tab.id);
+  const senderTabId = sender.tab?.id;
+  if (senderTabId !== undefined) {
+    // The in-page prompt asks per-tab; these need a reply.
+    if (msg.type === "get-capture-state") return captureStateFor(senderTabId);
+    if (msg.type === "dismiss-prompt") {
+      return (async () => {
+        await dismissPrompt(senderTabId);
+        return { ok: true };
+      })();
+    }
+    return handleContentMessage(msg, senderTabId);
   }
   // Popup messages
   if (msg.type === "get-status") {
     return (async () => {
       const [tab] = await ext.tabs.query({ active: true, currentWindow: true });
+      return statusFor(tab?.id ?? -1);
+    })();
+  }
+  if (msg.type === "start-capture") {
+    return (async () => {
+      const [tab] = await ext.tabs.query({ active: true, currentWindow: true });
+      if (tab?.id !== undefined) await startCapture(tab.id);
+      return statusFor(tab?.id ?? -1);
+    })();
+  }
+  if (msg.type === "stop-capture") {
+    return (async () => {
+      const [tab] = await ext.tabs.query({ active: true, currentWindow: true });
+      if (tab?.id !== undefined) await stopRecording(tab.id);
       return statusFor(tab?.id ?? -1);
     })();
   }
@@ -192,9 +329,21 @@ ext.runtime.onMessage.addListener((raw: unknown, sender) => {
   return undefined;
 });
 
+// A keyboard command is a real extension invocation, so — unlike a click on an
+// in-page button — it can grant tabCapture (ADR-0004). This is why the in-page
+// prompt only summons the gesture instead of offering a Start button.
+ext.commands.onCommand.addListener((command, tab) => {
+  if (command !== "start-capture") return;
+  void (async () => {
+    const id = tab?.id ?? (await ext.tabs.query({ active: true, currentWindow: true }))[0]?.id;
+    if (id !== undefined) await startCapture(id);
+  })();
+});
+
 ext.tabs.onRemoved.addListener((tabId) => {
   void (async () => {
     const s = await getSession(tabId);
+    if (s?.recording) await stopRecording(tabId);
     if (s && s.state === "capturing" && s.accumulator.size > 0) {
       await finishMeeting(tabId, "tab-closed");
     }
