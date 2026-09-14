@@ -120,4 +120,34 @@ export interface HeldTranscript {
   transcript: Transcript;
   reason: string;
   failedAt: number;
+  /**
+   * The Audio Recording this Meeting's words came from, still on disk. Carried
+   * so the audio outlives the *first* artifact attempt: it is deleted only once
+   * a Summary Artifact for this Transcript is confirmed written. Absent where
+   * the Meeting has no Audio Recording at all.
+   */
+  recordingId?: string;
+}
+
+/**
+ * An Audio Recording whose transcription failed, retained for retry — the
+ * meeting is unrecoverable once its audio is dropped. Released only once its
+ * Transcript exists, at which point the Held Transcript above owns the rest of
+ * the retry chain.
+ */
+export interface HeldRecording {
+  /** Storage key of the audio, and the entry's identity: one Meeting's
+   * recording can only ever be held once. */
+  recordingId: string;
+  /**
+   * The Meeting's caption-only Transcript — its metadata and the Speaker Track a
+   * retry has to fuse the new Utterances with. Kept beside the audio because the
+   * session that carried it does not survive a browser restart.
+   */
+  transcript: Transcript;
+  /** ms from the Meeting start to Capture Start, so a retry's Utterance offsets
+   * stay absolute relative to the Meeting. */
+  startOffsetMs: number;
+  reason: string;
+  failedAt: number;
 }

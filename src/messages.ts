@@ -1,6 +1,6 @@
 // Message protocol between content scripts, background, offscreen, and popup.
 import type { CaptionSnapshot } from "./adapters/adapter";
-import type { HeldTranscript, Utterance, WhisperModelSize } from "./domain/types";
+import type { HeldRecording, HeldTranscript, Utterance, WhisperModelSize } from "./domain/types";
 
 /**
  * The state vocabulary the popup and the in-page capture prompt share.
@@ -31,7 +31,8 @@ export type PopupMessage =
   | { type: "summarize-now" }
   | { type: "skip-transcription" }
   | { type: "list-held" }
-  | { type: "retry-held"; id: string };
+  | { type: "retry-held"; id: string }
+  | { type: "retry-held-recording"; recordingId: string };
 
 export type OffscreenMessage =
   | { type: "offscreen-start"; streamId: string; recordingId: string }
@@ -142,4 +143,10 @@ export interface OffscreenTranscribeReply {
 
 export interface HeldListReply {
   held: HeldTranscript[];
+  /**
+   * Held Recordings, listed separately: their retry runs transcription and can
+   * be recovered by switching Transcription Provider, which is a different
+   * action from re-running a summary, so the popup must not merge the two.
+   */
+  recordings: HeldRecording[];
 }

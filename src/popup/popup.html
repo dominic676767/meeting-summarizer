@@ -17,9 +17,9 @@
       #degraded { color: #555; font-size: 12px; margin: -4px 0 10px; }
       .actions { display: flex; gap: 8px; }
       button { font: inherit; padding: 4px 10px; }
-      #held { margin-top: 12px; }
-      #held ul { list-style: none; padding: 0; margin: 6px 0 0; }
-      #held li { display: flex; justify-content: space-between; gap: 8px; align-items: center; padding: 4px 0; border-top: 1px solid #eee; }
+      .held-group { margin-top: 12px; }
+      .held-group ul { list-style: none; padding: 0; margin: 6px 0 0; }
+      .held-group li { display: flex; justify-content: space-between; gap: 8px; align-items: center; padding: 4px 0; border-top: 1px solid #eee; }
       .reason { color: #aa0000; font-size: 12px; }
       h2 { font-size: 12px; margin: 0; color: #555; }
       footer { margin-top: 12px; padding-top: 10px; border-top: 1px solid #eee; }
@@ -47,7 +47,14 @@
         <button id="summarize" hidden>Summarize now</button>
         <button id="skip-transcription" hidden>Skip transcription, use captions</button>
       </div>
-      <div id="held" hidden>
+      <!-- Recordings come first: their retry is the one that can still turn a
+           Meeting into an accurate transcript, and a held recording becomes a
+           held transcript on its way to a summary, never the other way. -->
+      <div id="held-recordings" class="held-group" hidden>
+        <h2>Held recordings — audio not transcribed</h2>
+        <ul id="held-recording-list"></ul>
+      </div>
+      <div id="held" class="held-group" hidden>
         <h2>Held transcripts</h2>
         <ul id="held-list"></ul>
       </div>

@@ -21,14 +21,28 @@ async function readAll(): Promise<HeldMap> {
   return stored.held ?? {};
 }
 
-export function holdTranscript(transcript: Transcript, reason: string): Promise<HeldTranscript> {
+/**
+ * Hold a Transcript for retry. `recordingId` names the Audio Recording the words
+ * came from, and doubles as the entry's identity: one Meeting with an Audio
+ * Recording therefore holds at most one Transcript, so a crash between holding a
+ * retried Transcript and releasing its Held Recording costs a repeated
+ * transcription rather than a duplicate Summary Artifact.
+ */
+export function holdTranscript(
+  transcript: Transcript,
+  reason: string,
+  recordingId?: string,
+): Promise<HeldTranscript> {
   return withLock(async () => {
     const held = await readAll();
     const entry: HeldTranscript = {
-      id: `${transcript.endedAt ?? Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      id: recordingId
+        ? `rec-${recordingId}`
+        : `${transcript.endedAt ?? Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       transcript,
       reason,
       failedAt: Date.now(),
+      ...(recordingId ? { recordingId } : {}),
     };
     held[entry.id] = entry;
     await ext.storage.local.set({ held });

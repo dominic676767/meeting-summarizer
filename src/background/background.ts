@@ -10,7 +10,7 @@ import type {
   OffscreenTranscribeReply,
   StatusReply,
 } from "../messages";
-import type { Utterance } from "../domain/types";
+import type { HeldRecording, Utterance } from "../domain/types";
 import { artifactFilename } from "../pipeline/filename";
 import { summarizeTranscript } from "../pipeline/pipeline";
 import { createProviderClient } from "../providers/factory";
@@ -19,6 +19,13 @@ import { fuseTranscript } from "../transcription/fusion";
 import { writeArtifact } from "./artifact-writer";
 import { deriveCaptureState, isDegraded } from "./capture-state";
 import { getHeld, holdTranscript, listHeld, releaseHeld, updateHeldReason } from "./held";
+import {
+  getHeldRecording,
+  holdRecording,
+  listHeldRecordings,
+  releaseHeldRecording,
+  updateHeldRecordingReason,
+} from "./held-recordings";
 import {
   dropSession,
   ensureSession,
@@ -61,6 +68,18 @@ async function closeOffscreenDocument(): Promise<void> {
 
 async function sendToOffscreen(msg: OffscreenMessage): Promise<OffscreenStatusReply> {
   return (await ext.runtime.sendMessage(msg)) as OffscreenStatusReply;
+}
+
+/** One offscreen document serves every tab, so a retry that finishes while
+ * another Meeting is recording must leave it standing or it destroys that
+ * Meeting's Audio Recording. */
+async function closeOffscreenUnlessRecording(): Promise<void> {
+  try {
+    if ((await sendToOffscreen({ type: "offscreen-status" })).recording) return;
+  } catch {
+    // Unreachable — closing is what we wanted anyway.
+  }
+  await closeOffscreenDocument();
 }
 
 /** Promisified stream-id request; must run on the user's invocation for the
@@ -191,13 +210,28 @@ export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | 
     s.transcription = null;
     await persistSessions();
     await updateBadge(tabId);
-    const utterances = await transcribeRecording(tabId, s);
+    const outcome = await transcribeRecording(tabId, s);
     s.transcription = null;
     // Words from the recording replace the caption words wholesale — that is
     // the point of v2 — while the captions live on as the Speaker Track fusion
     // takes the names from.
-    s.audioWords = utterances.length > 0;
-    if (s.audioWords) transcript = fuseTranscript(captionTranscript, utterances);
+    s.audioWords = outcome.utterances.length > 0;
+    if (s.audioWords) {
+      transcript = fuseTranscript(captionTranscript, outcome.utterances);
+    } else if (!outcome.cancelled) {
+      // A transcription outage must cost a retry, not the meeting: hold the
+      // Audio Recording so the user can retry it — after switching Transcription
+      // Provider if that is what it takes. The caption-only summary below still
+      // lands, so the outage costs accuracy now rather than everything.
+      await holdRecording(
+        {
+          recordingId: s.recordingId,
+          transcript: captionTranscript,
+          startOffsetMs: captureStartOffset(s),
+        },
+        outcome.error ?? "transcription produced no words",
+      );
+    }
   }
 
   if (transcript.segments.length === 0) {
@@ -223,8 +257,10 @@ export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | 
     if (s.recordingId) await discardRecording(s.recordingId);
   } catch (err) {
     console.error(`meeting-summarizer: summarization failed (${trigger})`, err);
-    // A Transcript is unrecoverable once dropped — hold it for retry.
-    await holdTranscript(transcript, err instanceof Error ? err.message : String(err));
+    // A Transcript is unrecoverable once dropped — hold it for retry, together
+    // with the recording it came from so the audio survives until an artifact
+    // for it is actually written.
+    await holdTranscript(transcript, reasonOf(err), s.recordingId ?? undefined);
     s.state = "failed";
     await persistSessions();
   }
@@ -232,14 +268,28 @@ export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | 
   await updateBadge(tabId);
 }
 
+/** ms from the Meeting start to Capture Start — the distance that keeps Utterance
+ * offsets absolute relative to the Meeting rather than to the recording. */
+function captureStartOffset(s: MeetingSession): number {
+  return Math.max(0, (s.recordingFrom ?? s.startedAt) - s.startedAt);
+}
+
+function reasonOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 /**
- * Hands the Audio Recording to the Transcription Provider and waits. Returns no
- * Utterances when transcription failed or the user chose captions over the
- * wait — either way the Meeting falls back to caption words rather than being
- * lost, which is the one outcome this product may not produce.
+ * Hands the Audio Recording to the Transcription Provider and waits. No
+ * Utterances means the Meeting falls back to caption words rather than being
+ * lost, which is the one outcome this product may not produce — but the caller
+ * still needs to tell a failure (hold the audio for retry) from the user
+ * choosing captions over the wait (nothing went wrong, nothing to retry).
  */
-async function transcribeRecording(tabId: number, s: MeetingSession): Promise<Utterance[]> {
-  if (!s.recordingId) return [];
+async function transcribeRecording(
+  tabId: number,
+  s: MeetingSession,
+): Promise<OffscreenTranscribeReply> {
+  if (!s.recordingId) return { utterances: [], cancelled: false, error: "no recording" };
   try {
     const settings = await loadSettings();
     await ensureOffscreenDocument();
@@ -247,18 +297,25 @@ async function transcribeRecording(tabId: number, s: MeetingSession): Promise<Ut
       type: "offscreen-transcribe",
       recordingId: s.recordingId,
       model: settings.transcription.localWhisper.model,
-      startOffsetMs: Math.max(0, (s.recordingFrom ?? s.startedAt) - s.startedAt),
+      startOffsetMs: captureStartOffset(s),
       tabId,
     } satisfies OffscreenMessage)) as OffscreenTranscribeReply;
     if (reply.error) console.error(`meeting-summarizer: transcription failed: ${reply.error}`);
-    return reply.utterances;
+    return reply;
   } catch (err) {
     console.error("meeting-summarizer: transcription failed", err);
-    return [];
+    return { utterances: [], cancelled: false, error: reasonOf(err) };
   }
 }
 
+/**
+ * Delete an Audio Recording, once its Summary Artifact is written, so recordings
+ * never accumulate on the user's disk. A recording still held for a transcription
+ * retry is exempt: that retry is the only thing that can still turn this Meeting
+ * into an accurate Transcript, and it needs the audio to do it.
+ */
 async function discardRecording(recordingId: string): Promise<void> {
+  if (await getHeldRecording(recordingId)) return;
   try {
     await ensureOffscreenDocument();
     await ext.runtime.sendMessage({ type: "offscreen-discard-recording", recordingId });
@@ -289,12 +346,77 @@ async function retryHeld(id: string): Promise<void> {
       await summarizeAndWrite(entry.transcript);
       // Release ONLY after the downloads API confirmed the write.
       await releaseHeld(id);
+      // Same confirmation releases the audio: the Meeting's single artifact
+      // exists, so nothing is left for the recording to serve.
+      if (entry.recordingId) await discardRecording(entry.recordingId);
     } catch (err) {
-      await updateHeldReason(id, err instanceof Error ? err.message : String(err));
+      await updateHeldReason(id, reasonOf(err));
       throw err;
     }
   } finally {
     retriesInFlight.delete(id);
+  }
+}
+
+// Guard against concurrent retries of the same Held Recording (double-click,
+// popup re-open) producing duplicate artifacts, exactly as the Held Transcript
+// retry does.
+const recordingRetriesInFlight = new Set<string>();
+
+/**
+ * Retries transcription of a Held Recording and hands the result on.
+ *
+ * Settings are read now rather than remembered from the failed run, which is
+ * what lets a user switch Transcription Provider and recover a Meeting the first
+ * choice could not handle. The Transcript is held *before* the recording is
+ * released, so no failure window exists in which the audio is gone and nothing
+ * durable has taken its place.
+ */
+async function retryHeldRecording(recordingId: string): Promise<void> {
+  if (recordingRetriesInFlight.has(recordingId)) return;
+  recordingRetriesInFlight.add(recordingId);
+  try {
+    const entry = await getHeldRecording(recordingId);
+    if (!entry) return;
+    let utterances: Utterance[];
+    try {
+      utterances = await transcribeHeldRecording(entry);
+    } catch (err) {
+      await updateHeldRecordingReason(recordingId, reasonOf(err));
+      throw err;
+    }
+    const transcript = fuseTranscript(entry.transcript, utterances);
+    const held = await holdTranscript(transcript, "transcribed, summary pending", recordingId);
+    await releaseHeldRecording(recordingId);
+    // From here the Held Transcript machinery owns the rest of the chain,
+    // including deleting the audio once the artifact write is confirmed.
+    await retryHeld(held.id);
+  } finally {
+    recordingRetriesInFlight.delete(recordingId);
+  }
+}
+
+/** Transcription under whatever settings are current, with every non-result
+ * turned into a throw: the caller's job is to keep the audio held. */
+async function transcribeHeldRecording(entry: HeldRecording): Promise<Utterance[]> {
+  const settings = await loadSettings();
+  await ensureOffscreenDocument();
+  try {
+    const reply = (await ext.runtime.sendMessage({
+      type: "offscreen-transcribe",
+      recordingId: entry.recordingId,
+      model: settings.transcription.localWhisper.model,
+      startOffsetMs: entry.startOffsetMs,
+      // No live session owns a retried Meeting, so progress has no session to
+      // land on; the popup reports the retry on the row the user clicked.
+      tabId: -1,
+    } satisfies OffscreenMessage)) as OffscreenTranscribeReply;
+    if (reply.error) throw new Error(reply.error);
+    if (reply.cancelled) throw new Error("transcription cancelled");
+    if (reply.utterances.length === 0) throw new Error("transcription produced no words");
+    return reply.utterances;
+  } finally {
+    await closeOffscreenUnlessRecording();
   }
 }
 
@@ -419,7 +541,7 @@ ext.runtime.onMessage.addListener((raw: unknown, sender) => {
     })();
   }
   if (msg.type === "list-held") {
-    return (async () => ({ held: await listHeld() }))();
+    return (async () => ({ held: await listHeld(), recordings: await listHeldRecordings() }))();
   }
   if (msg.type === "retry-held") {
     return (async () => {
@@ -427,7 +549,17 @@ ext.runtime.onMessage.addListener((raw: unknown, sender) => {
         await retryHeld(msg.id);
         return { ok: true };
       } catch (err) {
-        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        return { ok: false, error: reasonOf(err) };
+      }
+    })();
+  }
+  if (msg.type === "retry-held-recording") {
+    return (async () => {
+      try {
+        await retryHeldRecording(msg.recordingId);
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: reasonOf(err) };
       }
     })();
   }

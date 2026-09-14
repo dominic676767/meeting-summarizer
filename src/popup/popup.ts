@@ -21,6 +21,8 @@ const summarizeBtn = document.getElementById("summarize") as HTMLButtonElement;
 const skipBtn = document.getElementById("skip-transcription") as HTMLButtonElement;
 const heldSection = document.getElementById("held")!;
 const heldList = document.getElementById("held-list")!;
+const recordingSection = document.getElementById("held-recordings")!;
+const recordingList = document.getElementById("held-recording-list")!;
 const hintEl = document.getElementById("hint")!;
 const settingsBtn = document.getElementById("open-settings") as HTMLButtonElement;
 
@@ -30,50 +32,104 @@ function send<T>(msg: PopupMessage): Promise<T> {
 
 /** A retry is in flight; suppress list rebuilds so focus and button state survive. */
 let retryPending = false;
-/** Signature of the currently rendered held list, so we only rebuild on real change. */
+/** Signatures of the rendered lists, so we only rebuild on real change. */
 let heldSignature = "";
+let recordingSignature = "";
+
+/**
+ * One row of a held list. The button label is the row's whole distinction once it
+ * is read aloud, so it names the work the retry does — re-running a summary and
+ * transcribing audio are different actions and must not both read "Retry".
+ */
+function heldRow(opts: {
+  label: string;
+  reason: string;
+  retryLabel: string;
+  pendingLabel: string;
+  retry: () => Promise<{ ok: boolean; error?: string }>;
+}): HTMLLIElement {
+  const li = document.createElement("li");
+  const label = document.createElement("span");
+  label.textContent = opts.label;
+  const reason = document.createElement("div");
+  reason.className = "reason";
+  reason.textContent = opts.reason;
+  label.append(reason);
+  const btn = document.createElement("button");
+  btn.textContent = opts.retryLabel;
+  btn.addEventListener("click", async () => {
+    retryPending = true;
+    btn.disabled = true;
+    btn.textContent = opts.pendingLabel;
+    try {
+      const res = await opts.retry();
+      if (!res.ok) {
+        btn.disabled = false;
+        btn.textContent = opts.retryLabel;
+      }
+    } finally {
+      retryPending = false;
+    }
+    // Force a rebuild of both lists: a recovered recording leaves this list and
+    // its Transcript may land in the other.
+    heldSignature = "";
+    recordingSignature = "";
+    await refreshHeld();
+  });
+  li.append(label, btn);
+  return li;
+}
+
+function day(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
+}
 
 async function refreshHeld(): Promise<void> {
-  const { held } = await send<HeldListReply>({ type: "list-held" });
+  const { held, recordings } = await send<HeldListReply>({ type: "list-held" });
   heldSection.hidden = held.length === 0;
-  // Rebuilding the list every poll destroys keyboard focus and clobbers an
+  recordingSection.hidden = recordings.length === 0;
+  // Rebuilding a list every poll destroys keyboard focus and clobbers an
   // in-flight Retry button, so only re-render when the contents actually change
   // and never while a retry is pending.
+  if (retryPending) return;
+
   const signature = held.map((h) => `${h.id}:${h.reason}`).join("|");
-  if (retryPending || signature === heldSignature) return;
-  heldSignature = signature;
-  heldList.replaceChildren(
-    ...held.map((h) => {
-      const li = document.createElement("li");
-      const label = document.createElement("span");
-      const date = new Date(h.transcript.endedAt ?? h.failedAt).toISOString().slice(0, 10);
-      label.textContent = `${date} ${h.transcript.title} (${h.transcript.segments.length} segments)`;
-      const reason = document.createElement("div");
-      reason.className = "reason";
-      reason.textContent = h.reason;
-      label.append(reason);
-      const btn = document.createElement("button");
-      btn.textContent = "Retry";
-      btn.addEventListener("click", async () => {
-        retryPending = true;
-        btn.disabled = true;
-        btn.textContent = "Retrying…";
-        try {
-          const res = await send<{ ok: boolean; error?: string }>({ type: "retry-held", id: h.id });
-          if (!res.ok) {
-            btn.disabled = false;
-            btn.textContent = "Retry";
-          }
-        } finally {
-          retryPending = false;
-        }
-        heldSignature = ""; // force a rebuild to reflect the retry outcome
-        await refreshHeld();
-      });
-      li.append(label, btn);
-      return li;
-    }),
-  );
+  if (signature !== heldSignature) {
+    heldSignature = signature;
+    heldList.replaceChildren(
+      ...held.map((h) =>
+        heldRow({
+          label: `${day(h.transcript.endedAt ?? h.failedAt)} ${h.transcript.title} (${h.transcript.segments.length} segments)`,
+          reason: h.reason,
+          retryLabel: "Retry",
+          pendingLabel: "Retrying…",
+          retry: () => send<{ ok: boolean; error?: string }>({ type: "retry-held", id: h.id }),
+        }),
+      ),
+    );
+  }
+
+  const recordingSig = recordings.map((r) => `${r.recordingId}:${r.reason}`).join("|");
+  if (recordingSig !== recordingSignature) {
+    recordingSignature = recordingSig;
+    recordingList.replaceChildren(
+      ...recordings.map((r) =>
+        heldRow({
+          label: `${day(r.transcript.endedAt ?? r.failedAt)} ${r.transcript.title}`,
+          reason: r.reason,
+          // Retrying is worth offering precisely because the engine can be
+          // changed first: Settings, then this button.
+          retryLabel: "Retry transcription",
+          pendingLabel: "Transcribing…",
+          retry: () =>
+            send<{ ok: boolean; error?: string }>({
+              type: "retry-held-recording",
+              recordingId: r.recordingId,
+            }),
+        }),
+      ),
+    );
+  }
 }
 
 function isConfigured(s: Settings): boolean {
