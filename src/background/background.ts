@@ -19,6 +19,7 @@ import { fuseTranscript } from "../transcription/fusion";
 import { writeArtifact } from "./artifact-writer";
 import { deriveCaptureState, isDegraded } from "./capture-state";
 import { beginSpan, orderedSpans, spanIdsOf } from "./capture-spans";
+import { isMeetingUrl } from "./meeting-url";
 import { getHeld, holdTranscript, listHeld, releaseHeld, updateHeldReason } from "./held";
 import {
   getHeldRecording,
@@ -28,6 +29,7 @@ import {
   updateHeldRecordingReason,
 } from "./held-recordings";
 import {
+  allSessions,
   dropSession,
   ensureSession,
   getSession,
@@ -117,7 +119,12 @@ async function beginCaptureSpan(tabId: number, s: MeetingSession): Promise<void>
   await ensureOffscreenDocument();
   const recordingId = s.recordingId ?? `${tabId}-${s.startedAt}`;
   const span = beginSpan(recordingId, s.startedAt, Date.now());
-  const reply = await sendToOffscreen({ type: "offscreen-start", streamId, spanId: span.spanId });
+  const reply = await sendToOffscreen({
+    type: "offscreen-start",
+    streamId,
+    spanId: span.spanId,
+    tabId,
+  });
   if (!reply.recording) {
     // getUserMedia/redeem failed — surface it rather than pretend we started.
     s.captureWarning = reply.error ?? "capture failed to start";
@@ -214,7 +221,7 @@ async function handleContentMessage(msg: Message, tabId: number): Promise<void> 
  * Idempotent: a Transcript is summarized at most once (double-fire guard —
  * the state test-and-set below is the guard).
  */
-export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | "tab-closed") {
+export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | "tab-closed" | "capture-lost" | "navigated") {
   const s = await getSession(tabId);
   if (!s) return;
   // Meeting End stops the recorder before the transcribe → summarize sequence
@@ -545,6 +552,18 @@ ext.runtime.onMessage.addListener((raw: unknown, sender) => {
       return { ok: true };
     })();
   }
+  // The capture track died on its own — navigation or a tab crash. Whatever was
+  // recorded is real and must reach a summary or a Held Recording, so this is
+  // treated as a Meeting End rather than just a flag to clear.
+  if (msg.type === "capture-track-ended") {
+    return (async () => {
+      const s = await getSession(msg.tabId);
+      if (!s?.recording) return { ok: true };
+      console.warn("meeting-summarizer: capture track ended on its own; finishing the meeting");
+      await finishMeeting(msg.tabId, "capture-lost");
+      return { ok: true };
+    })();
+  }
   // Popup messages
   if (msg.type === "get-status") {
     return (async () => {
@@ -621,6 +640,27 @@ ext.commands.onCommand.addListener((command, tab) => {
   })();
 });
 
+/**
+ * A tab that navigates away from the meeting client is not in a Meeting any more,
+ * and nothing else notices: the content script is destroyed by the unload so no
+ * `meeting-ended` arrives, and `onRemoved` never fires because the tab still
+ * exists. Left alone, either the capture keeps running on whatever the user
+ * browses next — a privacy failure, in a product whose whole premise is that the
+ * audio is yours — or it dies quietly and the popup reports a recording that
+ * stopped. Both are unacceptable, so navigation ends the Meeting.
+ */
+ext.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.url === undefined || isMeetingUrl(changeInfo.url)) return;
+  void (async () => {
+    const s = await getSession(tabId);
+    // Recording, or holding spans from an earlier one: either way there is audio
+    // whose only route to a summary is this Meeting End.
+    if (!s || (!s.recording && !hasRecording(s))) return;
+    console.warn("meeting-summarizer: tab navigated away from the meeting; finishing");
+    await finishMeeting(tabId, "navigated");
+  })();
+});
+
 ext.tabs.onRemoved.addListener((tabId) => {
   void (async () => {
     const s = await getSession(tabId);
@@ -632,3 +672,50 @@ ext.tabs.onRemoved.addListener((tabId) => {
     await dropSession(tabId);
   })();
 });
+
+/**
+ * Reconcile claimed recording state against tab reality.
+ *
+ * A service worker can be torn down mid-recording — or the whole extension
+ * reloaded — and woken with sessions that still say `recording: true`. The
+ * offscreen document did not survive, so nothing is being recorded, but the spans
+ * already on disk are real. Left alone the popup reports a live recording that
+ * ended, and audio nobody will ever transcribe sits in storage: the same silent
+ * unrecoverable loss ADR-0005 fixed, reached from the other side.
+ *
+ * So on every wake: a session whose tab is gone, or has navigated off the meeting
+ * client, is finished — which routes its audio to a summary or, failing that, to a
+ * Held Recording. A session whose tab is still in a meeting but whose recorder
+ * died has its claim corrected rather than left to lie.
+ */
+async function reconcileSessions(): Promise<void> {
+  const recorderAlive = await (async () => {
+    try {
+      return (await sendToOffscreen({ type: "offscreen-status" })).recording;
+    } catch {
+      return false; // no offscreen document survived
+    }
+  })();
+
+  for (const [tabId, s] of await allSessions()) {
+    if (!s.recording && !hasRecording(s)) continue;
+    const tab = await ext.tabs.get(tabId).catch(() => undefined);
+    if (!tab || !isMeetingUrl(tab.url)) {
+      await finishMeeting(tabId, "capture-lost");
+      if (!tab) await dropSession(tabId);
+      continue;
+    }
+    if (s.recording && !recorderAlive) {
+      // Still in the meeting, but the recorder is gone: stop claiming otherwise.
+      // The spans stay put — a later Meeting End still transcribes them.
+      s.recording = false;
+      s.recordingStartedAt = null;
+      s.captureWarning = "Recording stopped unexpectedly — restart it to keep recording.";
+      await persistSessions();
+      await updateBadge(tabId);
+    }
+  }
+}
+
+ext.runtime.onStartup.addListener(() => void reconcileSessions());
+ext.runtime.onInstalled.addListener(() => void reconcileSessions());

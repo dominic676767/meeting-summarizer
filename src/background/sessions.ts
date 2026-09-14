@@ -185,6 +185,16 @@ export async function ensureSession(tabId: number, platform: string): Promise<Me
   return s;
 }
 
+/**
+ * Every rehydrated session, for reconciling against tab reality. A service
+ * worker can be torn down mid-recording and woken with sessions that still claim
+ * to be recording, so something has to check rather than trust them.
+ */
+export async function allSessions(): Promise<Array<[number, MeetingSession]>> {
+  await rehydrate();
+  return [...sessions.entries()];
+}
+
 export async function dropSession(tabId: number): Promise<void> {
   await rehydrate();
   sessions.delete(tabId);

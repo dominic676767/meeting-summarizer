@@ -4,6 +4,7 @@
 // after 30s without playback and would kill a long recording.
 import { ext } from "../platform";
 import type {
+  OffscreenEventMessage,
   OffscreenMessage,
   OffscreenStatusReply,
   OffscreenTranscribeReply,
@@ -34,7 +35,7 @@ interface TabCaptureConstraints {
 /** Records one Capture Span into its own file. A second Capture Start in the same
  * Meeting arrives with a different span id, so it cannot touch what the first one
  * wrote (ADR-0005). */
-async function start(streamId: string, spanId: string): Promise<void> {
+async function start(streamId: string, spanId: string, tabId: number): Promise<void> {
   if (recorder) return; // already recording; start is idempotent
   lastError = null;
   const constraints: TabCaptureConstraints = {
@@ -43,6 +44,20 @@ async function start(streamId: string, spanId: string): Promise<void> {
   stream = await navigator.mediaDevices.getUserMedia(
     constraints as unknown as MediaStreamConstraints,
   );
+
+  // The capture track can end without us asking — the tab navigated away, or
+  // crashed. Left unhandled the recorder keeps a dead stream and the session
+  // goes on reporting `recording: true`, so the popup claims a recording that
+  // is not happening. Tell the service worker instead of letting it lie.
+  for (const track of stream.getTracks()) {
+    track.addEventListener("ended", () => {
+      void ext.runtime
+        .sendMessage({ type: "capture-track-ended", tabId } satisfies OffscreenEventMessage)
+        .catch(() => {
+          // Service worker asleep; its own tab reconciliation is the backstop.
+        });
+    });
+  }
 
   // tabCapture stops playing the tab's audio to the user, so the stream has to
   // be reconnected to a destination or the meeting goes silent for the whole
@@ -200,7 +215,7 @@ ext.runtime.onMessage.addListener((raw: unknown) => {
   if (msg.type === "offscreen-start") {
     return (async () => {
       try {
-        await start(msg.streamId, msg.spanId);
+        await start(msg.streamId, msg.spanId, msg.tabId);
       } catch (err) {
         lastError = err instanceof Error ? err.message : String(err);
         await stop();

@@ -43,7 +43,7 @@ export type PopupMessage =
 export type OffscreenMessage =
   /** One Capture Span per start: the span id is the audio file it writes, and a
    * later Capture Start in the same Meeting names a different one (ADR-0005). */
-  | { type: "offscreen-start"; streamId: string; spanId: string }
+  | { type: "offscreen-start"; streamId: string; spanId: string; tabId: number }
   | { type: "offscreen-stop" }
   | { type: "offscreen-status" }
   | {
@@ -68,11 +68,14 @@ export type OffscreenMessage =
   | { type: "offscreen-discard-spans"; spanIds: string[] };
 
 /** Pushed from the offscreen document to the service worker during the wait. */
-export type OffscreenEventMessage = {
-  type: "transcription-progress";
-  tabId: number;
-  progress: TranscriptionProgress;
-};
+export type OffscreenEventMessage =
+  | { type: "transcription-progress"; tabId: number; progress: TranscriptionProgress }
+  /**
+   * The capture track ended without us stopping it — the tab navigated away or
+   * crashed. Reported so no session goes on claiming `recording: true` for a
+   * recording that is not happening.
+   */
+  | { type: "capture-track-ended"; tabId: number };
 
 export type Message =
   | ContentMessage
