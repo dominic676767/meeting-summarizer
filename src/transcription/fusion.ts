@@ -12,6 +12,7 @@
 import type {
   SpeakerAttribution,
   Transcript,
+  TranscriptProvenance,
   TranscriptSegment,
   Utterance,
 } from "../domain/types";
@@ -73,10 +74,20 @@ export function fuseTranscript(
   utterances: Utterance[],
   track: SpeakerTrackEntry[] = speakerTrackFrom(base),
 ): Transcript {
-  return {
-    ...base,
-    segments: utterances.map((u) => toSegment(u, base.startedAt, attribute(u, track))),
-  };
+  const segments = utterances.map((u) => toSegment(u, base.startedAt, attribute(u, track)));
+  return { ...base, provenance: provenanceOf(segments, base), segments };
+}
+
+/**
+ * Records on the Transcript how much to trust it. Fusion is the only place that
+ * knows whether a Speaker Track name actually reached an Utterance — a track
+ * that overlapped nothing is worth exactly as much as no track at all — so the
+ * answer is stored here rather than guessed from the segments later.
+ */
+function provenanceOf(segments: TranscriptSegment[], base: Transcript): TranscriptProvenance {
+  // No Utterances is the caller's caption fallback, not an audio Transcript.
+  if (segments.length === 0) return base.provenance ?? "captions-only";
+  return segments.some((s) => s.attribution === "speaker-track") ? "fused" : "audio-unattributed";
 }
 
 function toSegment(u: Utterance, meetingStartedAt: number, named: string | null): TranscriptSegment {

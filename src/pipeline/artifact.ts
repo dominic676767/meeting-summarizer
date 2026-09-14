@@ -1,4 +1,4 @@
-import type { Transcript, TranscriptSegment } from "../domain/types";
+import type { Transcript, TranscriptProvenance, TranscriptSegment } from "../domain/types";
 
 function escapeHtml(s: string): string {
   return s
@@ -53,7 +53,40 @@ const STYLE = `
   .seg { margin: 0.35rem 0; }
   .speaker { font-weight: 600; }
   .at { color: #666; font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+  .unverified { color: #666; font-weight: 400; font-size: 0.85rem; }
 `;
+
+/**
+ * What the reader is told the document is made of. A reader who cannot tell
+ * these apart will over-trust two of them, so the clause is never omitted and
+ * the collapsible section is labelled for what it actually contains: calling
+ * scraped captions a "transcript" is the same overclaim in miniature.
+ */
+const PROVENANCE: Record<TranscriptProvenance, { clause: string; sectionLabel: string }> = {
+  fused: {
+    clause: "from recorded audio, speakers from captions",
+    sectionLabel: "Full transcript",
+  },
+  "audio-unattributed": {
+    clause: "from recorded audio · speakers not identified",
+    sectionLabel: "Full transcript",
+  },
+  "captions-only": {
+    clause: "from live captions only — no audio was recorded",
+    sectionLabel: "Full captions",
+  },
+};
+
+/**
+ * The Meta line is not enough where owners are anonymous: action items are what
+ * get acted on, so the caveat is repeated where a wrong owner does its damage.
+ */
+function noteUnverifiedOwners(html: string): string {
+  return html.replace(
+    /<(h[2-5])>([^<]*action items[^<]*)<\/\1>/gi,
+    '<$1>$2 <span class="unverified">(speaker labels are unverified)</span></$1>',
+  );
+}
 
 /**
  * A segment's offset from the Meeting start as mm:ss (h:mm:ss past the hour) —
@@ -81,6 +114,10 @@ function formatOffset(ms: number): string {
  */
 export function renderArtifact(summaryMarkdown: string, transcript: Transcript): string {
   const date = new Date(transcript.endedAt ?? transcript.startedAt);
+  // An unstated provenance is indistinguishable from the best case, so a
+  // Transcript that carries no claim is read as the weakest one.
+  const provenance = PROVENANCE[transcript.provenance ?? "captions-only"];
+  const summary = markdownToHtml(summaryMarkdown);
   const segments = transcript.segments
     .map(
       (s) =>
@@ -96,10 +133,10 @@ export function renderArtifact(summaryMarkdown: string, transcript: Transcript):
 </head>
 <body>
 <h1>${escapeHtml(transcript.title)}</h1>
-<p class="meta">${date.toISOString().slice(0, 10)} · ${escapeHtml(transcript.platform)} · ${transcript.segments.length} segments</p>
-${markdownToHtml(summaryMarkdown)}
+<p class="meta">${date.toISOString().slice(0, 10)} · ${escapeHtml(transcript.platform)} · ${transcript.segments.length} segments · ${provenance.clause}</p>
+${transcript.provenance === "audio-unattributed" ? noteUnverifiedOwners(summary) : summary}
 <details>
-<summary>Full transcript</summary>
+<summary>${provenance.sectionLabel}</summary>
 ${segments}
 </details>
 </body>

@@ -176,6 +176,53 @@ describe("fusion: attributing Utterances to the Speaker Track", () => {
   });
 });
 
+describe("fusion: recording provenance on the Transcript", () => {
+  it("records a fused Transcript when the Speaker Track named an Utterance", () => {
+    const fused = fuseTranscript(
+      meeting([seg("Alice", "caption words", START)]),
+      [u("audio words", 0, 2_000)],
+      track(["Alice", 0, 2_000]),
+    );
+    expect(fused.provenance).toBe("fused");
+  });
+
+  it("still records a fused Transcript when only some Utterances found a name", () => {
+    const fused = fuseTranscript(
+      meeting(),
+      [u("before the captions", 0, 2_000), u("in the captions", 10_000, 12_000)],
+      track(["Alice", 9_000, 15_000]),
+    );
+    expect(speakers(fused)).toEqual([UNKNOWN_SPEAKER, "Alice"]);
+    expect(fused.provenance).toBe("fused");
+  });
+
+  it("records audio without attribution when captions were off", () => {
+    // The words are trustworthy and the owners are not, which is a different
+    // claim from either of the other two levels.
+    const fused = fuseTranscript(meeting(), [u("audio words", 0, 2_000)], []);
+    expect(fused.provenance).toBe("audio-unattributed");
+  });
+
+  it("records audio without attribution when a Speaker Track overlapped nothing", () => {
+    // A track that names no Utterance is worth exactly as much as no track, and
+    // the Transcript must not claim otherwise.
+    const fused = fuseTranscript(
+      meeting(),
+      [u("audio words", 0, 2_000, "Speaker 1")],
+      track(["Alice", 60_000, 70_000]),
+    );
+    expect(speakers(fused)).toEqual(["Speaker 1"]);
+    expect(fused.provenance).toBe("audio-unattributed");
+  });
+
+  it("leaves the caption-only provenance alone when no Utterances arrived", () => {
+    // Transcription failed or the user skipped the wait: the Meeting falls back
+    // to caption words, and fusion must not upgrade that claim.
+    const base = { ...meeting([seg("Alice", "caption words", START)]), provenance: "captions-only" as const };
+    expect(fuseTranscript(base, []).provenance).toBe("captions-only");
+  });
+});
+
 describe("fusion: the Speaker Track derived from Caption Segments", () => {
   it("runs each caption line's turn from its own capture up to the next line", () => {
     const derived = speakerTrackFrom(

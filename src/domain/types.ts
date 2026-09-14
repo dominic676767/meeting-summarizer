@@ -33,12 +33,32 @@ export interface TranscriptSegment {
   attribution?: SpeakerAttribution;
 }
 
+/**
+ * What a Transcript was made of, in the three genuinely different levels of
+ * reliability v2 produces:
+ *
+ * - `fused` — audio words, names from the Speaker Track. The intended path.
+ * - `audio-unattributed` — audio words, but no Speaker Track name reached any
+ *   Utterance (captions were off, or none overlapped), so owners are anonymous.
+ * - `captions-only` — no Audio Recording at all, so the words are the platform's
+ *   caption text with its misreadings and its dropped lines: a Degraded Capture.
+ */
+export type TranscriptProvenance = "fused" | "audio-unattributed" | "captions-only";
+
 /** The ordered, speaker-attributed record of one Meeting. */
 export interface Transcript {
   platform: string;
   title: string;
   startedAt: number;
   endedAt?: number;
+  /**
+   * Recorded when the Transcript is built — by fusion, or by the caption
+   * fallback — never re-derived at render time, because only the builder knows
+   * whether any name actually landed. Absent on a Transcript held from before
+   * provenance existed, which reads as `captions-only`: the absence of a claim
+   * must never be read as a claim of recorded audio.
+   */
+  provenance?: TranscriptProvenance;
   segments: TranscriptSegment[];
 }
 

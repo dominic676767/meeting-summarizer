@@ -171,12 +171,18 @@ export async function dropSession(tabId: number): Promise<void> {
   await persistSessions();
 }
 
+/**
+ * The caption-only Transcript: the Meeting's Caption Segments as words, which is
+ * what the pipeline gets when no Audio Recording exists. It says so on itself —
+ * fusion overwrites the provenance if audio words arrive.
+ */
 export function sessionToTranscript(s: MeetingSession): Transcript {
   return {
     platform: s.platform,
     title: s.title ?? s.platform,
     startedAt: s.startedAt,
     endedAt: Date.now(),
+    provenance: "captions-only",
     segments: s.accumulator.toSegments(),
   };
 }

@@ -28,7 +28,7 @@ describe("summarization pipeline", () => {
     expect(html).toContain("<p>Beta ships Friday.</p>");
     expect(html).toContain("<li>Ship beta <strong>Friday</strong></li>");
     expect(html).toContain("<details>");
-    expect(html).toContain("Full transcript");
+    expect(html).toContain("Full captions"); // caption words, so labelled as such
     expect(html).toContain("Open question: do we support Firefox ESR?");
     expect(html).not.toMatch(/src=|href=/); // no external assets
   });
@@ -113,5 +113,80 @@ describe("summarization pipeline", () => {
     await expect(
       summarizeTranscript(transcript({ segments: [] }), settings, fakeClient()),
     ).rejects.toThrow(PipelineError);
+  });
+});
+
+describe("Summary Artifact provenance", () => {
+  const START = Date.UTC(2026, 8, 13, 10, 0, 0);
+  const AUDIO_CLAUSE = "from recorded audio";
+  const CAPTIONS_CLAUSE = "from live captions only — no audio was recorded";
+
+  const captionBase = () =>
+    transcript({
+      startedAt: START,
+      provenance: "captions-only",
+      segments: [seg("Alice", "ill own the release check list", START + 10_000)],
+    });
+
+  /** Summary with an Action items heading, as the structured shape produces. */
+  const withActionItems = () =>
+    fakeClient({ reply: () => "## TL;DR\nBeta ships Friday.\n\n## Action items\n- Bob: release" });
+
+  async function render(t: Parameters<typeof summarizeTranscript>[0]): Promise<string> {
+    const { html } = await summarizeTranscript(t, settings, withActionItems());
+    return html;
+  }
+
+  it("says the words came from audio and the names from captions", async () => {
+    const fused = fuseTranscript(captionBase(), [
+      { text: "I will own the release checklist.", startMs: 10_500, endMs: 14_000 },
+    ]);
+    const html = await render(fused);
+    expect(html).toContain("from recorded audio, speakers from captions");
+    expect(html).not.toContain(CAPTIONS_CLAUSE);
+    expect(html).toContain("Full transcript");
+    // Owners came from the Speaker Track, so nothing is caveated here.
+    expect(html).not.toContain("speaker labels are unverified");
+  });
+
+  it("says the speakers are not identified when captions never named anyone", async () => {
+    const fused = fuseTranscript(
+      captionBase(),
+      [{ text: "I will own the release checklist.", startMs: 10_500, endMs: 14_000 }],
+      [],
+    );
+    const html = await render(fused);
+    expect(html).toContain("from recorded audio · speakers not identified");
+    expect(html).not.toContain(CAPTIONS_CLAUSE);
+    // Forgetting captions costs the names, not the Meeting: the audio words are
+    // kept under the Unknown speaker marker and the Summary still lands.
+    expect(html).toContain(`<span class="speaker">${UNKNOWN_SPEAKER}:</span> I will own`);
+    expect(html).toContain("<h2>TL;DR</h2>");
+    // The words are audio's, so the section keeps its name.
+    expect(html).toContain("Full transcript");
+    // And the caveat is repeated where a wrong owner does damage.
+    expect(html).toMatch(/Action items.*speaker labels are unverified/s);
+  });
+
+  it("says plainly that a Degraded Capture came from captions alone", async () => {
+    const html = await render(captionBase());
+    expect(html).toContain(CAPTIONS_CLAUSE);
+    // Forgetting Capture Start costs accuracy, not the Meeting: the caption words
+    // carry the Summary rather than nothing being produced.
+    expect(html).toContain("<h2>TL;DR</h2>");
+    expect(html).toContain("ill own the release check list");
+    // The exact defect this must prevent: a caption-only summary reading as audio.
+    expect(html).not.toContain(AUDIO_CLAUSE);
+    expect(html).toContain("Full captions");
+    expect(html).not.toContain("Full transcript");
+  });
+
+  it("reads a Transcript that carries no claim as the weakest case", async () => {
+    // A Held Transcript from before provenance existed. Absence of a claim must
+    // never be rendered as a claim of recorded audio.
+    const html = await render(transcript({ provenance: undefined }));
+    expect(html).toContain(CAPTIONS_CLAUSE);
+    expect(html).not.toContain(AUDIO_CLAUSE);
+    expect(html).toContain("Full captions");
   });
 });

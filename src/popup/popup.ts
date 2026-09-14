@@ -174,8 +174,11 @@ function render(status: StatusReply): void {
       statusEl.className = "warning";
       statusEl.textContent = `Recording — storage problem, audio may be incomplete: ${status.captureWarning}`;
     } else if (status.segmentCount === 0) {
+      // Captions are no longer the transcript, so their absence no longer costs
+      // the meeting — it costs the names on the action items. Still a warning
+      // because it is still actionable, and only while there is time to act.
       statusEl.className = "warning";
-      statusEl.textContent = "Recording, but no captions arriving — turn captions on.";
+      statusEl.textContent = "Recording — no captions, so speakers won't be named. Turn captions on.";
     } else {
       statusEl.className = "recording";
       statusEl.textContent = `Recording — ${elapsed(status.recordingStartedAt ?? Date.now())}`;
