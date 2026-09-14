@@ -15,7 +15,7 @@ import { artifactFilename } from "../pipeline/filename";
 import { summarizeTranscript } from "../pipeline/pipeline";
 import { createProviderClient } from "../providers/factory";
 import { loadSettings } from "../settings";
-import { transcriptFromUtterances } from "../transcription/transcript";
+import { fuseTranscript } from "../transcription/fusion";
 import { writeArtifact } from "./artifact-writer";
 import { deriveCaptureState, isDegraded } from "./capture-state";
 import { getHeld, holdTranscript, listHeld, releaseHeld, updateHeldReason } from "./held";
@@ -194,9 +194,10 @@ export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | 
     const utterances = await transcribeRecording(tabId, s);
     s.transcription = null;
     // Words from the recording replace the caption words wholesale — that is
-    // the point of v2. Speakers are not named yet; fusion supplies them.
+    // the point of v2 — while the captions live on as the Speaker Track fusion
+    // takes the names from.
     s.audioWords = utterances.length > 0;
-    if (s.audioWords) transcript = transcriptFromUtterances(captionTranscript, utterances);
+    if (s.audioWords) transcript = fuseTranscript(captionTranscript, utterances);
   }
 
   if (transcript.segments.length === 0) {

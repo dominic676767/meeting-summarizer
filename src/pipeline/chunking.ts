@@ -1,16 +1,16 @@
-import type { CaptionSegment } from "../domain/types";
+import type { TranscriptSegment } from "../domain/types";
 
 /**
  * Splits a Transcript's segments into chunks whose serialized form each fits
  * within `chunkBudget` characters. A single over-budget segment is hard-split
  * so no content is ever dropped.
  */
-export function chunkSegments(segments: CaptionSegment[], chunkBudget: number): CaptionSegment[][] {
-  const chunks: CaptionSegment[][] = [];
-  let current: CaptionSegment[] = [];
+export function chunkSegments(segments: TranscriptSegment[], chunkBudget: number): TranscriptSegment[][] {
+  const chunks: TranscriptSegment[][] = [];
+  let current: TranscriptSegment[] = [];
   let currentLen = 0;
 
-  const push = (seg: CaptionSegment) => {
+  const push = (seg: TranscriptSegment) => {
     const len = seg.speaker.length + seg.text.length + 3; // "speaker: text\n"
     if (currentLen + len > chunkBudget && current.length > 0) {
       chunks.push(current);

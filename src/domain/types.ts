@@ -8,13 +8,38 @@ export interface CaptionSegment {
   capturedAt: number;
 }
 
-/** The ordered accumulation of Caption Segments for one Meeting. */
+/**
+ * How a Transcript segment's speaker name was arrived at. Absent on a segment
+ * means the name came with the caption line itself, which is the caption-only
+ * (Degraded Capture) case.
+ */
+export type SpeakerAttribution = "speaker-track" | "diarization" | "unknown";
+
+/**
+ * One entry of the Transcript the summarization pipeline consumes. A
+ * caption-only Transcript's segments are Caption Segments verbatim; a Fused
+ * Transcript's additionally carry the Utterance's absolute time range and how
+ * its speaker was arrived at, so a reader can locate and weigh any claim.
+ */
+export interface TranscriptSegment {
+  speaker: string;
+  text: string;
+  /** epoch ms: caption capture time, or the Meeting start plus `startMs` */
+  capturedAt: number;
+  /** ms from the Meeting start. Absent where the words came from captions,
+   * which carry a capture instant but no span of their own. */
+  startMs?: number;
+  endMs?: number;
+  attribution?: SpeakerAttribution;
+}
+
+/** The ordered, speaker-attributed record of one Meeting. */
 export interface Transcript {
   platform: string;
   title: string;
   startedAt: number;
   endedAt?: number;
-  segments: CaptionSegment[];
+  segments: TranscriptSegment[];
 }
 
 /**

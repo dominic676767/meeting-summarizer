@@ -13,8 +13,6 @@ import {
   type EngineSpan,
   type TranscriptionEngine,
 } from "../src/transcription/provider";
-import { transcriptFromUtterances, UNKNOWN_SPEAKER } from "../src/transcription/transcript";
-import { transcript } from "./helpers";
 
 const SAMPLE_RATE = 16_000;
 
@@ -193,43 +191,5 @@ describe("Transcription Provider", () => {
     });
     await expect(promise).rejects.toThrow(TranscriptionCancelled);
     expect(transcribeSpy).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("Utterances as a Transcript", () => {
-  it("replaces caption words with audio words, keeping the Meeting's metadata", async () => {
-    const engine = fakeEngine({
-      spansFor: () => [
-        { text: "We should ship the beta next Friday.", startSec: 0, endSec: 3 },
-        { text: "I will own the release checklist.", startSec: 3, endSec: 6 },
-      ],
-    });
-    const base = transcript();
-    const utterances = await provider(engine, 10).transcribe(recording());
-    const fromAudio = transcriptFromUtterances(base, utterances);
-
-    expect(fromAudio.title).toBe(base.title);
-    expect(fromAudio.startedAt).toBe(base.startedAt);
-    expect(fromAudio.segments.map((s) => s.text)).toEqual([
-      "We should ship the beta next Friday.",
-      "I will own the release checklist.",
-    ]);
-    // Base Whisper does not diarize, so no speaker is named and none is invented.
-    expect(fromAudio.segments.map((s) => s.speaker)).toEqual([
-      UNKNOWN_SPEAKER,
-      UNKNOWN_SPEAKER,
-    ]);
-    expect(fromAudio.segments.map((s) => s.capturedAt)).toEqual([
-      base.startedAt,
-      base.startedAt + 3000,
-    ]);
-  });
-
-  it("keeps an engine's own diarization label as the speaker", () => {
-    const base = transcript();
-    const fromAudio = transcriptFromUtterances(base, [
-      { text: "hello", startMs: 0, endMs: 1000, diarizationLabel: "Speaker 1" },
-    ]);
-    expect(fromAudio.segments[0]?.speaker).toBe("Speaker 1");
   });
 });

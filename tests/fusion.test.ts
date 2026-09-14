@@ -1,0 +1,241 @@
+// Fusion, the primary v2 seam: Utterances + Speaker Track → Fused Transcript.
+// Pure arithmetic on time ranges, so every case here runs with no browser, no
+// audio, and no model — which is the point of keeping fusion pure (ADR-0004).
+import { describe, expect, it } from "vitest";
+import type { Utterance } from "../src/domain/types";
+import {
+  fuseTranscript,
+  speakerTrackFrom,
+  UNKNOWN_SPEAKER,
+  type SpeakerTrackEntry,
+} from "../src/transcription/fusion";
+import { seg, transcript } from "./helpers";
+
+const START = Date.UTC(2026, 8, 13, 10, 0, 0);
+
+const meeting = (segments = [] as ReturnType<typeof seg>[]) =>
+  transcript({ startedAt: START, endedAt: START + 30 * 60_000, segments });
+
+function u(text: string, startMs: number, endMs: number, diarizationLabel?: string): Utterance {
+  return { text, startMs, endMs, ...(diarizationLabel ? { diarizationLabel } : {}) };
+}
+
+/** Speaker Track as [speaker, startMs, endMs] triples. */
+function track(...turns: [string, number, number][]): SpeakerTrackEntry[] {
+  return turns.map(([speaker, startMs, endMs]) => ({ speaker, startMs, endMs }));
+}
+
+const speakers = (t: { segments: { speaker: string }[] }) => t.segments.map((s) => s.speaker);
+
+describe("fusion: attributing Utterances to the Speaker Track", () => {
+  it("names an Utterance whose range matches a turn exactly", () => {
+    const fused = fuseTranscript(
+      meeting(),
+      [u("We should ship the beta next Friday.", 0, 5_000)],
+      track(["Alice", 0, 5_000]),
+    );
+    expect(speakers(fused)).toEqual(["Alice"]);
+    expect(fused.segments[0]?.attribution).toBe("speaker-track");
+  });
+
+  it("names an Utterance that only partly overlaps a turn", () => {
+    const fused = fuseTranscript(
+      meeting(),
+      [u("Agreed.", 4_000, 9_000)],
+      track(["Alice", 0, 5_000], ["Bob", 5_000, 20_000]),
+    );
+    // 1s inside Alice's turn against 4s inside Bob's.
+    expect(speakers(fused)).toEqual(["Bob"]);
+  });
+
+  it("gives a contested span to the speaker with the most overlap", () => {
+    const fused = fuseTranscript(
+      meeting(),
+      [u("crosstalk", 0, 10_000)],
+      track(["Alice", 0, 3_000], ["Bob", 3_000, 10_000]),
+    );
+    expect(speakers(fused)).toEqual(["Bob"]);
+  });
+
+  it("sums a speaker's turns, so a run of short caption lines beats one long turn", () => {
+    const fused = fuseTranscript(
+      meeting(),
+      [u("a long answer", 0, 2_000)],
+      // Alice holds 1200ms across two lines; Bob holds 800ms in one.
+      track(["Alice", 0, 600], ["Alice", 600, 1_200], ["Bob", 1_200, 2_000]),
+    );
+    expect(speakers(fused)).toEqual(["Alice"]);
+  });
+
+  it("resolves an exact tie the same way whatever order the turns arrive in", () => {
+    // 600ms of Alice against 600ms of Bob: the earlier holder of the floor wins,
+    // and must keep winning when the same turns are listed the other way round.
+    const utterance = [u("simultaneous", 400, 1_100)];
+    const forward = fuseTranscript(meeting(), utterance, track(["Alice", 0, 1_000], ["Bob", 500, 1_500]));
+    const reversed = fuseTranscript(meeting(), utterance, track(["Bob", 500, 1_500], ["Alice", 0, 1_000]));
+    expect(speakers(forward)).toEqual(["Alice"]);
+    expect(speakers(reversed)).toEqual(["Alice"]);
+  });
+
+  it("marks an Utterance no turn overlaps as unknown and still keeps it", () => {
+    const fused = fuseTranscript(
+      meeting(),
+      [u("said before the captions started", 0, 4_000), u("in the captions", 10_000, 12_000)],
+      track(["Alice", 9_000, 15_000]),
+    );
+    expect(speakers(fused)).toEqual([UNKNOWN_SPEAKER, "Alice"]);
+    expect(fused.segments[0]?.attribution).toBe("unknown");
+    expect(fused.segments[0]?.text).toBe("said before the captions started");
+  });
+
+  it("falls back to the engine's own diarization label before Unknown speaker", () => {
+    const fused = fuseTranscript(
+      meeting(),
+      [u("anonymous but labelled", 0, 4_000, "Speaker 1")],
+      track(["Alice", 60_000, 70_000]),
+    );
+    expect(speakers(fused)).toEqual(["Speaker 1"]);
+    expect(fused.segments[0]?.attribution).toBe("diarization");
+  });
+
+  it("prefers a real name over the engine's diarization label", () => {
+    const fused = fuseTranscript(
+      meeting(),
+      [u("labelled and attributable", 0, 4_000, "Speaker 1")],
+      track(["Alice", 0, 4_000]),
+    );
+    expect(speakers(fused)).toEqual(["Alice"]);
+  });
+
+  it("preserves Utterance order and content, inventing and merging nothing", () => {
+    const utterances = [
+      u("third thing", 8_000, 9_000),
+      u("first thing", 1_000, 2_000),
+      u("first thing", 2_000, 3_000),
+    ];
+    const fused = fuseTranscript(meeting(), utterances, track(["Alice", 0, 10_000]));
+    expect(fused.segments.map((s) => s.text)).toEqual([
+      "third thing",
+      "first thing",
+      "first thing",
+    ]);
+  });
+
+  it("keeps the Meeting's own metadata", () => {
+    const base = meeting([seg("Alice", "caption words", START)]);
+    const fused = fuseTranscript(base, [u("audio words", 0, 1_000)], track(["Alice", 0, 1_000]));
+    expect(fused.platform).toBe(base.platform);
+    expect(fused.title).toBe(base.title);
+    expect(fused.startedAt).toBe(base.startedAt);
+    expect(fused.endedAt).toBe(base.endedAt);
+    // Caption words are replaced wholesale — that is what recording is for.
+    expect(fused.segments.map((s) => s.text)).toEqual(["audio words"]);
+  });
+
+  it("carries each segment's absolute time range for the reader to verify against", () => {
+    const fused = fuseTranscript(
+      meeting(),
+      [u("timed", 63_500, 66_250)],
+      track(["Bob", 60_000, 70_000]),
+    );
+    expect(fused.segments[0]).toEqual({
+      speaker: "Bob",
+      text: "timed",
+      startMs: 63_500,
+      endMs: 66_250,
+      capturedAt: START + 63_500,
+      attribution: "speaker-track",
+    });
+  });
+
+  it("attributes an Utterance from a later chunk by its absolute timing", () => {
+    // The same words, one chunk apart. An uncorrected chunk offset would rewind
+    // 62s to 2s and hand every word after the first boundary to Alice.
+    const turns = track(["Alice", 0, 60_000], ["Bob", 60_000, 120_000]);
+    const early = fuseTranscript(meeting(), [u("who said this", 2_000, 3_000)], turns);
+    const late = fuseTranscript(meeting(), [u("who said this", 62_000, 63_000)], turns);
+    expect(speakers(early)).toEqual(["Alice"]);
+    expect(speakers(late)).toEqual(["Bob"]);
+  });
+
+  it("attributes a zero-length Utterance sitting inside a turn", () => {
+    const fused = fuseTranscript(meeting(), [u("hm", 3_000, 3_000)], track(["Alice", 0, 5_000]));
+    expect(speakers(fused)).toEqual(["Alice"]);
+  });
+
+  it("keeps every audio word when there is no Speaker Track at all", () => {
+    // Captions were never on: the Meeting costs speaker names, not its words.
+    const fused = fuseTranscript(meeting(), [u("one", 0, 1_000), u("two", 1_000, 2_000)], []);
+    expect(fused.segments.map((s) => s.text)).toEqual(["one", "two"]);
+    expect(speakers(fused)).toEqual([UNKNOWN_SPEAKER, UNKNOWN_SPEAKER]);
+  });
+
+  it("produces no segments from no Utterances, leaving the caption fallback to the caller", () => {
+    const base = meeting([seg("Alice", "caption words", START)]);
+    expect(fuseTranscript(base, []).segments).toEqual([]);
+  });
+});
+
+describe("fusion: the Speaker Track derived from Caption Segments", () => {
+  it("runs each caption line's turn from its own capture up to the next line", () => {
+    const derived = speakerTrackFrom(
+      meeting([
+        seg("Alice", "first", START + 2_000),
+        seg("Bob", "second", START + 9_000),
+        seg("Alice", "third", START + 12_000),
+      ]),
+    );
+    expect(derived.slice(0, 2)).toEqual([
+      { speaker: "Alice", startMs: 2_000, endMs: 9_000 },
+      { speaker: "Bob", startMs: 9_000, endMs: 12_000 },
+    ]);
+  });
+
+  it("gives lines scraped in the same tick a turn that reaches the next later line", () => {
+    // A batch of captions shares one timestamp; a turn ending at its immediate
+    // neighbour would be zero-length and could name nobody.
+    const derived = speakerTrackFrom(
+      meeting([
+        seg("Alice", "fast", START + 4_000),
+        seg("Bob", "talker", START + 4_000),
+        seg("Carol", "later", START + 10_000),
+      ]),
+    );
+    expect(derived.slice(0, 2)).toEqual([
+      { speaker: "Alice", startMs: 4_000, endMs: 10_000 },
+      { speaker: "Bob", startMs: 4_000, endMs: 10_000 },
+    ]);
+    // Contested identically, so the tie resolves to the first line, not to luck.
+    const fused = fuseTranscript(meeting(), [u("fast talker", 5_000, 6_000)], derived);
+    expect(speakers(fused)).toEqual(["Alice"]);
+  });
+
+  it("treats a caption captured before the Meeting start as being at its start", () => {
+    const derived = speakerTrackFrom(meeting([seg("Alice", "early", START - 5_000)]));
+    expect(derived[0]?.startMs).toBe(0);
+  });
+
+  it("does not stretch the last caption line over the rest of the Meeting", () => {
+    // Captions stopped at 4s; who spoke at 20 minutes is genuinely unknown, and
+    // Unknown speaker is honest where Alice's name would be invented.
+    const base = meeting([seg("Alice", "last thing captioned", START + 4_000)]);
+    const fused = fuseTranscript(base, [u("much later", 20 * 60_000, 20 * 60_000 + 2_000)]);
+    expect(speakers(fused)).toEqual([UNKNOWN_SPEAKER]);
+  });
+
+  it("fuses against the Meeting's own captions by default", () => {
+    const base = meeting([
+      seg("Alice", "we shud chip the beater next friday", START + 1_000),
+      seg("Bob", "agreed ill own the release check list", START + 6_000),
+    ]);
+    const fused = fuseTranscript(base, [
+      u("We should ship the beta next Friday.", 1_500, 5_000),
+      u("Agreed. I will own the release checklist.", 6_500, 9_000),
+    ]);
+    expect(speakers(fused)).toEqual(["Alice", "Bob"]);
+    expect(fused.segments.map((s) => s.text)).toEqual([
+      "We should ship the beta next Friday.",
+      "Agreed. I will own the release checklist.",
+    ]);
+  });
+});
