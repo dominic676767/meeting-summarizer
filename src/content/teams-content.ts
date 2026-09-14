@@ -27,7 +27,14 @@ const LEAVE_GRACE_MS = 10_000;
  * can no longer talk to. `runtime.id` is what disappears.
  */
 function orphaned(): boolean {
-  return !ext.runtime?.id;
+  try {
+    // Reading `runtime.id` THROWS on an invalidated context rather than
+    // returning undefined, so the check has to survive its own probe — an
+    // unguarded `!ext.runtime?.id` is itself a source of the error it detects.
+    return !ext.runtime?.id;
+  } catch {
+    return true;
+  }
 }
 
 /**
@@ -54,7 +61,16 @@ function sendEnded(title: string | null): void {
 }
 
 function send(msg: ContentMessage): Promise<void> {
-  return ext.runtime.sendMessage(msg).then(
+  // sendMessage can throw SYNCHRONOUSLY once the context is invalidated, which
+  // would escape every `.catch()` the callers attach. Rejecting instead keeps
+  // the failure on the promise where they handle it.
+  let call: Promise<unknown>;
+  try {
+    call = ext.runtime.sendMessage(msg);
+  } catch {
+    return Promise.reject(new Error("sendMessage failed"));
+  }
+  return call.then(
     () => undefined,
     () => {
       throw new Error("sendMessage failed");
