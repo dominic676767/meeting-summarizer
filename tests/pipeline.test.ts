@@ -250,3 +250,13 @@ describe("Meta line vocabulary", () => {
     expect(html).not.toMatch(/\d+ segments/);
   });
 });
+
+describe("artifact URL scheme", () => {
+  it("renders HTML that survives a data: URL round trip", () => {
+    // The service worker writes the artifact as a data URL because MV3 service
+    // workers have no URL.createObjectURL. Non-ASCII must survive intact.
+    const html = '<p>Beschlüsse: Beta am Freitag — "ja"</p>';
+    const url = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+    expect(decodeURIComponent(url.slice(url.indexOf(",") + 1))).toBe(html);
+  });
+});

@@ -3,19 +3,18 @@
 // Downloads/meeting-summaries/; uniquify handles same-day collisions.
 import { ext } from "../platform";
 export async function writeArtifact(html: string, filename: string): Promise<void> {
-  const blob = new Blob([html], { type: "text/html" });
-  const url = URL.createObjectURL(blob);
-  try {
-    const id = await ext.downloads.download({
-      url,
-      filename: `meeting-summaries/${filename}`,
-      conflictAction: "uniquify",
-      saveAs: false,
-    });
-    await waitForCompletion(id);
-  } finally {
-    URL.revokeObjectURL(url);
-  }
+  // A data URL, not a blob URL: `URL.createObjectURL` does not exist in an MV3
+  // service worker, and calling it there threw away a finished summary at the
+  // last step. encodeURIComponent carries the UTF-8 the charset declares, so a
+  // non-English summary survives the trip.
+  const url = `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+  const id = await ext.downloads.download({
+    url,
+    filename: `meeting-summaries/${filename}`,
+    conflictAction: "uniquify",
+    saveAs: false,
+  });
+  await waitForCompletion(id);
 }
 
 /** Resolves only when the downloads API confirms the write completed. */
