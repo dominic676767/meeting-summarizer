@@ -128,7 +128,11 @@ function metaLine(transcript: Transcript, provenanceClause: string, nameEngine: 
   if (transcript.endedAt !== undefined) {
     parts.push(formatOffset(transcript.endedAt - transcript.startedAt));
   }
-  parts.push(`${transcript.segments.length} segments`, provenanceClause);
+  // No segment count: a Caption Segment is this project's vocabulary, not the
+  // reader's, and the artifact is the one thing forwarded to people who never
+  // used the extension. Duration answers what the count stood in for, in a unit
+  // everyone reads, and the transcript itself is one click away.
+  parts.push(provenanceClause);
   if (nameEngine && transcript.engine) {
     parts.push(`${escapeHtml(transcript.engine.id)} ${escapeHtml(transcript.engine.model)}`);
   }

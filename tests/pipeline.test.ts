@@ -242,3 +242,11 @@ describe("Meta line: duration and the opt-in engine clause", () => {
     expect(html).not.toContain("undefined");
   });
 });
+
+describe("Meta line vocabulary", () => {
+  it("does not put our internal 'segments' vocabulary in a forwarded artifact", async () => {
+    const { html } = await summarizeTranscript(transcript(), settings, fakeClient());
+    // The reader never used the extension; duration carries the coverage signal.
+    expect(html).not.toMatch(/\d+ segments/);
+  });
+});

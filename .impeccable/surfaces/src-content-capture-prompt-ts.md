@@ -42,7 +42,18 @@ One vocabulary, two renderings. The popup reports every state; the prompt exists
 
 `degraded` is a modifier, not a state: when a Meeting produced no Audio Recording, the popup appends "Captions only — no audio was recorded." at 12px Muted under the `done` line. It is not an error and never uses Alert Red.
 
-`captureWarning` is the second modifier, and it outranks the state line. A non-fatal capture fault — storage quota exhausted, a recorder error — means the recording is degrading *while the user still has time to act*, so it renders above the status line in weight-600 Alert Red type (a warning, per the Text-or-Dot Rule), with the recording dot still showing beneath if capture is somehow continuing. Copy names the problem and the recovery in the product's language: "Storage is full — recording stopped. The captions are still being captured." A capture warning that only appears after the meeting is a warning that arrived too late to matter, so it must surface the moment the offscreen recorder reports it, not at Meeting End.
+`captureWarning` is the second modifier, and it outranks the state line. A non-fatal capture fault means the recording is degrading *while the user still has time to act*, so it takes weight-600 Alert Red type (a warning, per the Text-or-Dot Rule). It must surface the moment the offscreen recorder reports it, not at Meeting End — a warning that arrives after the meeting is one that arrived too late to matter.
+
+**The copy must describe what the code actually does.** An earlier draft of this brief proposed "Storage is full — recording stopped. The captions are still being captured." That was wrong twice over, and the implementation was right to reject it: a failed chunk write only sets `lastError` and the recorder *keeps running*, so "recording stopped" is false; and the same field is also set by a recorder fault and a capture that never started, so "Storage is full" is wrong for two of its three causes. The shipped copy is true for all three:
+
+| Cause | Copy | Raw reason |
+|---|---|---|
+| Write failed mid-recording | "Recording — some audio could not be saved. Captions are still being captured, so a summary will still land." | `title` attribute |
+| Capture failed to start | "Meeting detected — recording could not start." | `title` attribute |
+
+The raw internal reason belongs in a `title` attribute, never the visible line, and it is cleared on every render so a stale tooltip cannot keep explaining a problem that has passed. `detected` therefore has two renderings — with and without a failure — and an implementation that drops the warning in the `detected` branch strands a user who clicked Start and got nothing.
+
+The general rule this leaves behind: **copy in a brief is a claim about behavior.** If the code does not do what the sentence says, the sentence is the defect, not the code.
 
 **Red carries two meanings here, and that is deliberate.** Alert Red is the documented warning color, and `detected` is genuinely a warning — the meeting is being lost. During `recording` the same red reads as the universal recording indicator. Both are "something is happening you must know about", so the color holds; the dot's presence distinguishes live capture from a warning. This is a durable addition to the Meaning-Only Color Rule and needs the user's approval before it enters DESIGN.md.
 

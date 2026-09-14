@@ -71,6 +71,10 @@ Both questions this brief previously left open are now decided. Confirmed indepe
 
 `2026-09-14 · teams · 47 min · from recorded audio, speakers from captions · Whisper base.en`
 
+**Drop the segment count from this line.** It currently sits between duration and provenance, predating both briefs. It should go, for the reason the popup critique already identified: "segments" is internal vocabulary — a Caption Segment is our term, not the reader's — and this is the one artifact that gets forwarded to people who have never used the extension. Duration now answers the question the count was standing in for ("how much of the meeting is this?"), and it answers it in a unit everyone reads. The transcript is one click away for anyone who wants to weigh coverage themselves.
+
+Keeping `endedAt`-absent behavior as implemented: when the Meeting close was never observed, claim no duration rather than inventing one from render time. That is the same truthfulness discipline as the provenance clause and should not be traded for a tidier line.
+
 ### The opt-in setting
 
 Lives in Settings under the Summary section, not in the artifact. It exists only to control artifact content, which is why it is specced here.
