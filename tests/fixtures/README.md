@@ -1,3 +1,20 @@
+# Fixtures
+
+## `known-phrase.wav` — audio for the opt-in Whisper run
+
+16 kHz mono 16-bit PCM, about two seconds, saying *"We should ship the beta next
+Friday."* It exists so one test can assert that real Whisper produces real words
+(`WHISPER_INTEGRATION=1 npm test`); every other transcription test drives a fake
+engine. Synthesised rather than recorded, so it carries nobody's voice:
+
+```sh
+say -v Samantha -o /tmp/phrase.aiff "We should ship the beta next Friday."
+afconvert -f WAVE -d LEI16@16000 -c 1 /tmp/phrase.aiff tests/fixtures/known-phrase.wav
+```
+
+If you replace it, update `KNOWN_PHRASE` in `tests/transcription-whisper.test.ts`
+to a phrase the new audio actually contains.
+
 # Teams DOM fixtures
 
 These fixtures are trimmed captures of the Teams **web client (v2)** DOM. They

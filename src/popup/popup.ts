@@ -1,15 +1,24 @@
 // Popup: live capture status, Summarize now, Held Transcript retry.
 import { ext } from "../platform";
-import type { HeldListReply, PopupMessage, StatusReply } from "../messages";
+import type {
+  HeldListReply,
+  PopupMessage,
+  StatusReply,
+  TranscriptionProgress,
+} from "../messages";
 import type { Settings } from "../domain/types";
 import { loadSettings } from "../settings";
 
+const regionEl = document.getElementById("status-region")!;
 const statusEl = document.getElementById("status")!;
+const detailEl = document.getElementById("detail")!;
+const barEl = document.getElementById("model-progress") as HTMLProgressElement;
 const titleEl = document.getElementById("title")!;
 const degradedEl = document.getElementById("degraded")!;
 const startBtn = document.getElementById("start") as HTMLButtonElement;
 const stopBtn = document.getElementById("stop") as HTMLButtonElement;
 const summarizeBtn = document.getElementById("summarize") as HTMLButtonElement;
+const skipBtn = document.getElementById("skip-transcription") as HTMLButtonElement;
 const heldSection = document.getElementById("held")!;
 const heldList = document.getElementById("held-list")!;
 const hintEl = document.getElementById("hint")!;
@@ -86,14 +95,60 @@ async function refreshHint(): Promise<void> {
   hintEl.hidden = isConfigured(await loadSettings());
 }
 
-/** Captured duration, mm:ss (or h:mm:ss past an hour), for the recording line. */
-function elapsed(since: number): string {
-  const secs = Math.max(0, Math.floor((Date.now() - since) / 1000));
+/** A duration as mm:ss, or h:mm:ss past an hour. */
+function clock(ms: number): string {
+  const secs = Math.max(0, Math.floor(ms / 1000));
   const pad = (n: number) => String(n).padStart(2, "0");
   const h = Math.floor(secs / 3600);
   const m = Math.floor((secs % 3600) / 60);
   const s = secs % 60;
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
+
+/** Captured duration, for the recording line. */
+function elapsed(since: number): string {
+  return clock(Date.now() - since);
+}
+
+function megabytes(bytes: number): string {
+  return (bytes / 1_000_000).toFixed(0);
+}
+
+/**
+ * The three waits between Meeting End and a finished summary have completely
+ * different time profiles, so the phase is named and its own measure shown:
+ * merging them into one "Working…" is what makes a slow local model read as a
+ * hang. No percentage is ever shown that the engine did not report.
+ */
+function renderTranscribing(p: TranscriptionProgress | null): void {
+  statusEl.className = "capturing";
+  if (p?.phase === "model-download") {
+    statusEl.textContent = "Downloading the transcription model…";
+    // "one-time setup" is load-bearing: without it the user prices every future
+    // meeting at this wait and turns the feature off.
+    detailEl.textContent =
+      p.totalBytes === null
+        ? `${megabytes(p.loadedBytes ?? 0)} MB downloaded · one-time setup`
+        : `${megabytes(p.loadedBytes ?? 0)} MB of ${megabytes(p.totalBytes)} MB · one-time setup`;
+    detailEl.hidden = false;
+    // A determinate bar only where the bytes are real.
+    barEl.hidden = p.totalBytes === null || p.totalBytes === 0;
+    if (!barEl.hidden) barEl.value = ((p.loadedBytes ?? 0) / (p.totalBytes ?? 1)) * 100;
+    return;
+  }
+  statusEl.textContent = "Transcribing audio…";
+  barEl.hidden = true;
+  if (p && p.processedMs !== null && p.totalMs !== null && p.totalMs > 0) {
+    detailEl.textContent = `${clock(p.processedMs)} of ${clock(p.totalMs)} processed`;
+    detailEl.hidden = false;
+  } else if (p) {
+    // The engine reported no measure — elapsed time is honest where a
+    // percentage would be invented.
+    detailEl.textContent = `${elapsed(p.startedAt)} elapsed · long meetings take a while`;
+    detailEl.hidden = false;
+  } else {
+    detailEl.hidden = true;
+  }
 }
 
 function render(status: StatusReply): void {
@@ -103,9 +158,18 @@ function render(status: StatusReply): void {
   startBtn.hidden = status.state !== "detected";
   stopBtn.hidden = status.state !== "recording";
   summarizeBtn.hidden = status.state !== "recording";
+  // Skipping degrades rather than loses: the caption-only summary still lands.
+  // Never labelled "Cancel", which would imply losing the meeting.
+  skipBtn.hidden = status.state !== "transcribing";
   degradedEl.hidden = !(status.state === "done" && status.degraded);
+  if (status.state !== "transcribing") {
+    detailEl.hidden = true;
+    barEl.hidden = true;
+  }
 
-  if (status.state === "recording") {
+  if (status.state === "transcribing") {
+    renderTranscribing(status.transcription);
+  } else if (status.state === "recording") {
     if (status.captureWarning) {
       statusEl.className = "warning";
       statusEl.textContent = `Recording — storage problem, audio may be incomplete: ${status.captureWarning}`;
@@ -133,8 +197,9 @@ function render(status: StatusReply): void {
     statusEl.textContent = "Not in a meeting.";
   }
   // Announce the state to assistive tech: warnings interrupt, everything else is polite.
-  statusEl.setAttribute("aria-live", statusEl.className === "warning" ? "assertive" : "polite");
-  statusEl.setAttribute("aria-busy", status.state === "summarizing" ? "true" : "false");
+  regionEl.setAttribute("aria-live", statusEl.className === "warning" ? "assertive" : "polite");
+  const waiting = status.state === "transcribing" || status.state === "summarizing";
+  regionEl.setAttribute("aria-busy", waiting ? "true" : "false");
 }
 
 async function refresh(): Promise<void> {
@@ -152,6 +217,10 @@ stopBtn.addEventListener("click", async () => {
 
 summarizeBtn.addEventListener("click", async () => {
   render(await send<StatusReply>({ type: "summarize-now" }));
+});
+
+skipBtn.addEventListener("click", async () => {
+  render(await send<StatusReply>({ type: "skip-transcription" }));
 });
 
 settingsBtn.addEventListener("click", () => void ext.runtime.openOptionsPage());

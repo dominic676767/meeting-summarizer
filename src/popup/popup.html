@@ -11,6 +11,8 @@
       .warning { color: #d73a4a; font-weight: 600; }
       .recording { color: #24292e; }
       .idle { color: #555; }
+      #detail { color: #555; font-size: 12px; margin: -6px 0 10px; }
+      #model-progress { display: block; width: 100%; height: 6px; margin: 0 0 10px; }
       #title { color: #555; font-size: 12px; margin-bottom: 10px; }
       #degraded { color: #555; font-size: 12px; margin: -4px 0 10px; }
       .actions { display: flex; gap: 8px; }
@@ -27,13 +29,23 @@
   <body>
     <main>
       <h1>Meeting Summarizer</h1>
-      <div id="status" class="idle" role="status" aria-live="polite">Not in a meeting.</div>
+      <!-- One live region covers the phase name and its measure: a screen
+           reader user must hear which of the long phases is running, not just
+           that something is busy. -->
+      <div id="status-region" role="status" aria-live="polite">
+        <div id="status" class="idle">Not in a meeting.</div>
+        <div id="detail" hidden></div>
+        <progress id="model-progress" max="100" value="0" hidden></progress>
+      </div>
       <div id="title"></div>
-      <div id="degraded" hidden>Captions only — no audio was recorded.</div>
+      <!-- True whether no audio was recorded or its words never arrived: either
+           way the summary is caption words, and only that claim is safe here. -->
+      <div id="degraded" hidden>Captions only — the summary was not built from recorded audio.</div>
       <div class="actions">
         <button id="start" hidden>Start recording</button>
         <button id="stop" hidden>Stop</button>
         <button id="summarize" hidden>Summarize now</button>
+        <button id="skip-transcription" hidden>Skip transcription, use captions</button>
       </div>
       <div id="held" hidden>
         <h2>Held transcripts</h2>

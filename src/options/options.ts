@@ -1,6 +1,11 @@
 // Options page: Provider selection + keys (browser.storage.local, ADR-0001),
 // Summary shape toggle, and editable Prompt Templates.
-import type { ProviderId, SummaryShape } from "../domain/types";
+import type {
+  ProviderId,
+  SummaryShape,
+  TranscriptionProviderId,
+  WhisperModelSize,
+} from "../domain/types";
 import { DEFAULT_TEMPLATES } from "../pipeline/templates";
 import { loadSettings, saveSettings } from "../settings";
 
@@ -29,6 +34,8 @@ async function init(): Promise<void> {
   $<HTMLInputElement>("bedrock-key").value = s.bedrock.apiKey;
   $<HTMLInputElement>("bedrock-region").value = s.bedrock.region;
   $<HTMLInputElement>("bedrock-model").value = s.bedrock.model;
+  $<HTMLSelectElement>("transcription-provider").value = s.transcription.provider;
+  $<HTMLSelectElement>("whisper-model").value = s.transcription.localWhisper.model;
   $<HTMLSelectElement>("shape").value = s.shape;
   $<HTMLTextAreaElement>("template-structured").value = s.templates.structured;
   $<HTMLTextAreaElement>("template-narrative").value = s.templates.narrative;
@@ -60,6 +67,12 @@ $("save").addEventListener("click", async () => {
     apiKey: $<HTMLInputElement>("bedrock-key").value.trim(),
     region: $<HTMLInputElement>("bedrock-region").value.trim(),
     model: $<HTMLInputElement>("bedrock-model").value.trim(),
+  };
+  s.transcription = {
+    provider: $<HTMLSelectElement>("transcription-provider").value as TranscriptionProviderId,
+    localWhisper: {
+      model: $<HTMLSelectElement>("whisper-model").value as WhisperModelSize,
+    },
   };
   s.shape = $<HTMLSelectElement>("shape").value as SummaryShape;
   s.templates = {

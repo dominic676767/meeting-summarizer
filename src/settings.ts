@@ -12,6 +12,9 @@ export const DEFAULT_SETTINGS: Settings = {
   openai: { apiKey: "", model: "gpt-4o" },
   ollama: { baseUrl: "http://localhost:11434", model: "llama3.1" },
   bedrock: { apiKey: "", region: "us-east-1", model: "anthropic.claude-sonnet-4-20250514-v1:0" },
+  // Local WASM Whisper is the working default: no API key, and the audio never
+  // leaves the machine (ADR-0004).
+  transcription: { provider: "local-whisper", localWhisper: { model: "base" } },
 };
 
 export async function loadSettings(): Promise<Settings> {
@@ -25,6 +28,16 @@ export async function loadSettings(): Promise<Settings> {
     openai: { ...DEFAULT_SETTINGS.openai, ...s.openai },
     ollama: { ...DEFAULT_SETTINGS.ollama, ...s.ollama },
     bedrock: { ...DEFAULT_SETTINGS.bedrock, ...s.bedrock },
+    // Additive for a v1 user: existing keys, templates and shape are untouched
+    // and transcription arrives with its working default.
+    transcription: {
+      ...DEFAULT_SETTINGS.transcription,
+      ...s.transcription,
+      localWhisper: {
+        ...DEFAULT_SETTINGS.transcription.localWhisper,
+        ...s.transcription?.localWhisper,
+      },
+    },
   };
 }
 

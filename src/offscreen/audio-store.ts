@@ -71,3 +71,68 @@ export async function openAudioStore(recordingId: string): Promise<AudioStore> {
   }
   return openIdbStore(recordingId);
 }
+
+async function readOpfs(recordingId: string): Promise<Blob | null> {
+  if (typeof navigator.storage?.getDirectory !== "function") return null;
+  try {
+    const root = await navigator.storage.getDirectory();
+    const handle = await root.getFileHandle(`${recordingId}.webm`);
+    return await handle.getFile();
+  } catch {
+    return null; // not written here — the IndexedDB fallback owns it
+  }
+}
+
+function idbChunks(recordingId: string, mode: "readonly" | "readwrite"): Promise<Blob[]> {
+  return new Promise((resolve, reject) => {
+    const open = indexedDB.open("meeting-audio", 1);
+    open.onupgradeneeded = () => {
+      open.result.createObjectStore("chunks", { keyPath: ["recordingId", "seq"] });
+    };
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result;
+      const tx = db.transaction("chunks", mode);
+      const store = tx.objectStore("chunks");
+      // Composite-key range over one recording only; another Meeting's chunks
+      // must never bleed into this one's audio.
+      const range = IDBKeyRange.bound(
+        [recordingId, -1],
+        [recordingId, Number.MAX_SAFE_INTEGER],
+      );
+      const req = store.getAll(range);
+      if (mode === "readwrite") store.delete(range);
+      tx.onerror = () => reject(tx.error);
+      tx.oncomplete = () => {
+        db.close();
+        const rows = (req.result ?? []) as { seq: number; blob: Blob }[];
+        resolve(rows.sort((a, b) => a.seq - b.seq).map((r) => r.blob));
+      };
+    };
+  });
+}
+
+/**
+ * The whole Audio Recording for one Meeting, reassembled for transcription.
+ * Held in memory only for as long as the Transcription Provider needs it — the
+ * recording itself was never accumulated in memory while it was being made.
+ */
+export async function readRecording(recordingId: string): Promise<Blob> {
+  const file = await readOpfs(recordingId);
+  if (file) return file;
+  return new Blob(await idbChunks(recordingId, "readonly"), { type: "audio/webm" });
+}
+
+/** Discard an Audio Recording. Called once its Summary Artifact is written, so
+ * recordings never accumulate on the user's disk. */
+export async function deleteRecording(recordingId: string): Promise<void> {
+  if (typeof navigator.storage?.getDirectory === "function") {
+    try {
+      const root = await navigator.storage.getDirectory();
+      await root.removeEntry(`${recordingId}.webm`);
+    } catch {
+      // Not in OPFS (or already gone) — the IndexedDB sweep below covers it.
+    }
+  }
+  await idbChunks(recordingId, "readwrite").catch(() => []);
+}

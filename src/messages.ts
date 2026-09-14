@@ -1,6 +1,6 @@
 // Message protocol between content scripts, background, offscreen, and popup.
 import type { CaptionSnapshot } from "./adapters/adapter";
-import type { HeldTranscript } from "./domain/types";
+import type { HeldTranscript, Utterance, WhisperModelSize } from "./domain/types";
 
 /**
  * The state vocabulary the popup and the in-page capture prompt share.
@@ -29,15 +29,63 @@ export type PopupMessage =
   | { type: "start-capture" }
   | { type: "stop-capture" }
   | { type: "summarize-now" }
+  | { type: "skip-transcription" }
   | { type: "list-held" }
   | { type: "retry-held"; id: string };
 
 export type OffscreenMessage =
   | { type: "offscreen-start"; streamId: string; recordingId: string }
   | { type: "offscreen-stop" }
-  | { type: "offscreen-status" };
+  | { type: "offscreen-status" }
+  | {
+      type: "offscreen-transcribe";
+      recordingId: string;
+      model: WhisperModelSize;
+      /** ms from the Meeting start to Capture Start; keeps Utterance timings
+       * absolute relative to the Meeting rather than to the recording. */
+      startOffsetMs: number;
+      /** Echoed back on progress so the service worker can find the session
+       * again after a suspension. */
+      tabId: number;
+    }
+  | { type: "offscreen-cancel-transcribe" }
+  | { type: "offscreen-discard-recording"; recordingId: string };
 
-export type Message = ContentMessage | PopupMessage | OffscreenMessage;
+/** Pushed from the offscreen document to the service worker during the wait. */
+export type OffscreenEventMessage = {
+  type: "transcription-progress";
+  tabId: number;
+  progress: TranscriptionProgress;
+};
+
+export type Message =
+  | ContentMessage
+  | PopupMessage
+  | OffscreenMessage
+  | OffscreenEventMessage;
+
+/**
+ * The three long phases between Meeting End and a finished summary have
+ * completely different time profiles and must stay distinguishable: the model
+ * download is one-time and huge, transcription is per-meeting and long,
+ * summarization is one provider call (and has its own state already).
+ */
+export type TranscriptionPhase = "model-download" | "transcribing";
+
+/**
+ * The measure behind the phase the popup names. Every number here is one the
+ * engine actually reported; null means "not reported" and must be rendered as
+ * elapsed time or nothing — never as a fabricated percentage.
+ */
+export interface TranscriptionProgress {
+  phase: TranscriptionPhase;
+  loadedBytes: number | null;
+  totalBytes: number | null;
+  processedMs: number | null;
+  totalMs: number | null;
+  /** Epoch ms this wait began, for the elapsed-time fallback. */
+  startedAt: number;
+}
 
 export interface StatusReply {
   inMeeting: boolean;
@@ -62,6 +110,8 @@ export interface StatusReply {
    * healthy.
    */
   captureWarning: string | null;
+  /** The live measure for the transcribing state; null outside it. */
+  transcription: TranscriptionProgress | null;
 }
 
 /** What the in-page prompt needs, and nothing more. */
@@ -80,6 +130,13 @@ export interface OffscreenStatusReply {
   recording: boolean;
   startedAt: number | null;
   encodedBytes: number;
+  error: string | null;
+}
+
+export interface OffscreenTranscribeReply {
+  utterances: Utterance[];
+  /** The user chose captions over waiting — not a failure. */
+  cancelled: boolean;
   error: string | null;
 }
 

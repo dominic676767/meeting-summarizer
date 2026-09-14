@@ -1,8 +1,10 @@
 # Meeting Summarizer
 
-A lightweight Chromium extension (Chrome/Edge) that captures **live captions** from Microsoft Teams web meetings, summarizes the meeting with **your LLM of choice** (Claude, OpenAI, Ollama, AWS Bedrock), and saves a single self-contained HTML summary — with the full transcript collapsible inside — to `Downloads/meeting-summaries/`.
+A lightweight Chromium extension (Chrome/Edge) that records a Microsoft Teams web meeting's **tab audio**, transcribes it with **local WASM Whisper**, summarizes the meeting with **your LLM of choice** (Claude, OpenAI, Ollama, AWS Bedrock), and saves a single self-contained HTML summary — with the full transcript collapsible inside — to `Downloads/meeting-summaries/`.
 
-Pure WebExtension: no companion app, no backend, nothing leaves your machine except the LLM call (or nothing at all, with Ollama).
+Pure WebExtension: no companion app, no backend. Transcription runs on your machine, so the only things that leave it are the LLM call (nothing at all, with Ollama) and the one-time Whisper model download.
+
+Speaker attribution is not wired up yet: base Whisper performs no diarization, so transcript lines read as *Unknown speaker* until captions are fused with the audio. A meeting with no recording still gets a caption-only summary.
 
 ## Install (unpacked, for development)
 
@@ -21,10 +23,18 @@ Unlike a Firefox temporary add-on, an unpacked Chromium extension survives brows
    - **Ollama**: run it with `OLLAMA_ORIGINS=chrome-extension://*` so the extension may call it.
    - **Bedrock**: use a Bedrock API key (bearer token). AWS SigV4 credentials are not supported.
 2. Join a Teams meeting at `teams.microsoft.com` and **turn on live captions** (More → Language and speech → Turn on live captions).
-3. The toolbar badge counts captured caption segments (a red `!` means captions are off).
-4. When the call ends — or you click *Summarize now* in the popup — the summary lands in `Downloads/meeting-summaries/YYYY-MM-DD-<meeting-title>.html`.
+3. **Start recording** — the popup's *Start recording* button or `Ctrl/Cmd+Shift+U`. Chromium only lets an extension capture tab audio on an explicit invocation, so this click cannot be automatic. The badge reads `REC` while audio is being captured; you keep hearing the meeting normally.
+4. When the call ends — or you click *Summarize now* in the popup — the recording is transcribed and then summarized, and the summary lands in `Downloads/meeting-summaries/YYYY-MM-DD-<meeting-title>.html`. The audio is deleted once the file is written.
+
+The popup names each phase while you wait: the one-time model download (with megabytes transferred), transcription (with audio processed of audio total), then summarization. Local Whisper on a long meeting is genuinely slow; *Skip transcription, use captions* takes the caption-only summary instead of waiting.
 
 If summarization fails (provider outage, missing key), the transcript is **held** — retry it from the popup, optionally after switching provider. Nothing is retained once the summary file is written.
+
+## Transcription
+
+Configured separately from the summary Provider, because most LLM backends have no speech-to-text API — a Claude or Bedrock key cannot transcribe audio.
+
+Local Whisper is the default and needs no key. Pick a model size in Settings — tiny (~40 MB, fastest), base (~75 MB, default), small (~250 MB, most accurate). The model is fetched once from Hugging Face and cached by the browser; later meetings transcribe without re-downloading. Transcription currently assumes the meeting is in **English**.
 
 ## Summary shapes
 
@@ -33,9 +43,12 @@ Structured (TL;DR / decisions / action items with owners / open questions — de
 ## Development
 
 ```sh
-npm test          # vitest — pipeline + Teams adapter seams
+npm test          # vitest — transcription, pipeline, and Teams adapter seams
 npm run typecheck
 npm run build     # esbuild → dist/
+
+WHISPER_INTEGRATION=1 npm test   # additionally runs real Whisper on a committed
+                                 # audio fixture (downloads the tiny model)
 ```
 
 Domain vocabulary lives in [CONTEXT.md](CONTEXT.md); architectural constraints in [docs/adr/](docs/adr/). Teams DOM fixtures and re-capture instructions: [tests/fixtures/](tests/fixtures/README.md).

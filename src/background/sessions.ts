@@ -1,10 +1,11 @@
 // Per-tab Meeting session state, mirrored to storage.session so a service
 // worker suspension can't lose a Transcript mid-meeting.
 import { TranscriptAccumulator } from "../adapters/accumulator";
+import type { TranscriptionProgress } from "../messages";
 import type { Transcript } from "../domain/types";
 import { ext } from "../platform";
 
-export type SessionState = "capturing" | "summarizing" | "done" | "failed";
+export type SessionState = "capturing" | "transcribing" | "summarizing" | "done" | "failed";
 
 export interface MeetingSession {
   platform: string;
@@ -22,10 +23,29 @@ export interface MeetingSession {
   recorded: boolean;
   /** Storage key for this Meeting's Audio Recording; stable across stop/start. */
   recordingId: string | null;
+  /**
+   * Capture Start for the Audio Recording now on disk, retained after the
+   * recorder stops. Utterance offsets are absolute relative to the *Meeting*
+   * start, and recording begins whenever the user clicked, so transcription
+   * needs the distance between the two.
+   */
+  recordingFrom: number | null;
   /** Non-fatal capture problem (quota, recorder fault) to surface to the user. */
   captureWarning: string | null;
   /** The in-page prompt hides itself for the rest of this Meeting once dismissed. */
   promptDismissed: boolean;
+  /**
+   * Whether transcribed audio words actually reached the Transcript. Null until
+   * transcription has run; false when it failed or the user skipped the wait, in
+   * which case the Meeting is a Degraded Capture even though audio exists.
+   */
+  audioWords: boolean | null;
+  /**
+   * The live transcription measure. Deliberately not persisted: it arrives from
+   * the offscreen document once a second, and writing storage that often to
+   * survive a suspension would cost more than re-learning it on the next tick.
+   */
+  transcription: TranscriptionProgress | null;
 }
 
 const sessions = new Map<number, MeetingSession>();
@@ -41,8 +61,10 @@ interface PersistedSession {
   recordingStartedAt: number | null;
   recorded: boolean;
   recordingId: string | null;
+  recordingFrom: number | null;
   captureWarning: string | null;
   promptDismissed: boolean;
+  audioWords: boolean | null;
   entries: ReturnType<TranscriptAccumulator["toJSON"]>;
 }
 
@@ -70,8 +92,11 @@ async function doRehydrate(): Promise<void> {
         recordingStartedAt: p.recordingStartedAt ?? null,
         recorded: p.recorded ?? false,
         recordingId: p.recordingId ?? null,
+        recordingFrom: p.recordingFrom ?? null,
         captureWarning: p.captureWarning ?? null,
         promptDismissed: p.promptDismissed ?? false,
+        audioWords: p.audioWords ?? null,
+        transcription: null,
         accumulator: TranscriptAccumulator.fromJSON(p.entries),
       });
     }
@@ -94,8 +119,10 @@ export async function persistSessions(): Promise<void> {
         recordingStartedAt: s.recordingStartedAt,
         recorded: s.recorded,
         recordingId: s.recordingId,
+        recordingFrom: s.recordingFrom,
         captureWarning: s.captureWarning,
         promptDismissed: s.promptDismissed,
+        audioWords: s.audioWords,
         entries: s.accumulator.toJSON(),
       };
     }
@@ -126,8 +153,11 @@ export async function ensureSession(tabId: number, platform: string): Promise<Me
       recordingStartedAt: null,
       recorded: false,
       recordingId: null,
+      recordingFrom: null,
       captureWarning: null,
       promptDismissed: false,
+      audioWords: null,
+      transcription: null,
       accumulator: new TranscriptAccumulator(),
     };
     sessions.set(tabId, s);

@@ -66,6 +66,31 @@
       <input type="text" id="bedrock-model" />
     </fieldset>
 
+    <h2>Transcription</h2>
+    <label for="transcription-provider">Engine that turns the meeting's audio into words</label>
+    <select id="transcription-provider">
+      <option value="local-whisper">Local Whisper (on this machine, no API key)</option>
+    </select>
+    <p class="note">
+      Separate from the LLM above, and deliberately so: Claude and Bedrock have no speech-to-text
+      API, so they can summarize a meeting but cannot transcribe one.
+    </p>
+
+    <fieldset id="panel-local-whisper">
+      <legend>Local Whisper</legend>
+      <p class="note">
+        The model is downloaded once on first use and cached by the browser; later meetings
+        transcribe without re-downloading. Speaker names come from live captions, not from the
+        audio. Meetings are transcribed as English.
+      </p>
+      <label for="whisper-model">Model size</label>
+      <select id="whisper-model">
+        <option value="tiny">Tiny — fastest, least accurate (~40 MB)</option>
+        <option value="base">Base — balanced (~75 MB)</option>
+        <option value="small">Small — most accurate, slowest (~250 MB)</option>
+      </select>
+    </fieldset>
+
     <h2>Summary</h2>
     <label for="shape">Summary shape</label>
     <select id="shape">

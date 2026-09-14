@@ -18,6 +18,8 @@ export interface CaptureView {
 
 export function deriveCaptureState(v: CaptureView): CaptureState {
   switch (v.sessionState) {
+    case "transcribing":
+      return "transcribing";
     case "summarizing":
       return "summarizing";
     case "done":
@@ -32,12 +34,24 @@ export function deriveCaptureState(v: CaptureView): CaptureState {
   }
 }
 
+export interface DegradedView {
+  /** An Audio Recording exists (or existed) for this Meeting. */
+  recorded: boolean;
+  /**
+   * Whether transcribed audio words actually reached the Transcript. Undefined
+   * until transcription has run.
+   */
+  audioWords?: boolean | null;
+}
+
 /**
- * A Meeting is a Degraded Capture when no Audio Recording was made for it, so
- * its Transcript can only come from caption words. Independent of whether
- * recording is live right now — once audio has been captured the Meeting is no
- * longer degraded even after the recorder stops.
+ * A Meeting is a Degraded Capture when its Transcript comes from caption words
+ * alone. That is the case when no Audio Recording was made — and equally when
+ * one was made but its words never arrived, because transcription failed or the
+ * user chose captions over the wait. Recording being live right now is
+ * irrelevant: audio already captured survives the recorder stopping.
  */
-export function isDegraded(v: Pick<CaptureView, "recorded">): boolean {
-  return !v.recorded;
+export function isDegraded(v: DegradedView): boolean {
+  if (!v.recorded) return true;
+  return v.audioWords === false;
 }

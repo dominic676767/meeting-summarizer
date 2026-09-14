@@ -38,7 +38,7 @@ describe("capture state", () => {
   });
 
   it("lifecycle states pass through unchanged", () => {
-    for (const s of ["summarizing", "done", "failed"] as const) {
+    for (const s of ["transcribing", "summarizing", "done", "failed"] as const) {
       expect(
         deriveCaptureState({ sessionState: s, inMeeting: false, recording: false, recorded: false }),
       ).toBe(s);
@@ -53,5 +53,16 @@ describe("Degraded Capture", () => {
 
   it("a Meeting that recorded audio is not degraded, even after the recorder stops", () => {
     expect(isDegraded({ recorded: true })).toBe(false);
+  });
+
+  it("audio whose words reached the Transcript is not degraded", () => {
+    expect(isDegraded({ recorded: true, audioWords: true })).toBe(false);
+  });
+
+  it("recorded audio whose words never arrived is degraded — the summary is caption-only", () => {
+    // Transcription failed, or the user skipped the wait: audio exists but the
+    // words in the summary are the platform's captions, and saying otherwise
+    // would overstate the summary's authority.
+    expect(isDegraded({ recorded: true, audioWords: false })).toBe(true);
   });
 });
