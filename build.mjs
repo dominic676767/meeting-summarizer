@@ -44,12 +44,11 @@ await build({
   minify: false,
 });
 
-// The asyncify pair: the variant transformers.js selects on Chromium.
+// The plain pair, not asyncify: see ADR-0006 and the wasmPaths comment in
+// whisper-worker.ts. Ship only the variant the worker actually loads — a second
+// unused runtime is 13-24 MB of dead weight in the package.
 await mkdir(`${outdir}/ort`, { recursive: true });
-for (const file of [
-  "ort-wasm-simd-threaded.asyncify.wasm",
-  "ort-wasm-simd-threaded.asyncify.mjs",
-]) {
+for (const file of ["ort-wasm-simd-threaded.wasm", "ort-wasm-simd-threaded.mjs"]) {
   await cp(`node_modules/onnxruntime-web/dist/${file}`, `${outdir}/ort/${file}`);
 }
 

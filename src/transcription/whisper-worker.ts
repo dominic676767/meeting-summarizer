@@ -42,11 +42,15 @@ const wasmBackend = env.backends.onnx.wasm as {
   numThreads?: number;
   proxy?: boolean;
 };
-// The asyncify pair, which is what transformers.js itself selects on Chromium —
-// served from the extension instead of its CDN default.
+// Served from the extension instead of transformers.js's CDN default, and the
+// plain pair rather than the asyncify one: asyncify instruments the whole module
+// so it can suspend WASM execution, which is needed only for the proxy worker
+// and for the WebGPU/JSEP backends. This runs single-threaded CPU WASM with
+// proxy off (both set below), so nothing here suspends — and asyncify costs
+// 23.6 MB against 12.9 MB for the same inference (ADR-0006).
 wasmBackend.wasmPaths = {
-  wasm: assetUrl("ort/ort-wasm-simd-threaded.asyncify.wasm"),
-  mjs: assetUrl("ort/ort-wasm-simd-threaded.asyncify.mjs"),
+  wasm: assetUrl("ort/ort-wasm-simd-threaded.wasm"),
+  mjs: assetUrl("ort/ort-wasm-simd-threaded.mjs"),
 };
 // Extension pages are not cross-origin isolated, so SharedArrayBuffer — and
 // with it ONNX's threaded mode — is unavailable. Ask for one thread rather
