@@ -2,7 +2,7 @@
 // the worker that owns the WASM runtime. Kept in its own module so the worker
 // bundle — which pulls in the whole ONNX runtime — is never imported by any
 // other entry point.
-import type { WhisperModelSize } from "../domain/types";
+import type { MeetingLanguage, WhisperModelSize } from "../domain/types";
 import type { EngineSpan } from "./provider";
 
 /** The rate Whisper's feature extractor expects. */
@@ -17,7 +17,27 @@ export const WHISPER_MODEL_REPOS: Record<WhisperModelSize, string> = {
 
 export type WhisperRequest =
   | { type: "load"; model: WhisperModelSize }
-  | { type: "transcribe"; id: number; samples: Float32Array };
+  | { type: "transcribe"; id: number; samples: Float32Array; language: MeetingLanguage };
+
+/**
+ * What one transcription call asks the model for. Kept out of the worker for the
+ * same reason the span mapping below is: so it can be exercised without a
+ * browser. The language especially — dropping it costs nothing visible at run
+ * time, because a Meeting decoded as the wrong language comes back as fluent
+ * words instead of as an error.
+ */
+export function whisperRunOptions(language: MeetingLanguage): Record<string, unknown> {
+  return {
+    // Whisper attends to 30s windows, so long-form runs as strided sub-windows
+    // inside one call; the stride is what stops words being cut at a boundary.
+    chunk_length_s: 30,
+    stride_length_s: 5,
+    return_timestamps: true,
+    // Always told, never inferred: transformers.js performs no detection and
+    // falls back to English on its own.
+    language,
+  };
+}
 
 /** The shape transformers.js returns for a timestamped transcription. */
 export interface WhisperOutput {

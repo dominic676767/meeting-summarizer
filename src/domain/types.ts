@@ -125,12 +125,63 @@ export type TranscriptionProviderId = "local-whisper" | "openai";
 export type WhisperModelSize = "tiny" | "base" | "small";
 
 /**
+ * The language a Meeting is spoken in, as the ISO-639-1 code both engines take
+ * as their language hint.
+ *
+ * Declared by the user because nothing here detects it: transformers.js does no
+ * auto-detection and silently defaults Whisper to English, so an undeclared
+ * German meeting comes back *mistranscribed* rather than transcribed — and the
+ * default Prompt Templates then faithfully summarize the wrong words.
+ *
+ * A closed list rather than free text: an unrecognised code is rejected inside
+ * the engine mid-run, which would cost a Meeting its Held Recording retry for a
+ * typo. These are the languages the settings page offers, not everything Whisper
+ * knows.
+ */
+export type MeetingLanguage =
+  | "ar"
+  | "cs"
+  | "da"
+  | "de"
+  | "el"
+  | "en"
+  | "es"
+  | "fi"
+  | "fr"
+  | "he"
+  | "hi"
+  | "hu"
+  | "id"
+  | "it"
+  | "ja"
+  | "ko"
+  | "ms"
+  | "nl"
+  | "no"
+  | "pl"
+  | "pt"
+  | "ro"
+  | "ru"
+  | "sv"
+  | "th"
+  | "tr"
+  | "uk"
+  | "vi"
+  | "zh";
+
+/**
  * Transcription Provider selection and per-engine settings. A separate axis from
  * the Provider settings: a Claude or Bedrock key can summarize a Meeting but
  * cannot transcribe one, so no key is ever shared between the two.
  */
 export interface TranscriptionSettings {
   provider: TranscriptionProviderId;
+  /**
+   * The language the user says their meetings are held in, passed to whichever
+   * engine is selected as its language hint. One setting rather than one per
+   * engine: it describes the Meeting, not the engine.
+   */
+  language: MeetingLanguage;
   localWhisper: { model: WhisperModelSize };
   /** The cloud engine's own credentials. Not the `openai` Provider key: that one
    * is spent on summarization, and a user may opt into one without the other. */

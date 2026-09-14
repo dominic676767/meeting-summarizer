@@ -21,6 +21,7 @@ import {
   spansFromWhisperOutput,
   WHISPER_MODEL_REPOS,
   WHISPER_SAMPLE_RATE,
+  whisperRunOptions,
   type WhisperOutput,
 } from "../src/transcription/whisper-protocol";
 import { WHISPER_MAX_INPUT_MS } from "../src/transcription/local-whisper";
@@ -66,11 +67,9 @@ async function nodeWhisperEngine(): Promise<TranscriptionEngine> {
     },
     async transcribe(samples): Promise<EngineSpan[]> {
       if (!asr) throw new Error("model not loaded");
-      const out = await asr(new Float32Array(samples), {
-        chunk_length_s: 30,
-        stride_length_s: 5,
-        return_timestamps: true,
-      });
+      // The same options the worker asks for, language included — the fixture is
+      // spoken in English, so that is what this engine is told to expect.
+      const out = await asr(new Float32Array(samples), whisperRunOptions("en"));
       return spansFromWhisperOutput(out, samples.length / WHISPER_SAMPLE_RATE);
     },
   };

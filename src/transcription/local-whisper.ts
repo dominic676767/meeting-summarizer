@@ -6,7 +6,7 @@
 // Recording and talks to the worker that owns the WASM runtime. It runs in the
 // offscreen document, the only extension context with both an AudioContext for
 // decoding and the ability to spawn a worker.
-import type { WhisperModelSize } from "../domain/types";
+import type { MeetingLanguage, WhisperModelSize } from "../domain/types";
 import {
   TranscriptionError,
   type DecodedAudio,
@@ -48,6 +48,9 @@ export async function decodeToMono(data: Blob, sampleRate: number): Promise<Deco
 
 export function createLocalWhisperEngine(opts: {
   model: WhisperModelSize;
+  /** The language the model is told to expect. Whisper defaults to English when
+   * it is not told, which is a mistranscription rather than a failure. */
+  language: MeetingLanguage;
   workerUrl: string;
 }): TranscriptionEngine {
   let worker: Worker | undefined;
@@ -114,7 +117,16 @@ export function createLocalWhisperEngine(opts: {
         pending.set(id, { resolve, reject });
         // Copied because the buffer is a view onto the whole recording; the
         // worker must not receive (or detach) the rest of the audio.
-        send({ type: "transcribe", id, samples: new Float32Array(samples) });
+        //
+        // The language rides on every request rather than on the one-time load:
+        // for Whisper it is a decode-time choice, so it must not be baked into
+        // the model the worker caches.
+        send({
+          type: "transcribe",
+          id,
+          samples: new Float32Array(samples),
+          language: opts.language,
+        });
       });
     },
     close() {

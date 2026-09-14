@@ -1,6 +1,7 @@
 // Options page: Provider selection + keys (browser.storage.local, ADR-0001),
 // Summary shape toggle, and editable Prompt Templates.
 import type {
+  MeetingLanguage,
   ProviderId,
   SummaryShape,
   TranscriptionProviderId,
@@ -16,6 +17,48 @@ const PROVIDERS: ProviderId[] = ["anthropic", "openai", "ollama", "bedrock"];
 // this page is that they are not the same setting.
 const transcriptionSelect = $<HTMLSelectElement>("transcription-provider");
 const TRANSCRIPTION_PROVIDERS: TranscriptionProviderId[] = ["local-whisper", "openai"];
+
+/**
+ * The languages offered, in the order they appear in the select. A Record over
+ * MeetingLanguage rather than a hand-written list of `<option>`s so the compiler
+ * refuses a page that offers a code no engine was told about — a code an engine
+ * rejects costs the whole Meeting a failed transcription.
+ */
+const MEETING_LANGUAGES: Record<MeetingLanguage, string> = {
+  ar: "Arabic",
+  zh: "Chinese",
+  cs: "Czech",
+  da: "Danish",
+  nl: "Dutch",
+  en: "English",
+  fi: "Finnish",
+  fr: "French",
+  de: "German",
+  el: "Greek",
+  he: "Hebrew",
+  hi: "Hindi",
+  hu: "Hungarian",
+  id: "Indonesian",
+  it: "Italian",
+  ja: "Japanese",
+  ko: "Korean",
+  ms: "Malay",
+  no: "Norwegian",
+  pl: "Polish",
+  pt: "Portuguese",
+  ro: "Romanian",
+  ru: "Russian",
+  es: "Spanish",
+  sv: "Swedish",
+  th: "Thai",
+  tr: "Turkish",
+  uk: "Ukrainian",
+  vi: "Vietnamese",
+};
+const languageSelect = $<HTMLSelectElement>("meeting-language");
+for (const [code, label] of Object.entries(MEETING_LANGUAGES)) {
+  languageSelect.add(new Option(label, code));
+}
 
 function showPanel(provider: string): void {
   for (const p of PROVIDERS) {
@@ -49,6 +92,7 @@ async function init(): Promise<void> {
   $<HTMLInputElement>("bedrock-model").value = s.bedrock.model;
   transcriptionSelect.value = s.transcription.provider;
   showTranscriptionPanel(s.transcription.provider);
+  languageSelect.value = s.transcription.language;
   $<HTMLSelectElement>("whisper-model").value = s.transcription.localWhisper.model;
   $<HTMLInputElement>("transcription-openai-key").value = s.transcription.openai.apiKey;
   $<HTMLInputElement>("transcription-openai-model").value = s.transcription.openai.model;
@@ -87,6 +131,7 @@ $("save").addEventListener("click", async () => {
   };
   s.transcription = {
     provider: transcriptionSelect.value as TranscriptionProviderId,
+    language: languageSelect.value as MeetingLanguage,
     localWhisper: {
       model: $<HTMLSelectElement>("whisper-model").value as WhisperModelSize,
     },

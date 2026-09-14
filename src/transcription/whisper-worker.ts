@@ -9,11 +9,12 @@
 // download every user would pay for. Only the model itself comes from the
 // network, once, into the browser cache.
 import { env, pipeline } from "@huggingface/transformers";
-import type { WhisperModelSize } from "../domain/types";
+import type { MeetingLanguage, WhisperModelSize } from "../domain/types";
 import {
   spansFromWhisperOutput,
   WHISPER_MODEL_REPOS,
   WHISPER_SAMPLE_RATE,
+  whisperRunOptions,
   type WhisperOutput,
   type WhisperRequest,
   type WhisperResponse,
@@ -90,16 +91,10 @@ function load(size: WhisperModelSize): Promise<Asr> {
   return asr;
 }
 
-/** Whisper attends to 30s windows, so long-form runs as strided sub-windows
- * inside one call; the stride is what stops words being cut at a boundary. */
-async function transcribe(samples: Float32Array): Promise<EngineSpan[]> {
+async function transcribe(samples: Float32Array, language: MeetingLanguage): Promise<EngineSpan[]> {
   const run = await asr;
   if (!run) throw new Error("model not loaded");
-  const out = await run(samples, {
-    chunk_length_s: 30,
-    stride_length_s: 5,
-    return_timestamps: true,
-  });
+  const out = await run(samples, whisperRunOptions(language));
   return spansFromWhisperOutput(out, samples.length / WHISPER_SAMPLE_RATE);
 }
 
@@ -111,7 +106,7 @@ self.addEventListener("message", (event: MessageEvent<WhisperRequest>) => {
         await load(msg.model);
         post({ type: "loaded" });
       } else {
-        post({ type: "spans", id: msg.id, spans: await transcribe(msg.samples) });
+        post({ type: "spans", id: msg.id, spans: await transcribe(msg.samples, msg.language) });
       }
     } catch (err) {
       post({

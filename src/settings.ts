@@ -17,6 +17,11 @@ export const DEFAULT_SETTINGS: Settings = {
   nameEngineInArtifact: false,
   transcription: {
     provider: "local-whisper",
+    // No engine detects the language, so a default has to name one. English is
+    // what both engines already assumed, which keeps an upgrading user's
+    // transcripts exactly as they were; a user who meets in another language has
+    // to say so, and the settings page says as much.
+    language: "en",
     localWhisper: { model: "base" },
     // whisper-1 by default because it is the transcription model that returns
     // per-segment timestamps, and fusion attributes speakers by time overlap.

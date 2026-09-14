@@ -8,6 +8,7 @@
 // It is an engine behind the existing Transcription Provider interface, not a
 // second pipeline: the same wrapper decodes, chunks, and makes offsets absolute,
 // so this module only turns one window of samples into timed spans.
+import type { MeetingLanguage } from "../domain/types";
 import { TranscriptionError, type EngineSpan, type TranscriptionEngine } from "./provider";
 
 export type FetchFn = typeof fetch;
@@ -85,6 +86,8 @@ export function spansFromTranscription(
 export function createOpenAiTranscriptionEngine(opts: {
   apiKey: string;
   model: string;
+  /** The language the endpoint is told to expect, as its `language` parameter. */
+  language: MeetingLanguage;
   fetchFn?: FetchFn;
 }): TranscriptionEngine {
   const fetchFn = opts.fetchFn ?? fetch;
@@ -102,6 +105,11 @@ export function createOpenAiTranscriptionEngine(opts: {
       const form = new FormData();
       form.append("file", toWav(samples, OPENAI_TRANSCRIPTION_SAMPLE_RATE), "meeting.wav");
       form.append("model", opts.model);
+      // Sent even though this endpoint would guess when it is omitted: a guess is
+      // made per uploaded window, so a long Meeting can be decoded as one
+      // language early and another later. The user's declaration is one answer
+      // for the whole Meeting, which is the point of asking them.
+      form.append("language", opts.language);
       // Segment timestamps are not a nicety here: fusion attributes speakers by
       // overlapping Utterance time ranges against the Speaker Track.
       form.append("response_format", "verbose_json");

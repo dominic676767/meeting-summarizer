@@ -81,12 +81,24 @@
       a meeting but can never transcribe one. Only the engines in this list transcribe.
     </p>
 
+    <label for="meeting-language">Language spoken in your meetings</label>
+    <!-- Options are filled in by options.ts from the list of codes the engines
+         accept, so the page cannot offer a language a transcription run would
+         reject. -->
+    <select id="meeting-language"></select>
+    <p class="note">
+      Applies to whichever engine is selected above. <strong>Nothing detects this for you:</strong>
+      the engine transcribes as if this language were spoken, so a meeting held in a different one
+      comes back as wrong words rather than as a translation. Defaults to English, and takes effect
+      on your next meeting — it changes nothing else.
+    </p>
+
     <fieldset id="panel-transcription-local-whisper">
       <legend>Local Whisper</legend>
       <p class="note">
         The model is downloaded once on first use and cached by the browser; later meetings
         transcribe without re-downloading. Speaker names come from live captions, not from the
-        audio. Meetings are transcribed as English.
+        audio.
       </p>
       <label for="whisper-model">Model size</label>
       <select id="whisper-model">

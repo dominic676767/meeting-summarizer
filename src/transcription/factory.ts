@@ -22,10 +22,17 @@ export interface TranscriptionDeps {
   decode?: DecodeAudio;
 }
 
+// The chosen language goes to whichever engine is selected: it describes the
+// Meeting, so switching engine — including to recover a Held Recording — must not
+// silently change which language the words are decoded as.
 function engineFor(s: TranscriptionSettings, deps: TranscriptionDeps): TranscriptionEngine {
   switch (s.provider) {
     case "local-whisper":
-      return createLocalWhisperEngine({ model: s.localWhisper.model, workerUrl: deps.workerUrl });
+      return createLocalWhisperEngine({
+        model: s.localWhisper.model,
+        language: s.language,
+        workerUrl: deps.workerUrl,
+      });
     case "openai":
       if (!s.openai.apiKey) {
         // A TranscriptionError, so the Audio Recording is held rather than lost:
@@ -34,7 +41,11 @@ function engineFor(s: TranscriptionSettings, deps: TranscriptionDeps): Transcrip
           "openai transcription: no API key configured — open Settings",
         );
       }
-      return createOpenAiTranscriptionEngine({ ...s.openai, fetchFn: deps.fetchFn });
+      return createOpenAiTranscriptionEngine({
+        ...s.openai,
+        language: s.language,
+        fetchFn: deps.fetchFn,
+      });
   }
 }
 

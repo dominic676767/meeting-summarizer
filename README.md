@@ -34,7 +34,9 @@ If summarization fails (provider outage, missing key), the transcript is **held*
 
 Configured separately from the summary Provider, because most LLM backends have no speech-to-text API — a Claude or Bedrock key cannot transcribe audio.
 
-Local Whisper is the default and needs no key. Pick a model size in Settings — tiny (~40 MB, fastest), base (~75 MB, default), small (~250 MB, most accurate). The model is fetched once from Hugging Face and cached by the browser; later meetings transcribe without re-downloading. Transcription currently assumes the meeting is in **English**.
+Local Whisper is the default and needs no key. Pick a model size in Settings — tiny (~40 MB, fastest), base (~75 MB, default), small (~250 MB, most accurate). The model is fetched once from Hugging Face and cached by the browser; later meetings transcribe without re-downloading.
+
+**Meeting language** is one setting for whichever engine is selected, and it defaults to **English**. Nothing detects it: the engine transcribes as if the language you picked were the one being spoken, so a meeting held in another language comes back as wrong words until you change it.
 
 **OpenAI transcription** is the opt-in cloud alternative: faster and more accurate, at the cost of uploading the meeting's audio. It takes its own key in the Transcription section of Settings — separate from the OpenAI key used for summarizing — and a model that returns per-segment timestamps (`whisper-1`), because speaker names come from matching those timings against the captions. Switching engine changes what the next meeting uses; nothing else about the flow changes.
 

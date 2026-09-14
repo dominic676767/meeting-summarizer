@@ -52,6 +52,8 @@ function openAiProvider(opts: {
   const engine = createOpenAiTranscriptionEngine({
     apiKey: opts.apiKey ?? "sk-t",
     model: opts.model ?? "whisper-1",
+    // The language hint's own coverage is in transcription-language.test.ts.
+    language: "en",
     fetchFn: opts.fetchFn,
   });
   return createTranscriptionProvider({
