@@ -313,13 +313,13 @@ function render(status: StatusReply): void {
     renderTranscribing(status.transcription);
   } else if (status.state === "recording") {
     if (status.captureWarning) {
-      // Name the problem and say what survives it, rather than appending a raw
-      // internal reason to user-facing copy. Recording genuinely continues
-      // after a failed chunk write, so this must not claim it stopped.
+      // The producer's own copy, rendered visibly. Hardcoding a sentence here
+      // meant one problem's warning was displayed for another's — a silent
+      // microphone reported as "some audio could not be saved". The raw reason
+      // goes to the tooltip; the sentence the user must act on does not.
       statusEl.className = "warning";
-      statusEl.textContent =
-        "Recording — some audio could not be saved. Captions are still being captured, so a summary will still land.";
-      statusEl.title = status.captureWarning;
+      statusEl.textContent = status.captureWarning.message;
+      if (status.captureWarning.detail) statusEl.title = status.captureWarning.detail;
     } else if (status.mic === "unavailable") {
       // Above the no-captions warning on purpose: missing captions cost the names
       // on the action items, a missing microphone costs half the words.
@@ -361,9 +361,9 @@ function render(status: StatusReply): void {
     // A capture that failed to start leaves this state with a reason attached.
     // Saying only "not recording" would strand the user with no way to know why.
     statusEl.textContent = status.captureWarning
-      ? "Meeting detected — recording could not start."
+      ? status.captureWarning.message
       : "Meeting detected — not recording.";
-    if (status.captureWarning) statusEl.title = status.captureWarning;
+    if (status.captureWarning?.detail) statusEl.title = status.captureWarning.detail;
   } else if (status.state === "summarizing") {
     statusEl.className = "capturing";
     statusEl.textContent = "Summarizing…";

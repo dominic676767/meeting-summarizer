@@ -3,6 +3,7 @@
 import { TranscriptAccumulator } from "../adapters/accumulator";
 import type { TranscriptionProgress } from "../messages";
 import type { CaptureSpan, Transcript } from "../domain/types";
+import type { CaptureWarning } from "../messages";
 import { ext } from "../platform";
 
 export type SessionState = "capturing" | "transcribing" | "summarizing" | "done" | "failed";
@@ -30,7 +31,7 @@ export interface MeetingSession {
    */
   spans: CaptureSpan[];
   /** Non-fatal capture problem (quota, recorder fault) to surface to the user. */
-  captureWarning: string | null;
+  captureWarning: CaptureWarning | null;
   /** The local microphone is live in the mix right now. */
   micRecording: boolean;
   /**
@@ -84,7 +85,7 @@ interface PersistedSession {
   recordingId: string | null;
   /** Always written; absent only on a record from before Capture Spans. */
   spans?: CaptureSpan[];
-  captureWarning: string | null;
+  captureWarning: CaptureWarning | null;
   promptDismissed: boolean;
   audioWords: boolean | null;
   /** Absent on a record from before silent recordings were refused. */

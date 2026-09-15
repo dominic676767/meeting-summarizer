@@ -135,7 +135,10 @@ async function beginCaptureSpan(tabId: number, s: MeetingSession): Promise<void>
   });
   if (!reply.recording) {
     // getUserMedia/redeem failed — surface it rather than pretend we started.
-    s.captureWarning = reply.error ?? "capture failed to start";
+    s.captureWarning = {
+      message: "Recording could not start. Try the toolbar icon or the shortcut again.",
+      detail: reply.error ?? "capture failed to start",
+    };
   } else {
     s.recording = true;
     s.recordingStartedAt = reply.startedAt ?? Date.now();
@@ -143,7 +146,15 @@ async function beginCaptureSpan(tabId: number, s: MeetingSession): Promise<void>
     // The span joins the Meeting's Audio Recording; the earlier ones stay exactly
     // as they were recorded.
     s.spans = orderedSpans([...s.spans, span]);
-    s.captureWarning = reply.error;
+    // A recorder that started but reported a fault: the audio is being written,
+    // some of it may be missing, and the captions carry the meeting regardless.
+    s.captureWarning = reply.error
+      ? {
+          message:
+            "Recording — some audio could not be saved. Captions are still being captured, so a summary will still land.",
+          detail: reply.error,
+        }
+      : null;
     s.micRecording = reply.micRecording;
     // AND across the Meeting's spans: a Meeting recorded partly without the
     // microphone does not hold the whole of the local user, and the artifact says
@@ -533,7 +544,13 @@ async function statusFor(tabId: number): Promise<StatusReply> {
   if (s?.recording) {
     try {
       const os = await sendToOffscreen({ type: "offscreen-status" });
-      if (os.error) captureWarning = os.error;
+      if (os.error) {
+        captureWarning = {
+          message:
+            "Recording — some audio could not be saved. Captions are still being captured, so a summary will still land.",
+          detail: os.error,
+        };
+      }
       micRecording = os.micRecording;
       micError = os.micError;
     } catch {
@@ -651,8 +668,11 @@ ext.runtime.onMessage.addListener((raw: unknown, sender) => {
       s.micRecording = false;
       s.localMicrophone = false;
       s.micError = "the microphone stopped during the meeting";
-      s.captureWarning =
-        "Your microphone stopped being recorded — your own words from here on will be missing.";
+      s.captureWarning = {
+        message:
+          "Your microphone stopped being recorded — your own words from here on will be missing.",
+        detail: s.micError,
+      };
       await persistSessions();
       await updateBadge(msg.tabId);
       return { ok: true };
@@ -820,7 +840,10 @@ async function reconcileSessions(): Promise<void> {
       // The spans stay put — a later Meeting End still transcribes them.
       s.recording = false;
       s.recordingStartedAt = null;
-      s.captureWarning = "Recording stopped unexpectedly — restart it to keep recording.";
+      s.captureWarning = {
+        message: "Recording stopped unexpectedly — restart it to keep recording.",
+        detail: "the recorder was gone when the service worker woke",
+      };
       await persistSessions();
       await updateBadge(tabId);
     }

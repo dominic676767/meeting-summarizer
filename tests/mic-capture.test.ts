@@ -260,7 +260,7 @@ describe("a silent recording is not a missing recording", () => {
   // session owns and is implementing. The `noSpeech` flag it renders against is
   // in place on Transcript and set by the background. Un-skip when the clause
   // lands — this assertion is the contract it has to satisfy.
-  it.skip("says the recording contained no speech rather than that none was made", () => {
+  it("says the recording contained no speech rather than that none was made", () => {
     // Two different facts: audio WAS recorded here, and the engine ran and heard
     // nothing. Reporting it as "no audio was recorded" would send the reader
     // looking for a broken engine.

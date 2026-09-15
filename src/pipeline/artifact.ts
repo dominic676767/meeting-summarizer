@@ -95,6 +95,18 @@ const PROVENANCE: Record<TranscriptProvenance, { clause: string; sectionLabel: s
 const NO_LOCAL_MIC_CLAUSE = "local microphone not recorded";
 
 /**
+ * Replaces the captions-only clause where a recording existed and simply had
+ * nothing in it.
+ *
+ * "no audio was recorded" is false for a silent Meeting — audio was recorded,
+ * the engine ran, and it heard nothing — and it sends the reader looking for a
+ * broken transcription engine that worked perfectly. The distinction matters
+ * because the two have opposite remedies: one is "start capture next time", the
+ * other is "check your microphone and the meeting's output device".
+ */
+const NO_SPEECH_CLAUSE = "from live captions only — the recording contained no speech";
+
+/**
  * The Meta line is not enough where owners are anonymous: action items are what
  * get acted on, so the caveat is repeated where a wrong owner does its damage.
  */
@@ -154,7 +166,7 @@ function metaLine(
   // reader's, and the artifact is the one thing forwarded to people who never
   // used the extension. Duration answers what the count stood in for, in a unit
   // everyone reads, and the transcript itself is one click away.
-  parts.push(provenanceClause);
+  parts.push(transcript.noSpeech === true ? NO_SPEECH_CLAUSE : provenanceClause);
   // Only where audio was actually recorded: on a caption-only artifact the
   // microphone is beside the point, and naming it would read as a second fault
   // where there is one plain fact already stated.

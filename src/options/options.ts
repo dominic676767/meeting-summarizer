@@ -99,6 +99,7 @@ async function init(): Promise<void> {
   $<HTMLInputElement>("transcription-openai-model").value = s.transcription.openai.model;
   $<HTMLInputElement>("mic-capture").checked = s.micCapture.enabled;
   micCaptureAsLoaded = s.micCapture.enabled;
+  micConsentProviderAsLoaded = s.transcription.provider;
   $<HTMLInputElement>("name-engine").checked = s.nameEngineInArtifact;
   $<HTMLSelectElement>("shape").value = s.shape;
   $<HTMLTextAreaElement>("template-structured").value = s.templates.structured;
@@ -113,6 +114,8 @@ const editorRefreshers: Array<() => void> = [];
  * an untouched box never records consent the user did not give.
  */
 let micCaptureAsLoaded = false;
+/** The Transcription Provider the microphone consent on file was given under. */
+let micConsentProviderAsLoaded: TranscriptionProviderId = "local-whisper";
 const editorUndoClears: Array<() => void> = [];
 
 /**
@@ -209,9 +212,22 @@ $("save").addEventListener("click", async () => {
   // any future change back to a ticked default would silently harvest consent
   // from every incidental Save.
   const micChecked = $<HTMLInputElement>("mic-capture").checked;
+  // Consent has to stay specific to what was promised. A user says yes to the
+  // microphone partly because transcription happens on their machine; selecting a
+  // cloud engine makes that untrue, and their voice would start being uploaded
+  // under a consent that predates the change. So the confirmation is withdrawn
+  // and the disclosure asks again, naming the destination. Failing toward one
+  // extra ask beats failing toward an upload nobody agreed to.
+  const switchedToCloud =
+    s.transcription.provider !== "local-whisper" &&
+    s.transcription.provider !== micConsentProviderAsLoaded;
   s.micCapture = {
     enabled: micChecked,
-    confirmedAt: micChecked === micCaptureAsLoaded ? s.micCapture.confirmedAt : Date.now(),
+    confirmedAt: switchedToCloud
+      ? null
+      : micChecked === micCaptureAsLoaded
+        ? s.micCapture.confirmedAt
+        : Date.now(),
   };
   s.nameEngineInArtifact = $<HTMLInputElement>("name-engine").checked;
   s.shape = $<HTMLSelectElement>("shape").value as SummaryShape;

@@ -135,6 +135,21 @@ export interface TranscriptionProgress {
   startedAt: number;
 }
 
+/**
+ * A capture problem the user should know about while they can still act on it.
+ *
+ * `message` is user-facing copy the producer writes and the popup renders
+ * VISIBLY. `detail` is the raw internal reason and goes to a tooltip. Split
+ * because the visible sentence used to be hardcoded per state while the
+ * producer's string reached only a `title` — so a producer describing one
+ * problem got another problem's copy displayed, and a warning worth acting on
+ * mid-meeting was reachable only by hovering a popup that closes on blur.
+ */
+export interface CaptureWarning {
+  message: string;
+  detail?: string;
+}
+
 export interface StatusReply {
   inMeeting: boolean;
   segmentCount: number;
@@ -164,7 +179,7 @@ export interface StatusReply {
    * recorder fault) surfaced instead of a silent stop. Null when capture is
    * healthy.
    */
-  captureWarning: string | null;
+  captureWarning: CaptureWarning | null;
   /**
    * The microphone's part in this Meeting. Its own axis rather than a boolean,
    * because "not recording your voice" has four different causes and only two of
