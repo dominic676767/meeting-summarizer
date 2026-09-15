@@ -104,7 +104,22 @@ export type OffscreenEventMessage =
    * Audio Recording contains the local user, and a span that goes on claiming
    * otherwise is the same overclaim as calling captions a transcript.
    */
-  | { type: "mic-track-ended"; tabId: number };
+  | { type: "mic-track-ended"; tabId: number }
+  /**
+   * The mixed stream has been silent for a sustained window — long enough that it
+   * is not conversational turn-taking but something wrong the user can still fix
+   * (muted at the OS level, the wrong output device, a permission lost).
+   *
+   * Pushed rather than waited to be polled, because the whole value of this warning
+   * is that it arrives while the meeting is still happening and the popup may never
+   * be opened. `detail` is the internal measure ("no signal for 45s") for the
+   * tooltip; the user-facing sentence is the background's, not the recorder's.
+   *
+   * Drives the WARNING only. Whether the recording is transcribed at all is a
+   * different measurement with a different rule — see `OffscreenStatusReply.
+   * anySignal`.
+   */
+  | { type: "capture-silent"; tabId: number; detail: string };
 
 export type Message =
   | ContentMessage
@@ -215,6 +230,17 @@ export interface OffscreenStatusReply {
   recording: boolean;
   startedAt: number | null;
   encodedBytes: number;
+  /**
+   * Meaningful signal reached the mixed stream at some point during this Capture
+   * Span. Measured on the audio rather than inferred from `encodedBytes`, which
+   * only ever proved the encoder ran — and it ran perfectly for both of the empty
+   * artifacts that made this necessary.
+   *
+   * Deliberately NOT "a sustained silence occurred": that is the warning's
+   * measurement, and using it here would throw a meeting that started late to
+   * captions and claim it held no speech. This one is about the whole span.
+   */
+  anySignal: boolean;
   error: string | null;
   /** The local microphone is live in the mix. Reported from the recorder rather
    * than assumed from the request, because the request can be refused. */

@@ -64,6 +64,18 @@ export interface MeetingSession {
    */
   noSpeech: boolean;
   /**
+   * Whether any Capture Span of this Meeting carried meaningful signal on the
+   * mixed stream, as the recorder measured it. Null until a span has been measured.
+   *
+   * Folded with OR across spans — the opposite of `localMicrophone` — because one
+   * span holding the conversation is enough to make the Meeting's audio worth
+   * transcribing. It is the ONLY input to the decision to skip transcription, and
+   * deliberately not the same fact as the sustained-silence *warning*: a Meeting
+   * silent for its first five minutes and normal afterwards must warn and still be
+   * transcribed from audio.
+   */
+  hadAnySignal: boolean | null;
+  /**
    * The live transcription measure. Deliberately not persisted: it arrives from
    * the offscreen document once a second, and writing storage that often to
    * survive a suspension would cost more than re-learning it on the next tick.
@@ -90,6 +102,12 @@ interface PersistedSession {
   audioWords: boolean | null;
   /** Absent on a record from before silent recordings were refused. */
   noSpeech?: boolean;
+  /**
+   * Absent on a record from before the recorder measured the mix. Reads as null —
+   * "never measured" — which is what keeps an extension update mid-Meeting from
+   * discarding audio nobody looked at.
+   */
+  hadAnySignal?: boolean | null;
   /** Absent on a record from before the microphone was mixed in, which is a
    * recording of the remote participants alone — so absent reads as false. */
   micRecording?: boolean;
@@ -155,6 +173,7 @@ async function doRehydrate(): Promise<void> {
         promptDismissed: p.promptDismissed ?? false,
         audioWords: p.audioWords ?? null,
         noSpeech: p.noSpeech ?? false,
+        hadAnySignal: p.hadAnySignal ?? null,
         transcription: null,
         accumulator: TranscriptAccumulator.fromJSON(p.entries),
       });
@@ -185,6 +204,7 @@ export async function persistSessions(): Promise<void> {
         promptDismissed: s.promptDismissed,
         audioWords: s.audioWords,
         noSpeech: s.noSpeech,
+        hadAnySignal: s.hadAnySignal,
         entries: s.accumulator.toJSON(),
       };
     }
@@ -222,6 +242,7 @@ export async function ensureSession(tabId: number, platform: string): Promise<Me
       promptDismissed: false,
       audioWords: null,
       noSpeech: false,
+      hadAnySignal: null,
       transcription: null,
       accumulator: new TranscriptAccumulator(),
     };

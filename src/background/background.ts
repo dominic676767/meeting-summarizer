@@ -18,6 +18,13 @@ import { loadSettings, saveSettings } from "../settings";
 import { fuseTranscript } from "../transcription/fusion";
 import { writeArtifact } from "./artifact-writer";
 import { deriveCaptureState, isDegraded } from "./capture-state";
+import {
+  foldAnySignal,
+  MIC_REVOKED_WARNING,
+  NOTHING_CAPTURED_WARNING,
+  refuseAudioAsSilent,
+  silenceWarning,
+} from "./capture-signal";
 import { foldLocalMicrophone, micCaptureState, shouldCaptureMic } from "./mic-capture";
 import { beginSpan, orderedSpans, spanIdsOf } from "./capture-spans";
 import { isMeetingUrl } from "./meeting-url";
@@ -173,11 +180,22 @@ async function stopRecording(tabId: number, keepOffscreen = false): Promise<void
   const s = await getSession(tabId);
   if (!s) return;
   try {
-    await sendToOffscreen({ type: "offscreen-stop" });
+    const reply = await sendToOffscreen({ type: "offscreen-stop" });
+    // This span's measure of whether any sound reached the mix, OR'd into the
+    // Meeting's. The stop reply is the only place it is complete, and it is a
+    // different fact from the sustained-silence warning: a Meeting whose first span
+    // was silent and whose second carried the whole conversation still has audio.
+    s.hadAnySignal = foldAnySignal(s.hadAnySignal, reply.anySignal);
     if (!keepOffscreen) await closeOffscreenDocument();
   } catch {
     // Offscreen already gone (service-worker restart) — the recorder is stopped
     // regardless; the Audio Recording written so far is preserved.
+    //
+    // And with it went any measure of this span, so it counts as having held sound.
+    // Refusing to transcribe audio nobody managed to look at would throw away a
+    // real meeting; transcribing a silent one costs a wait and is caught anyway by
+    // the check that refuses degenerate output.
+    s.hadAnySignal = true;
   }
   s.recording = false;
   s.recordingStartedAt = null;
@@ -264,7 +282,19 @@ export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | 
   const captionTranscript = sessionToTranscript(s);
   let transcript = captionTranscript;
 
-  if (hasRecording(s) && s.recordingId) {
+  if (hasRecording(s) && s.recordingId && refuseAudioAsSilent(s.hadAnySignal)) {
+    // No sound reached the mix for any span of this Meeting, so there is nothing in
+    // the audio for a Transcription Provider to hear — and asking one anyway is
+    // exactly how two Summary Artifacts came to hold Whisper's "you" under an LLM
+    // apologising that there was nothing to summarize. The captions carry the
+    // Meeting instead, and the artifact says why.
+    //
+    // Not held for retry: a retry can only find the same silence.
+    s.audioWords = false;
+    s.noSpeech = true;
+    transcript = { ...captionTranscript, noSpeech: true };
+    console.info("meeting-summarizer: recording carried no signal; falling back to captions");
+  } else if (hasRecording(s) && s.recordingId) {
     s.state = "transcribing";
     s.transcription = null;
     await persistSessions();
@@ -311,6 +341,15 @@ export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | 
   if (transcript.segments.length === 0) {
     // Nothing was said, or nothing reached us. Not a failure and nothing to
     // hold — leave the session as it was so a later trigger can still act.
+    //
+    // No Provider is asked either way. An LLM handed an empty transcript answers
+    // with an apology, and that apology was the summary body of both artifacts this
+    // ticket exists to remove: the guard is that this returns before summarizing.
+    //
+    // Where the silence is why, say so. A recording that carried nothing and no
+    // captions to fall back on is a Meeting that produced no file, and a user left
+    // to work that out from the absence of one has been told nothing at all.
+    if (s.noSpeech) s.captureWarning = NOTHING_CAPTURED_WARNING;
     s.state = "capturing";
     await persistSessions();
     await updateBadge(tabId);
@@ -667,14 +706,29 @@ ext.runtime.onMessage.addListener((raw: unknown, sender) => {
       // the local user, and the user deserves to know while they can still act.
       s.micRecording = false;
       s.localMicrophone = false;
-      s.micError = "the microphone stopped during the meeting";
-      s.captureWarning = {
-        message:
-          "Your microphone stopped being recorded — your own words from here on will be missing.",
-        detail: s.micError,
-      };
+      s.micError = MIC_REVOKED_WARNING.detail ?? null;
+      // Assigned outright, unlike the silence warning below: a microphone that has
+      // just died is newer and more actionable than a silent window that has
+      // already passed, and it names the cause where silence only names the symptom.
+      s.captureWarning = MIC_REVOKED_WARNING;
       await persistSessions();
       await updateBadge(msg.tabId);
+      return { ok: true };
+    })();
+  }
+  // The mixed stream has been silent long enough for something to be wrong with it.
+  // Surfaced during the meeting, which is the whole point: the two artifacts this
+  // guards against were discovered after the audio had already been discarded.
+  if (msg.type === "capture-silent") {
+    return (async () => {
+      const s = await getSession(msg.tabId);
+      if (!s?.recording) return { ok: true };
+      // Asks rather than assigns, so a microphone revocation survives it — losing
+      // the microphone is a *cause* of silence, and the vaguer message would land a
+      // moment later and bury the specific one.
+      s.captureWarning = silenceWarning(s.captureWarning, msg.detail);
+      console.warn(`meeting-summarizer: recording is silent — ${msg.detail}`);
+      await persistSessions();
       return { ok: true };
     })();
   }

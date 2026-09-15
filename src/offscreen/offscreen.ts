@@ -18,6 +18,7 @@ import {
 } from "../transcription/provider";
 import { deleteSpan, openAudioStore, readSpan, type AudioStore } from "./audio-store";
 import { mixCapture, type MixGraph } from "./audio-mix";
+import { FRESH_WATCH, noSignalDetail, observeSamples, type SignalWatch } from "./signal";
 
 let recorder: MediaRecorder | undefined;
 let context: AudioContext | undefined;
@@ -28,6 +29,11 @@ let startedAt = 0;
 let encodedBytes = 0;
 let lastError: string | null = null;
 let micError: string | null = null;
+// What the mixed stream has actually carried. Kept past `stop()` on purpose: the
+// stop reply is where the service worker learns whether this span held any sound,
+// and by then the graph is gone.
+let watch: SignalWatch = FRESH_WATCH;
+let signalTimer: ReturnType<typeof setInterval> | undefined;
 // Chunk writes are chained so they land in emission order even though
 // MediaRecorder fires ondataavailable synchronously while a prior write is
 // still in flight.
@@ -64,15 +70,85 @@ async function captureMicrophone(): Promise<MediaStream | undefined> {
 }
 
 /** The real mix graph: one AudioContext, so one clock for both sources. */
-function webAudioGraph(ctx: AudioContext): MixGraph<AudioNode> {
-  const recorded = ctx.createMediaStreamDestination();
+function webAudioGraph(ctx: AudioContext): MixGraph<AudioNode> & { readonly mix: AudioNode } {
+  const sink = ctx.createMediaStreamDestination();
+  // The sum, as a node rather than as the recorder's sink, because a
+  // MediaStreamAudioDestinationNode has no output and so cannot be read from. This
+  // bus is what lets the silence watcher measure the exact signal the recorder
+  // receives; without it the only way to measure the mix would be to round-trip its
+  // stream back into the graph, and a fault in that round-trip would read as silence
+  // in a recording that was perfectly fine.
+  const mix = ctx.createGain();
+  mix.connect(sink);
   return {
     source: (s) => ctx.createMediaStreamSource(s),
     connect: (from, to) => from.connect(to),
     speakers: ctx.destination,
-    recorded,
-    recordedStream: recorded.stream,
+    recorded: mix,
+    recordedStream: sink.stream,
+    mix,
   };
+}
+
+/**
+ * How often the mix is read. Shorter than the window each read returns (see
+ * below), so consecutive reads overlap and no audio falls between them — sampling
+ * a slice of every second instead would let a meeting with sparse speech look
+ * silent.
+ */
+const SIGNAL_POLL_MS = 500;
+
+/**
+ * Watches the MIXED stream — the tab and the microphone summed, which is what gets
+ * recorded — and tells the service worker the first time it has been silent long
+ * enough to mean something.
+ *
+ * On the mix rather than on bytes written, because bytes only prove the encoder
+ * ran: it ran, correctly, for both of the artifacts that held nothing but the word
+ * "you". The rules themselves are in `./signal`, pure and tested over sample data;
+ * this function is the browser plumbing that feeds them.
+ */
+function watchSignal(ctx: AudioContext, mix: AudioNode, tabId: number): void {
+  const analyser = ctx.createAnalyser();
+  // The largest window the analyser offers — about 0.7s at 48 kHz — so each read
+  // is an average over most of a second rather than a 40ms glimpse.
+  analyser.fftSize = 32_768;
+  mix.connect(analyser);
+  // Drained into a stream nothing consumes, because an analyser with no onward path
+  // is not guaranteed to be pulled. Deliberately NOT the speakers, at any gain: the
+  // mix carries the microphone, and one careless edit to a zero-gain connection
+  // there would echo the user back to themselves (ADR-0007). Nothing can be heard
+  // through a discarded MediaStream.
+  analyser.connect(ctx.createMediaStreamDestination());
+
+  const samples = new Float32Array(analyser.fftSize);
+  let readAt = Date.now();
+  watch = FRESH_WATCH;
+  signalTimer = setInterval(() => {
+    analyser.getFloatTimeDomainData(samples);
+    const now = Date.now();
+    const elapsedMs = now - readAt;
+    readAt = now;
+    const warned = watch.hadSilentWindow;
+    watch = observeSamples(watch, samples, elapsedMs);
+    // Once per Capture Span, at the moment the window closes. Pushed rather than
+    // left for the next status poll because the popup may never be opened, and a
+    // warning the user reads after the meeting is the defect, not the fix. Not
+    // repeated, because a warning that keeps arriving is a warning that gets
+    // dismissed — and the sentence says "yet", which is only true the first time.
+    if (!warned && watch.hadSilentWindow) {
+      void ext.runtime
+        .sendMessage({
+          type: "capture-silent",
+          tabId,
+          detail: noSignalDetail(watch),
+        } satisfies OffscreenEventMessage)
+        .catch(() => {
+          // Service worker mid-restart; the span's own measure still reaches it in
+          // the stop reply, which is what the end-of-meeting decision reads.
+        });
+    }
+  }, SIGNAL_POLL_MS);
 }
 
 /** Records one Capture Span into its own file. A second Capture Start in the same
@@ -132,7 +208,10 @@ async function start(
   // user hears themselves. One graph also means one clock, which is what keeps
   // Utterance offsets aligned for fusion (ADR-0007).
   context = new AudioContext();
-  const mixed = mixCapture(webAudioGraph(context), { tab: stream, mic: micStream });
+  const graph = webAudioGraph(context);
+  const mixed = mixCapture(graph, { tab: stream, mic: micStream });
+  // Watched at the sum itself, so what is measured is exactly what is recorded.
+  watchSignal(context, graph.mix, tabId);
 
   encodedBytes = 0;
   writeChain = Promise.resolve();
@@ -165,6 +244,11 @@ async function start(
 async function stop(): Promise<void> {
   const r = recorder;
   recorder = undefined;
+  // The watcher stops with the recorder, but `watch` is left standing: this stop's
+  // own reply is how the service worker learns whether the span held any sound, and
+  // the next Capture Start is what resets it.
+  clearInterval(signalTimer);
+  signalTimer = undefined;
   if (r && r.state !== "inactive") {
     await new Promise<void>((resolve) => {
       r.onstop = () => resolve();
@@ -191,6 +275,10 @@ function status(): OffscreenStatusReply {
     recording: recorder !== undefined,
     startedAt: recorder ? startedAt : null,
     encodedBytes,
+    // The span's whole-length measure, not the warning's. Read by the service
+    // worker off the stop reply to decide whether this Meeting's audio is worth
+    // transcribing at all.
+    anySignal: watch.hadAnySignal,
     error: lastError,
     // Reported from the live stream rather than from the request: asking for the
     // microphone and getting it are different things.
