@@ -28,11 +28,11 @@ export type MicCaptureState = "off" | "unconfirmed" | "armed" | "recording" | "u
 /**
  * Whether this Capture Start should ask for the microphone at all.
  *
- * On by default (a meeting summarizer that cannot hear its own user is broken),
- * but never before the disclosure has been confirmed: a permission escalation the
- * user was not told about is one they did not agree to, and Chromium cannot show
- * its own prompt from an offscreen document, so this is the only disclosure there
- * is.
+ * Off until the user has BOTH enabled it and answered the disclosure, and both
+ * halves fail closed on their own (ADR-0007). Chromium cannot show its own prompt
+ * from an offscreen document, and `audioCapture` grants the microphone without
+ * one, so this extension's disclosure is not an extra courtesy — it is the only
+ * disclosure that exists.
  */
 export function shouldCaptureMic(s: MicCaptureSettings): boolean {
   return s.enabled && s.confirmedAt !== null;

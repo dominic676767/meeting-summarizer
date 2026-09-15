@@ -217,11 +217,12 @@ export interface TranscriptionSettings {
 /**
  * Whether the local microphone joins the Audio Recording.
  *
- * On by default: the meeting tab carries only the remote participants, so without
- * the microphone the user's own contributions are absent from every summary
- * (ADR-0007). But recording somebody's microphone is a privacy escalation, so it
- * is disclosed and confirmed once before it ever runs — an offscreen document
- * cannot show Chromium's own permission prompt, which makes this the disclosure.
+ * The meeting tab carries only the remote participants, so without the microphone
+ * the user's own contributions are absent from every summary (ADR-0007). Off by
+ * default all the same: recording somebody's microphone is a privacy escalation,
+ * so it is disclosed and confirmed once before it ever runs — an offscreen
+ * document cannot show Chromium's own permission prompt, which makes this
+ * extension's disclosure the only one there is.
  */
 export interface MicCaptureSettings {
   enabled: boolean;
