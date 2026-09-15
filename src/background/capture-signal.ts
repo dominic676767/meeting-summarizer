@@ -57,8 +57,14 @@ export function silenceWarning(current: CaptureWarning | null, detail: string): 
  * that matters when there is no "here on" and nothing was captured at all.
  */
 export const NOTHING_CAPTURED_WARNING: CaptureWarning = {
+  // "Nothing to summarize" rather than "no summary to write": at this moment the
+  // user does not care what we can produce. And it ends on the forward action,
+  // because nothing here is recoverable — the meeting is over and the content is
+  // gone, so the only useful thing left to say is what makes the next one work. A
+  // message that reports a total loss with no next step is where someone decides
+  // the extension does not work and stops opening it.
   message:
-    "Nothing was captured from this meeting — no sound reached the recording and no captions were picked up, so there is no summary to write.",
+    "Nothing was captured from this meeting — no sound reached the recording and no captions were picked up, so there was nothing to summarize. Before the next one, turn on live captions and check the meeting's audio is playing through this computer.",
   detail: "no audio signal and no caption segments",
 };
 
