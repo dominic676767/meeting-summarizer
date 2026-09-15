@@ -97,18 +97,79 @@ async function init(): Promise<void> {
   $<HTMLSelectElement>("whisper-model").value = s.transcription.localWhisper.model;
   $<HTMLInputElement>("transcription-openai-key").value = s.transcription.openai.apiKey;
   $<HTMLInputElement>("transcription-openai-model").value = s.transcription.openai.model;
+  $<HTMLInputElement>("mic-capture").checked = s.micCapture.enabled;
+  micCaptureAsLoaded = s.micCapture.enabled;
   $<HTMLInputElement>("name-engine").checked = s.nameEngineInArtifact;
   $<HTMLSelectElement>("shape").value = s.shape;
   $<HTMLTextAreaElement>("template-structured").value = s.templates.structured;
   $<HTMLTextAreaElement>("template-narrative").value = s.templates.narrative;
+  for (const refresh of editorRefreshers) refresh();
 }
 
-$("reset-structured").addEventListener("click", () => {
-  $<HTMLTextAreaElement>("template-structured").value = DEFAULT_TEMPLATES.structured;
-});
-$("reset-narrative").addEventListener("click", () => {
-  $<HTMLTextAreaElement>("template-narrative").value = DEFAULT_TEMPLATES.narrative;
-});
+const editorRefreshers: Array<() => void> = [];
+
+/**
+ * The microphone checkbox as the page loaded it. Save compares against this so
+ * an untouched box never records consent the user did not give.
+ */
+let micCaptureAsLoaded = false;
+const editorUndoClears: Array<() => void> = [];
+
+/**
+ * Reset, made undoable rather than confirmed.
+ *
+ * A modal would be the wrong instrument: a confirm on a two-click path trains
+ * people to click through it, and this task needs neither interruption nor
+ * protected focus. So Reset does the thing and offers it back. The offer stands
+ * until save, navigation, or an edit — deliberately with no timer, because a
+ * timed undo makes the user race a clock they never saw start.
+ *
+ * Each template owns its own undo state; resetting one must not withdraw the
+ * other's offer.
+ */
+function wireTemplateEditor(shape: "structured" | "narrative"): void {
+  const area = $<HTMLTextAreaElement>(`template-${shape}`);
+  const btn = $<HTMLButtonElement>(`reset-${shape}`);
+  const marker = $(`edited-${shape}`);
+  const resetLabel = btn.textContent ?? "Reset to default";
+  const undoLabel = `Undo reset of ${shape} template`;
+  let previous: string | null = null;
+
+  /** A collapsed editor must not conceal a change the user made. */
+  function refreshMarker(): void {
+    marker.hidden = area.value === DEFAULT_TEMPLATES[shape];
+  }
+
+  function clearUndo(): void {
+    previous = null;
+    btn.textContent = resetLabel;
+  }
+
+  btn.addEventListener("click", () => {
+    if (previous === null) {
+      previous = area.value;
+      area.value = DEFAULT_TEMPLATES[shape];
+      btn.textContent = undoLabel;
+    } else {
+      area.value = previous;
+      clearUndo();
+    }
+    refreshMarker();
+  });
+
+  // Typing means the user has moved on from the reset; the old text is no longer
+  // what they would expect Undo to bring back.
+  area.addEventListener("input", () => {
+    clearUndo();
+    refreshMarker();
+  });
+
+  editorRefreshers.push(refreshMarker);
+  editorUndoClears.push(clearUndo);
+}
+
+wireTemplateEditor("structured");
+wireTemplateEditor("narrative");
 
 $("save").addEventListener("click", async () => {
   const s = await loadSettings();
@@ -141,6 +202,17 @@ $("save").addEventListener("click", async () => {
       model: $<HTMLInputElement>("transcription-openai-model").value.trim(),
     },
   };
+  // Consent is only recorded when the user actually MOVED the checkbox. Saving
+  // the page for an unrelated reason — changing the summary shape, pasting a key
+  // — must never be read as answering the microphone disclosure: leaving a box
+  // as you found it is the absence of a decision, not a decision. Without this,
+  // any future change back to a ticked default would silently harvest consent
+  // from every incidental Save.
+  const micChecked = $<HTMLInputElement>("mic-capture").checked;
+  s.micCapture = {
+    enabled: micChecked,
+    confirmedAt: micChecked === micCaptureAsLoaded ? s.micCapture.confirmedAt : Date.now(),
+  };
   s.nameEngineInArtifact = $<HTMLInputElement>("name-engine").checked;
   s.shape = $<HTMLSelectElement>("shape").value as SummaryShape;
   s.templates = {
@@ -155,6 +227,7 @@ $("save").addEventListener("click", async () => {
   try {
     await saveSettings(s);
     result.classList.remove("failed");
+    for (const clear of editorUndoClears) clear();
     result.textContent = keyMissingFor(s)
       ? `Saved — but ${keyMissingFor(s)} still needs a key before a meeting can be summarized.`
       : "Saved.";

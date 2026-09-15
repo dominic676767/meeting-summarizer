@@ -41,6 +41,10 @@ function mountPrompt(): void {
       .label { font-weight: 600; }
       .title { color: #555; font-size: 12px; margin: 6px 0 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .hint { color: #555; font-size: 12px; margin-bottom: 10px; }
+      /* The microphone disclosure, in the same Muted supporting voice as the
+         title: this card is the surface the user reads immediately before
+         pressing the shortcut, so it is where being told beforehand happens. */
+      .mic { color: #555; font-size: 12px; margin-bottom: 10px; }
       kbd {
         font: 11px system-ui, sans-serif; background: #fff; border: 1px solid #eee;
         border-radius: 4px; padding: 1px 5px;
@@ -54,6 +58,7 @@ function mountPrompt(): void {
     <div class="card" role="status" aria-live="polite" hidden>
       <div class="row"><span class="dot" aria-hidden="true"></span><span class="label"></span></div>
       <div class="title"></div>
+      <div class="mic"></div>
       <div class="hint"></div>
       <button type="button" class="dismiss">Not now</button>
     </div>`;
@@ -63,8 +68,31 @@ function mountPrompt(): void {
   const dot = root.querySelector(".dot") as HTMLElement;
   const label = root.querySelector(".label") as HTMLElement;
   const title = root.querySelector(".title") as HTMLElement;
+  const mic = root.querySelector(".mic") as HTMLElement;
   const hint = root.querySelector(".hint") as HTMLElement;
   const dismiss = root.querySelector(".dismiss") as HTMLButtonElement;
+
+  /**
+   * What the microphone will do once capture starts, stated before it does.
+   *
+   * Every state gets a sentence, including the ones that mean "not yet": a card
+   * that goes quiet about the microphone in the one case where the user has to act
+   * is the case that matters.
+   */
+  function micLine(state: CaptureStateReply["mic"]): string {
+    switch (state) {
+      case "armed":
+        return "Your microphone will be recorded too.";
+      case "off":
+        return "Your microphone will not be recorded.";
+      case "unconfirmed":
+        return "Your microphone is not being recorded, so your own words will be missing — turn it on from the extension popup.";
+      case "unavailable":
+        return "Your microphone could not be used, so your own words will be missing.";
+      case "recording":
+        return "Microphone on.";
+    }
+  }
 
   dismiss.addEventListener("click", () => {
     card.hidden = true;
@@ -93,8 +121,12 @@ function mountPrompt(): void {
       card.hidden = false;
       card.classList.add("collapsed");
       dot.classList.add("live");
-      label.textContent = `Recording — ${elapsed(reply.recordingStartedAt ?? Date.now())}`;
+      // The collapsed line names the microphone rather than leaving the user to
+      // guess: it is the difference between recording the meeting and recording
+      // the meeting and themselves.
+      label.textContent = `Recording, microphone ${reply.mic === "recording" ? "on" : "off"} — ${elapsed(reply.recordingStartedAt ?? Date.now())}`;
       title.hidden = true;
+      mic.hidden = true;
       hint.hidden = true;
       dismiss.hidden = true;
     } else if (reply.state === "detected" && !reply.dismissed) {
@@ -104,6 +136,8 @@ function mountPrompt(): void {
       label.textContent = "Not recording";
       title.hidden = false;
       title.textContent = reply.title ?? "";
+      mic.hidden = false;
+      mic.textContent = micLine(reply.mic);
       hint.hidden = false;
       hint.innerHTML = shortcutHint(reply.shortcut);
       dismiss.hidden = false;

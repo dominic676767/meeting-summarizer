@@ -14,10 +14,11 @@ import type { CaptureSpan, HeldRecording, Settings, Utterance } from "../domain/
 import { artifactFilename } from "../pipeline/filename";
 import { summarizeTranscript } from "../pipeline/pipeline";
 import { createProviderClient } from "../providers/factory";
-import { loadSettings } from "../settings";
+import { loadSettings, saveSettings } from "../settings";
 import { fuseTranscript } from "../transcription/fusion";
 import { writeArtifact } from "./artifact-writer";
 import { deriveCaptureState, isDegraded } from "./capture-state";
+import { foldLocalMicrophone, micCaptureState, shouldCaptureMic } from "./mic-capture";
 import { beginSpan, orderedSpans, spanIdsOf } from "./capture-spans";
 import { isMeetingUrl } from "./meeting-url";
 import { getHeld, holdTranscript, listHeld, releaseHeld, updateHeldReason } from "./held";
@@ -58,7 +59,8 @@ async function ensureOffscreenDocument(): Promise<void> {
   await ext.offscreen.createDocument({
     url: "offscreen.html",
     reasons: ["USER_MEDIA", "WORKERS"],
-    justification: "Record meeting tab audio and transcribe what was actually said.",
+    justification:
+      "Record the meeting's audio and the user's microphone, and transcribe what was actually said.",
   });
 }
 
@@ -115,6 +117,11 @@ async function startCapture(tabId: number): Promise<void> {
 }
 
 async function beginCaptureSpan(tabId: number, s: MeetingSession): Promise<void> {
+  // Read now rather than remembered: the user may have answered the microphone
+  // disclosure since the last Capture Start, and this is the moment that decides
+  // whether their own voice is in this span.
+  const settings = await loadSettings();
+  const mic = shouldCaptureMic(settings.micCapture);
   const streamId = await getMediaStreamId(tabId);
   await ensureOffscreenDocument();
   const recordingId = s.recordingId ?? `${tabId}-${s.startedAt}`;
@@ -124,6 +131,7 @@ async function beginCaptureSpan(tabId: number, s: MeetingSession): Promise<void>
     streamId,
     spanId: span.spanId,
     tabId,
+    mic,
   });
   if (!reply.recording) {
     // getUserMedia/redeem failed — surface it rather than pretend we started.
@@ -136,6 +144,12 @@ async function beginCaptureSpan(tabId: number, s: MeetingSession): Promise<void>
     // as they were recorded.
     s.spans = orderedSpans([...s.spans, span]);
     s.captureWarning = reply.error;
+    s.micRecording = reply.micRecording;
+    // AND across the Meeting's spans: a Meeting recorded partly without the
+    // microphone does not hold the whole of the local user, and the artifact says
+    // so rather than rounding up.
+    s.localMicrophone = foldLocalMicrophone(s.localMicrophone, reply.micRecording);
+    s.micError = reply.micError;
   }
   await persistSessions();
   await updateBadge(tabId);
@@ -156,6 +170,9 @@ async function stopRecording(tabId: number, keepOffscreen = false): Promise<void
   }
   s.recording = false;
   s.recordingStartedAt = null;
+  // The microphone track is released with the recorder, so nothing may go on
+  // claiming it is live.
+  s.micRecording = false;
   await persistSessions();
   await updateBadge(tabId);
 }
@@ -258,7 +275,13 @@ export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | 
     }
     if (s.audioWords) {
       transcript = { ...fuseTranscript(captionTranscript, outcome.utterances), engine: outcome.engine };
-    } else if (!outcome.cancelled && !s.noSpeech) {
+    } else if (s.noSpeech) {
+      // Carried onto the Transcript so the artifact can say the recording was
+      // silent, rather than "no audio was recorded" — which is false, and would
+      // leave a reader concluding the engine broke when it worked perfectly and
+      // there was nothing to hear.
+      transcript = { ...captionTranscript, noSpeech: true };
+    } else if (!outcome.cancelled) {
       // A transcription outage must cost a retry, not the meeting: hold the
       // Audio Recording so the user can retry it — after switching Transcription
       // Provider if that is what it takes. The caption-only summary below still
@@ -499,13 +522,20 @@ async function transcribeHeldRecording(
 
 async function statusFor(tabId: number): Promise<StatusReply> {
   const s = await getSession(tabId);
+  const settings = await loadSettings();
   let captureWarning = s?.captureWarning ?? null;
+  let micRecording = s?.micRecording ?? false;
+  let micError = s?.micError ?? null;
   // Poll the offscreen recorder while live so a quota failure that develops
-  // mid-recording surfaces as a warning rather than a silent stop.
+  // mid-recording surfaces as a warning rather than a silent stop. The microphone
+  // is read from the same reply for the same reason: the indicator must report the
+  // recorder's state, not the request we made of it.
   if (s?.recording) {
     try {
       const os = await sendToOffscreen({ type: "offscreen-status" });
       if (os.error) captureWarning = os.error;
+      micRecording = os.micRecording;
+      micError = os.micError;
     } catch {
       // Offscreen not reachable — leave the last known warning in place.
     }
@@ -529,6 +559,12 @@ async function statusFor(tabId: number): Promise<StatusReply> {
     }),
     noSpeech: s?.noSpeech ?? false,
     captureWarning,
+    mic: micCaptureState({
+      settings: settings.micCapture,
+      recording: s?.recording ?? false,
+      micRecording,
+    }),
+    micDetail: micError,
     transcription: s?.transcription ?? null,
   };
 }
@@ -536,6 +572,7 @@ async function statusFor(tabId: number): Promise<StatusReply> {
 function captureStateFor(tabId: number): Promise<CaptureStateReply> {
   return (async () => {
     const s = await getSession(tabId);
+    const settings = await loadSettings();
     return {
       state: deriveCaptureState({
         sessionState: s?.state,
@@ -548,8 +585,27 @@ function captureStateFor(tabId: number): Promise<CaptureStateReply> {
       recordingStartedAt: s?.recordingStartedAt ?? null,
       dismissed: s?.promptDismissed ?? false,
       shortcut: await startShortcut(),
+      mic: micCaptureState({
+        settings: settings.micCapture,
+        recording: s?.recording ?? false,
+        micRecording: s?.micRecording ?? false,
+      }),
     };
   })();
+}
+
+/**
+ * Records the user's answer to the microphone disclosure. Either answer counts as
+ * an answer, so the notice stops asking: a user who chose the other participants
+ * only has decided, and must not be nagged into an escalation they declined.
+ *
+ * Takes effect at the next Capture Start, never mid-span: switching it off cannot
+ * reach into a recorder that already has the microphone open, and pretending
+ * otherwise is exactly the sort of claim the indicator must not make.
+ */
+async function setMicCapture(enabled: boolean): Promise<void> {
+  const settings = await loadSettings();
+  await saveSettings({ ...settings, micCapture: { enabled, confirmedAt: Date.now() } });
 }
 
 async function dismissPrompt(tabId: number): Promise<void> {
@@ -585,6 +641,23 @@ ext.runtime.onMessage.addListener((raw: unknown, sender) => {
   // The capture track died on its own — navigation or a tab crash. Whatever was
   // recorded is real and must reach a summary or a Held Recording, so this is
   // treated as a Meeting End rather than just a flag to clear.
+  if (msg.type === "mic-track-ended") {
+    return (async () => {
+      const s = await getSession(msg.tabId);
+      if (!s?.recording) return { ok: true };
+      // The recording continues on the remote participants alone. Two things have
+      // to change or the artifact lies: this Meeting no longer holds the whole of
+      // the local user, and the user deserves to know while they can still act.
+      s.micRecording = false;
+      s.localMicrophone = false;
+      s.micError = "the microphone stopped during the meeting";
+      s.captureWarning =
+        "Your microphone stopped being recorded — your own words from here on will be missing.";
+      await persistSessions();
+      await updateBadge(msg.tabId);
+      return { ok: true };
+    })();
+  }
   if (msg.type === "capture-track-ended") {
     return (async () => {
       const s = await getSession(msg.tabId);
@@ -630,6 +703,13 @@ ext.runtime.onMessage.addListener((raw: unknown, sender) => {
       } catch {
         // Offscreen already gone — the wait is over either way.
       }
+      return statusFor(tab?.id ?? -1);
+    })();
+  }
+  if (msg.type === "set-mic-capture") {
+    return (async () => {
+      await setMicCapture(msg.enabled);
+      const [tab] = await ext.tabs.query({ active: true, currentWindow: true });
       return statusFor(tab?.id ?? -1);
     })();
   }

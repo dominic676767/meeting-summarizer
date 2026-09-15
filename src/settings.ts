@@ -15,6 +15,16 @@ export const DEFAULT_SETTINGS: Settings = {
   // Local WASM Whisper is the working default: no API key, and the audio never
   // leaves the machine (ADR-0004). Cloud transcription is strictly opt-in.
   nameEngineInArtifact: false,
+  // On by default — the meeting tab carries only the other participants, so
+  // without this the user's own words are missing from every summary (ADR-0007).
+  //
+  // Off by default all the same. Recording somebody's microphone is the one
+  // escalation in this extension that cannot be taken back, so the SAFE state
+  // must not depend on a second mechanism holding: `enabled: true` gated by a
+  // confirmation would start recording a microphone the moment anything reached
+  // around that gate. Off, and the disclosure turns it on — the failure mode is
+  // silence rather than surveillance.
+  micCapture: { enabled: false, confirmedAt: null },
   transcription: {
     provider: "local-whisper",
     // No engine detects the language, so a default has to name one. English is
@@ -40,6 +50,11 @@ export async function loadSettings(): Promise<Settings> {
     openai: { ...DEFAULT_SETTINGS.openai, ...s.openai },
     ollama: { ...DEFAULT_SETTINGS.ollama, ...s.ollama },
     bedrock: { ...DEFAULT_SETTINGS.bedrock, ...s.bedrock },
+    // A user upgrading into microphone capture inherits `enabled: true` and a
+    // null `confirmedAt`, so their next meeting is unchanged until they answer
+    // the disclosure. An upgrade must never start recording a microphone on its
+    // own.
+    micCapture: { ...DEFAULT_SETTINGS.micCapture, ...s.micCapture },
     // Additive for a v1 user: existing keys, templates and shape are untouched
     // and transcription arrives with its working default.
     transcription: {

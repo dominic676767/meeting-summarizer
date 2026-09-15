@@ -1,5 +1,6 @@
 // Message protocol between content scripts, background, offscreen, and popup.
 import type { CaptionSnapshot } from "./adapters/adapter";
+import type { MicCaptureState } from "./background/mic-capture";
 import type {
   CaptureSpan,
   HeldRecording,
@@ -38,12 +39,31 @@ export type PopupMessage =
   | { type: "skip-transcription" }
   | { type: "list-held" }
   | { type: "retry-held"; id: string }
-  | { type: "retry-held-recording"; recordingId: string };
+  | { type: "retry-held-recording"; recordingId: string }
+  /**
+   * The user's answer to the microphone disclosure, from the popup. Either answer
+   * confirms it, so the notice stops asking; `enabled: false` leaves today's
+   * tab-only capture in place.
+   */
+  | { type: "set-mic-capture"; enabled: boolean };
 
 export type OffscreenMessage =
   /** One Capture Span per start: the span id is the audio file it writes, and a
    * later Capture Start in the same Meeting names a different one (ADR-0005). */
-  | { type: "offscreen-start"; streamId: string; spanId: string; tabId: number }
+  | {
+      type: "offscreen-start";
+      streamId: string;
+      spanId: string;
+      tabId: number;
+      /**
+       * Ask for the local microphone and mix it in, so one file holds both sides
+       * of the meeting (ADR-0007). Decided by the service worker from settings and
+       * the disclosure, never by the recorder: the offscreen document does the
+       * capture, it does not get to decide whether the user agreed to it. A
+       * refused microphone degrades to tab-only capture rather than failing.
+       */
+      mic: boolean;
+    }
   | { type: "offscreen-stop" }
   | { type: "offscreen-status" }
   | {
@@ -75,7 +95,16 @@ export type OffscreenEventMessage =
    * crashed. Reported so no session goes on claiming `recording: true` for a
    * recording that is not happening.
    */
-  | { type: "capture-track-ended"; tabId: number };
+  | { type: "capture-track-ended"; tabId: number }
+  /**
+   * The MICROPHONE track ended on its own, mid-recording — Chrome's site
+   * controls revoked it, or the device was unplugged. Distinct from
+   * `capture-track-ended` because the recording is still viable: the remote
+   * participants are still being captured. What is no longer true is that the
+   * Audio Recording contains the local user, and a span that goes on claiming
+   * otherwise is the same overclaim as calling captions a transcript.
+   */
+  | { type: "mic-track-ended"; tabId: number };
 
 export type Message =
   | ContentMessage
@@ -136,6 +165,15 @@ export interface StatusReply {
    * healthy.
    */
   captureWarning: string | null;
+  /**
+   * The microphone's part in this Meeting. Its own axis rather than a boolean,
+   * because "not recording your voice" has four different causes and only two of
+   * them are things the user should be asked to act on.
+   */
+  mic: MicCaptureState;
+  /** Why the microphone could not be used, for the tooltip. Never the visible
+   * line — the raw reason is Chromium's, not the user's. */
+  micDetail: string | null;
   /** The live measure for the transcribing state; null outside it. */
   transcription: TranscriptionProgress | null;
 }
@@ -150,6 +188,12 @@ export interface CaptureStateReply {
   dismissed: boolean;
   /** Keyboard shortcut that starts capture, as the user's platform renders it. */
   shortcut: string | null;
+  /**
+   * The microphone's part in this Meeting. The prompt is the surface the user
+   * reads immediately before invoking capture, so this is where the disclosure has
+   * to land: told before it starts, not discovered afterwards.
+   */
+  mic: MicCaptureState;
 }
 
 export interface OffscreenStatusReply {
@@ -157,6 +201,15 @@ export interface OffscreenStatusReply {
   startedAt: number | null;
   encodedBytes: number;
   error: string | null;
+  /** The local microphone is live in the mix. Reported from the recorder rather
+   * than assumed from the request, because the request can be refused. */
+  micRecording: boolean;
+  /**
+   * Why the microphone could not be used, or null. Kept apart from `error`: a
+   * failed chunk write means audio is being lost, while this means half the
+   * meeting is, and the two have different copy and different urgency.
+   */
+  micError: string | null;
 }
 
 export interface OffscreenTranscribeReply {

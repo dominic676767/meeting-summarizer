@@ -60,12 +60,38 @@ export interface Transcript {
    */
   provenance?: TranscriptProvenance;
   /**
+   * Whether the Audio Recording this Transcript's words came from included the
+   * local microphone, i.e. the user's own voice as well as the remote
+   * participants'.
+   *
+   * Absent reads as false, deliberately: tab audio alone is only half the meeting
+   * (ADR-0007), and a Transcript held from before the microphone was ever mixed in
+   * genuinely has only the other side of the call in it. The absence of a claim
+   * must never be read as a claim that the local user was captured.
+   */
+  localMicrophone?: boolean;
+  /**
    * Which engine produced the words, recorded when the Transcript is built.
    * Whether it reaches the Summary Artifact is the reader's choice, not ours:
    * naming it aids reproducibility but discloses the author's tooling to
    * everyone the file is forwarded to, so it is omitted unless opted in.
    */
   engine?: { id: string; model: string };
+  /**
+   * The Audio Recording was transcribed successfully and contained no speech.
+   *
+   * Only ever true when the engine RAN AND RETURNED NOTHING. Never set when
+   * transcription failed, was skipped, or never happened — those are different
+   * facts, and collapsing them would tell a reader "there was nothing to hear"
+   * about a meeting whose engine actually broke.
+   *
+   * Absent reads as no claim, not as "there was speech": on a caption-only
+   * artifact from before this existed, we do not know which case it was.
+   *
+   * A boolean, deliberately: the reason the detector fired ("rms below threshold")
+   * belongs in the log, not in a document that gets forwarded.
+   */
+  noSpeech?: boolean;
   segments: TranscriptSegment[];
 }
 
@@ -188,6 +214,25 @@ export interface TranscriptionSettings {
   openai: { apiKey: string; model: string };
 }
 
+/**
+ * Whether the local microphone joins the Audio Recording.
+ *
+ * On by default: the meeting tab carries only the remote participants, so without
+ * the microphone the user's own contributions are absent from every summary
+ * (ADR-0007). But recording somebody's microphone is a privacy escalation, so it
+ * is disclosed and confirmed once before it ever runs — an offscreen document
+ * cannot show Chromium's own permission prompt, which makes this the disclosure.
+ */
+export interface MicCaptureSettings {
+  enabled: boolean;
+  /**
+   * Epoch ms the user confirmed the disclosure, either way — accepting or
+   * declining both count, so the notice stops asking. Null means never asked, and
+   * until it is answered capture stays tab-only.
+   */
+  confirmedAt: number | null;
+}
+
 /** Settings persisted in browser.storage.local. */
 export interface Settings {
   provider: ProviderId;
@@ -198,6 +243,8 @@ export interface Settings {
   ollama: { baseUrl: string; model: string };
   bedrock: { apiKey: string; region: string; model: string };
   transcription: TranscriptionSettings;
+  /** Whether the local microphone joins the Audio Recording. */
+  micCapture: MicCaptureSettings;
   /**
    * Name the transcription engine and model in the Summary Artifact. Off by
    * default: it helps a reader judge the words, but an artifact gets forwarded,

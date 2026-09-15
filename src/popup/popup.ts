@@ -7,6 +7,7 @@ import type {
   TranscriptionProgress,
 } from "../messages";
 import type { Settings } from "../domain/types";
+import type { MicCaptureState } from "../background/mic-capture";
 import { loadSettings } from "../settings";
 
 const regionEl = document.getElementById("status-region")!;
@@ -15,6 +16,11 @@ const detailEl = document.getElementById("detail")!;
 const barEl = document.getElementById("model-progress") as HTMLProgressElement;
 const titleEl = document.getElementById("title")!;
 const degradedEl = document.getElementById("degraded")!;
+const micEl = document.getElementById("mic")!;
+const micDisclosureEl = document.getElementById("mic-disclosure")!;
+const micWhyEl = document.getElementById("mic-why")!;
+const micOnBtn = document.getElementById("mic-on") as HTMLButtonElement;
+const micOffBtn = document.getElementById("mic-off") as HTMLButtonElement;
 const startBtn = document.getElementById("start") as HTMLButtonElement;
 const stopBtn = document.getElementById("stop") as HTMLButtonElement;
 const summarizeBtn = document.getElementById("summarize") as HTMLButtonElement;
@@ -35,6 +41,48 @@ const settingsBtn = document.getElementById("open-settings") as HTMLButtonElemen
  */
 const DEGRADED_NO_AUDIO_WORDS = "Captions only — the summary was not built from recorded audio.";
 const DEGRADED_NO_SPEECH = "Captions only — the recording carried no speech.";
+
+/**
+ * The microphone line, per state.
+ *
+ * All Muted supporting text, none of it Alert Red. A microphone switched off is a
+ * deliberate choice and gets no notice at all; one that could not be used is a
+ * fact about this recording rather than something the user can fix mid-meeting,
+ * and the meeting is still being captured either way. The raw Chromium reason
+ * never reaches the visible line — it goes in the tooltip.
+ *
+ * `unconfirmed` is absent because the disclosure below carries it, and `recording`
+ * is the one state the *status* line has to state, because "recording the meeting"
+ * and "recording the meeting and you" are different facts.
+ */
+const MIC_LINE: Partial<Record<MicCaptureState, string>> = {
+  armed: "Your microphone will be included.",
+  recording: "Microphone on — your side of the meeting is being recorded too.",
+  unavailable: "Your microphone could not be used — recording the meeting audio only.",
+};
+
+/**
+ * Why including the microphone is reasonable, in the same breath as the ask.
+ *
+ * Two variants, because the sentence that earns a yes is only true of the local
+ * engine: "everything is transcribed on this machine" is what makes handing over a
+ * microphone acceptable for a member of the public, and it is false the moment a
+ * cloud Transcription Provider is selected — which is exactly when recording your
+ * own voice matters most. The destination is named rather than called "the cloud",
+ * and no retention promise is made, because this product does not control what a
+ * third party does with the audio.
+ */
+function micWhy(s: Settings): string {
+  if (s.transcription.provider === "local-whisper") {
+    return "Your voice is not recorded yet. Including it means the summary covers your side of the meeting too — everything is transcribed on this machine.";
+  }
+  return `Your voice is not recorded yet. Including it means the summary covers your side of the meeting too — and because you have chosen ${TRANSCRIPTION_ENGINE_NAMES[s.transcription.provider]} to transcribe, the recording, including your voice, is uploaded to ${TRANSCRIPTION_ENGINE_NAMES[s.transcription.provider]} to be transcribed.`;
+}
+
+const TRANSCRIPTION_ENGINE_NAMES: Record<Settings["transcription"]["provider"], string> = {
+  "local-whisper": "local Whisper",
+  openai: "OpenAI",
+};
 
 function send<T>(msg: PopupMessage): Promise<T> {
   return ext.runtime.sendMessage(msg) as Promise<T>;
@@ -250,6 +298,16 @@ function render(status: StatusReply): void {
     detailEl.hidden = true;
     barEl.hidden = true;
   }
+  // The disclosure is asked while there is still something to change: before
+  // capture starts, and during it, because a Meeting recorded without the user's
+  // voice can still have its next Capture Span include it.
+  const inMeeting = status.state === "detected" || status.state === "recording";
+  micDisclosureEl.hidden = !(inMeeting && status.mic === "unconfirmed");
+  // Only before capture starts: these sentences are in the future tense, and once
+  // recording the status line states the microphone in the present tense instead.
+  const micLine = status.state === "detected" ? MIC_LINE[status.mic] : undefined;
+  micEl.hidden = micLine === undefined;
+  if (micLine !== undefined) micEl.textContent = micLine;
 
   if (status.state === "transcribing") {
     renderTranscribing(status.transcription);
@@ -262,6 +320,17 @@ function render(status: StatusReply): void {
       statusEl.textContent =
         "Recording — some audio could not be saved. Captions are still being captured, so a summary will still land.";
       statusEl.title = status.captureWarning;
+    } else if (status.mic === "unavailable") {
+      // Above the no-captions warning on purpose: missing captions cost the names
+      // on the action items, a missing microphone costs half the words.
+      statusEl.className = "warning";
+      statusEl.textContent =
+        "Recording the other participants only — your microphone could not be used, so your own words will be missing.";
+      if (status.micDetail) statusEl.title = status.micDetail;
+    } else if (status.mic === "unconfirmed") {
+      statusEl.className = "warning";
+      statusEl.textContent =
+        "Recording the other participants only — your own words will be missing until you answer below.";
     } else if (status.segmentCount === 0) {
       // Captions are no longer the transcript, so their absence no longer costs
       // the meeting — it costs the names on the action items. Still a warning
@@ -272,13 +341,19 @@ function render(status: StatusReply): void {
       // Text-or-Dot: recording is a red dot beside Ink text, never red type —
       // red type means a warning to act on. The dot is decorative to assistive
       // tech because the adjacent words already say "Recording".
+      //
+      // The microphone is named in the words, not in a second colour or a glyph:
+      // "recording" and "recording you as well" are different facts, and the user
+      // must be able to read which one is true at a glance and hear it read out.
       statusEl.className = "recording";
       statusEl.replaceChildren(
         Object.assign(document.createElement("span"), {
           className: "rec-dot",
           ariaHidden: "true",
         }),
-        document.createTextNode(`Recording — ${elapsed(status.recordingStartedAt ?? Date.now())}`),
+        document.createTextNode(
+          `Recording, microphone ${status.mic === "recording" ? "on" : "off"} — ${elapsed(status.recordingStartedAt ?? Date.now())}`,
+        ),
       );
     }
   } else if (status.state === "detected") {
@@ -347,6 +422,17 @@ onAction(startBtn, { type: "start-capture" }, "Starting…");
 onAction(stopBtn, { type: "stop-capture" }, "Stopping…");
 onAction(summarizeBtn, { type: "summarize-now" }, "Summarizing…");
 onAction(skipBtn, { type: "skip-transcription" }, "Skipping…");
+
+// Either answer settles the disclosure, so the notice stops asking. Declining is
+// a real answer and is offered as plainly as accepting: a choice presented with
+// only one button is not a choice.
+micOnBtn.addEventListener("click", async () => {
+  render(await send<StatusReply>({ type: "set-mic-capture", enabled: true }));
+});
+
+micOffBtn.addEventListener("click", async () => {
+  render(await send<StatusReply>({ type: "set-mic-capture", enabled: false }));
+});
 
 settingsBtn.addEventListener("click", () => void ext.runtime.openOptionsPage());
 

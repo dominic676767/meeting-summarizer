@@ -16,6 +16,13 @@
       .hidden { display: none; }
       button { font: inherit; padding: 6px 14px; margin-top: 14px; }
       #saved { color: #0e8a16; margin-left: 8px; }
+      /* <details> is already this system's disclosure idiom — the Summary
+         Artifact folds its transcript the same way — so collapsing the editors
+         costs no new component. */
+      .editor { border: 1px solid #ddd; border-radius: 4px; padding: 12px; margin: 10px 0; }
+      .editor > summary { font-weight: 600; cursor: pointer; }
+      /* A collapsed editor must never conceal a change the user made. */
+      .edited { color: #555; font-weight: 400; font-size: 12px; }
       #saved.failed { color: #aa0000; }
     </style>
   </head>
@@ -69,6 +76,19 @@
       <label for="bedrock-model">Model ID</label>
       <input type="text" id="bedrock-model" />
     </fieldset>
+
+    <h2>Recording</h2>
+
+    <label style="font-weight: 400">
+      <input type="checkbox" id="mic-capture" style="width: auto" />
+      Record my microphone as well as the meeting's audio
+    </label>
+    <p class="note">
+      On by default. The meeting tab carries only the other participants — Teams never sends your
+      own voice back to you — so with this off <strong>your own words are missing from every
+      summary</strong>. The audio still stays on this machine unless you choose a cloud
+      transcription engine below. Takes effect the next time you start recording.
+    </p>
 
     <h2>Transcription</h2>
     <label for="transcription-provider">Engine that turns the meeting's audio into words</label>
@@ -153,19 +173,21 @@
       transcript. Defaults answer in the transcript's language; edit one line to force English.
     </p>
 
-    <fieldset>
-      <legend>Structured template</legend>
+    <p class="note">Editing optional — the defaults work as they are.</p>
+
+    <details class="editor">
+      <summary>Structured template<span class="edited" id="edited-structured" hidden> · edited</span></summary>
       <label for="template-structured">Structured template text</label>
       <textarea id="template-structured" rows="10" aria-describedby="template-help" style="width: 100%; box-sizing: border-box; font: 12px monospace;"></textarea>
       <button id="reset-structured" type="button">Reset structured template to default</button>
-    </fieldset>
+    </details>
 
-    <fieldset>
-      <legend>Narrative template</legend>
+    <details class="editor">
+      <summary>Narrative template<span class="edited" id="edited-narrative" hidden> · edited</span></summary>
       <label for="template-narrative">Narrative template text</label>
       <textarea id="template-narrative" rows="6" aria-describedby="template-help" style="width: 100%; box-sizing: border-box; font: 12px monospace;"></textarea>
       <button id="reset-narrative" type="button">Reset narrative template to default</button>
-    </fieldset>
+    </details>
 
     <button id="save">Save</button><span id="saved" role="status" aria-live="polite"></span>
 

@@ -61,7 +61,11 @@ The general rule this leaves behind: **copy in a brief is a claim about behavior
 
 ## Accessibility invariants
 
-Carried from the popup's hardening pass, and binding on the prompt too: the status line is a live region (`polite`, `assertive` for warning and failure), `aria-busy` marks the transcribing and summarizing waits, no Unicode glyph or emoji carries state, and the prompt is reachable and dismissible by keyboard with a visible focus ring. The prompt mounts in a shadow root so the host page cannot restyle it and it cannot restyle the host page.
+Carried from the popup's hardening pass, and binding on the prompt too: the status line is a live region (`polite`, `assertive` for warning and failure), no Unicode glyph or emoji carries state, and the prompt is reachable and dismissible by keyboard with a visible focus ring. The prompt mounts in a shadow root so the host page cannot restyle it and it cannot restyle the host page.
+
+**Not `aria-busy`.** An earlier version of this brief asked for it on the transcribing and summarizing waits. That was a defect: `aria-busy="true"` suppresses announcements from the region it is set on, so it muted exactly the phase changes the live region exists to deliver. The phase name in the text carries the state.
+
+**`[hidden]` must actually hide.** Any `id` or `class` rule that sets `display` outranks the UA sheet's `[hidden] { display: none }`, so `el.hidden = true` silently fails and the element stays on screen. That shipped once as a stale "Recording — 1:03" badge left up after capture had stopped, which is the precise failure this surface exists to prevent — an indicator that lies about live capture is worse than no indicator. Every document that styles `display` on a hideable element declares `[hidden] { display: none !important; }` first, and says why, so the next `display` rule does not reopen it.
 
 ## Unresolved
 

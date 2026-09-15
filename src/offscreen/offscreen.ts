@@ -17,14 +17,17 @@ import {
   type TranscriptionProvider,
 } from "../transcription/provider";
 import { deleteSpan, openAudioStore, readSpan, type AudioStore } from "./audio-store";
+import { mixCapture, type MixGraph } from "./audio-mix";
 
 let recorder: MediaRecorder | undefined;
 let context: AudioContext | undefined;
 let stream: MediaStream | undefined;
+let micStream: MediaStream | undefined;
 let store: AudioStore | undefined;
 let startedAt = 0;
 let encodedBytes = 0;
 let lastError: string | null = null;
+let micError: string | null = null;
 // Chunk writes are chained so they land in emission order even though
 // MediaRecorder fires ondataavailable synchronously while a prior write is
 // still in flight.
@@ -36,18 +39,64 @@ interface TabCaptureConstraints {
   audio: { mandatory: { chromeMediaSource: "tab"; chromeMediaSourceId: string } };
 }
 
+/**
+ * The local microphone, or nothing plus a reason.
+ *
+ * Never allowed to throw past here: a denied or absent microphone degrades this
+ * Capture Span to today's tab-only capture, because losing the local user's voice
+ * is bad and losing the whole meeting is unacceptable.
+ *
+ * Echo cancellation is on because the two streams overlap physically as well as
+ * digitally — the remote participants come out of the user's speakers and back in
+ * through their microphone, and without cancellation the recording carries them
+ * twice, half a room-delay apart, which is worse for a transcription engine than
+ * either copy alone.
+ */
+async function captureMicrophone(): Promise<MediaStream | undefined> {
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+  } catch (err) {
+    micError = err instanceof Error ? err.message : String(err);
+    return undefined;
+  }
+}
+
+/** The real mix graph: one AudioContext, so one clock for both sources. */
+function webAudioGraph(ctx: AudioContext): MixGraph<AudioNode> {
+  const recorded = ctx.createMediaStreamDestination();
+  return {
+    source: (s) => ctx.createMediaStreamSource(s),
+    connect: (from, to) => from.connect(to),
+    speakers: ctx.destination,
+    recorded,
+    recordedStream: recorded.stream,
+  };
+}
+
 /** Records one Capture Span into its own file. A second Capture Start in the same
  * Meeting arrives with a different span id, so it cannot touch what the first one
  * wrote (ADR-0005). */
-async function start(streamId: string, spanId: string, tabId: number): Promise<void> {
+async function start(
+  streamId: string,
+  spanId: string,
+  tabId: number,
+  mic: boolean,
+): Promise<void> {
   if (recorder) return; // already recording; start is idempotent
   lastError = null;
+  micError = null;
   const constraints: TabCaptureConstraints = {
     audio: { mandatory: { chromeMediaSource: "tab", chromeMediaSourceId: streamId } },
   };
+  // The tab stream first, and without awaiting anything else on the way: the
+  // stream id the service worker handed over is single-use and expires within
+  // seconds of the user's invocation.
   stream = await navigator.mediaDevices.getUserMedia(
     constraints as unknown as MediaStreamConstraints,
   );
+  micStream = mic ? await captureMicrophone() : undefined;
 
   // The capture track can end without us asking — the tab navigated away, or
   // crashed. Left unhandled the recorder keeps a dead stream and the session
@@ -63,16 +112,34 @@ async function start(streamId: string, spanId: string, tabId: number): Promise<v
     });
   }
 
-  // tabCapture stops playing the tab's audio to the user, so the stream has to
-  // be reconnected to a destination or the meeting goes silent for the whole
-  // call (ADR-0004). This is not optional polish.
+  // The microphone is a fourth thing that can end on its own, and unlike the tab
+  // track it can be revoked deliberately mid-meeting from Chrome's site controls.
+  // The recording survives — the remote participants are still captured — so this
+  // must NOT end the Meeting. What it must do is stop the span claiming to hold
+  // the local user, because from here on it does not.
+  for (const track of micStream?.getTracks() ?? []) {
+    track.addEventListener("ended", () => {
+      void ext.runtime
+        .sendMessage({ type: "mic-track-ended", tabId } satisfies OffscreenEventMessage)
+        .catch(() => {});
+    });
+  }
+
+  // One AudioContext sums the tab and the microphone into one destination, and
+  // keeps the tab playing to the speakers on the way past — tabCapture stops the
+  // tab's own playback, so without that connection the meeting is silent for the
+  // whole call (ADR-0004). The microphone is recorded but never played, or the
+  // user hears themselves. One graph also means one clock, which is what keeps
+  // Utterance offsets aligned for fusion (ADR-0007).
   context = new AudioContext();
-  context.createMediaStreamSource(stream).connect(context.destination);
+  const mixed = mixCapture(webAudioGraph(context), { tab: stream, mic: micStream });
 
   encodedBytes = 0;
   writeChain = Promise.resolve();
   store = await openAudioStore(spanId);
-  recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+  // The mix, not the raw tab stream: recording the tab stream directly is what
+  // left the local user out of every Audio Recording.
+  recorder = new MediaRecorder(mixed, { mimeType: "audio/webm" });
   recorder.ondataavailable = (e) => {
     if (e.data.size === 0) return;
     encodedBytes += e.data.size;
@@ -110,6 +177,11 @@ async function stop(): Promise<void> {
   store = undefined;
   stream?.getTracks().forEach((t) => t.stop());
   stream = undefined;
+  // Released with the tab stream, and for a stronger reason: a microphone track
+  // left open holds Chromium's recording indicator up and keeps listening to a
+  // room the user believes is off the record.
+  micStream?.getTracks().forEach((t) => t.stop());
+  micStream = undefined;
   await context?.close().catch(() => undefined);
   context = undefined;
 }
@@ -120,6 +192,10 @@ function status(): OffscreenStatusReply {
     startedAt: recorder ? startedAt : null,
     encodedBytes,
     error: lastError,
+    // Reported from the live stream rather than from the request: asking for the
+    // microphone and getting it are different things.
+    micRecording: recorder !== undefined && micStream !== undefined,
+    micError,
   };
 }
 
@@ -228,7 +304,7 @@ ext.runtime.onMessage.addListener((raw: unknown) => {
   if (msg.type === "offscreen-start") {
     return (async () => {
       try {
-        await start(msg.streamId, msg.spanId, msg.tabId);
+        await start(msg.streamId, msg.spanId, msg.tabId, msg.mic);
       } catch (err) {
         lastError = err instanceof Error ? err.message : String(err);
         await stop();

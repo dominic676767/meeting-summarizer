@@ -18,7 +18,16 @@ describe("walking skeleton", () => {
     const apiPermissions = manifest.permissions.filter((p) => !p.includes("://"));
     // tabCapture + offscreen are what audio recording needs (ADR-0004): the
     // stream id comes from tabCapture, the recorder lives in an offscreen doc.
-    expect(apiPermissions).toEqual(["storage", "downloads", "tabCapture", "offscreen"]);
+    // audioCapture is what lets that same document reach the microphone
+    // (ADR-0007) — tab audio is only the remote participants, and an offscreen
+    // document has no UI in which Chromium could raise its own prompt.
+    expect(apiPermissions).toEqual([
+      "storage",
+      "downloads",
+      "tabCapture",
+      "audioCapture",
+      "offscreen",
+    ]);
   });
 
   it("registers a keyboard command so a real extension invocation can start capture", () => {

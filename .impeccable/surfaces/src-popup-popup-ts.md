@@ -52,7 +52,8 @@ These are settled in DESIGN.md, not proposals. Any ticket touching the popup's s
 - **The Text-or-Dot Rule.** Alert Red `#d73a4a` has two jobs and its form tells them apart: red *type* at weight 600 is a warning the user must act on; a red *dot* beside ordinary Ink text is the live-recording indicator. Never render recording state as red type; never signal a warning with a bare dot. (User-approved amendment, 2026-09-14.)
 - **The Meaning-Only Color Rule.** Nothing decorative is colored. Green means working, red means attention or live capture, dark red `#aa0000` means a past fault, everything else is Ink or Muted.
 - **No glyph or emoji carries state.** No `●`, no `⚠`. They announce as noise to screen readers and render as color emoji on many platforms, injecting non-state color. The class and the words carry the state; a drawn dot element is not a glyph.
-- **No status change is visible-only.** The status region is a live region (`polite`; `assertive` for warnings and failures) and `aria-busy` marks every wait. A progress phase that only the eye can see fails the same test the original popup failed.
+- **No status change is visible-only.** The status region is a live region (`polite`; `assertive` for warnings and failures). A progress phase that only the eye can see fails the same test the original popup failed.
+- **Do not put `aria-busy` on the progress live region.** An earlier version of this brief required it on every wait. That was wrong, and the implementation was right to remove it: `aria-busy="true"` tells assistive tech the region's updates are *not ready to be announced*, so it muted the phase changes the region exists to announce. The phase name carries the state. `aria-busy` is for a region being rebuilt, not for a region whose whole job is reporting that something is taking a while.
 - **Degraded is not an error.** A caption-only run is a normal outcome and never takes Alert Red; it is 12px Muted supporting text.
 
 ## Unresolved

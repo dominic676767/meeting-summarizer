@@ -47,6 +47,7 @@
     "storage",
     "downloads",
     "tabCapture",
+    "audioCapture",
     "offscreen"
   ],
   "host_permissions": [

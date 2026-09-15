@@ -27,6 +27,16 @@
       #model-progress { display: block; width: 100%; height: 6px; margin: 0 0 10px; }
       #title { color: #555; font-size: 12px; margin-bottom: 10px; }
       #degraded { color: #555; font-size: 12px; margin: -4px 0 10px; }
+      /* Muted supporting text, never Alert Red. A microphone that is off is a
+         choice the user made, and one that could not be used is a fact about this
+         recording rather than something they can fix mid-meeting — neither is a
+         warning to act on, so neither takes red type. */
+      #mic { color: #555; font-size: 12px; margin: -4px 0 10px; }
+      /* A permission request is not a warning: Ink for the ask, Muted for the
+         reason, ordinary buttons for the two answers, and no new colour. */
+      #mic-disclosure { border: 1px solid #eee; border-radius: 4px; padding: 8px; margin: 0 0 10px; }
+      #mic-ask { font-weight: 600; margin: 0 0 4px; }
+      #mic-why { color: #555; font-size: 12px; margin: 0 0 8px; }
       .actions { display: flex; gap: 8px; }
       button { font: inherit; padding: 4px 10px; }
       .held-group { margin-top: 12px; }
@@ -58,6 +68,28 @@
       <!-- True whether no audio was recorded or its words never arrived: either
            way the summary is caption words, and only that claim is safe here. -->
       <div id="degraded" hidden>Captions only — the summary was not built from recorded audio.</div>
+      <!-- What the microphone is doing, in words. Recording state is carried by
+           the status line's dot and its text; this line only ever states the
+           setting's consequence. -->
+      <div id="mic" hidden></div>
+      <!-- The disclosure. Recording somebody's microphone is a bigger step than
+           recording a tab, and an offscreen document cannot show Chromium's own
+           permission prompt, so this is the disclosure — asked once, before the
+           microphone is ever opened, and answerable either way. -->
+      <div id="mic-disclosure" hidden>
+        <p id="mic-ask">Include your microphone?</p>
+        <!-- Filled in by popup.ts, because what happens to the audio depends on
+             the Transcription Provider the user has selected: the promise that
+             earns a yes is only true of the local engine. -->
+        <p id="mic-why"></p>
+        <div class="actions">
+          <!-- "Tab audio only" says what it does. "No thanks" would frame
+               declining as a refusal to cooperate, when it is a complete working
+               mode. -->
+          <button id="mic-on">Include my microphone</button>
+          <button id="mic-off">Tab audio only</button>
+        </div>
+      </div>
       <div class="actions">
         <button id="start" hidden>Start recording</button>
         <button id="stop" hidden>Stop</button>

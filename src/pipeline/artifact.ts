@@ -81,6 +81,20 @@ const PROVENANCE: Record<TranscriptProvenance, { clause: string; sectionLabel: s
 };
 
 /**
+ * Where an audio-derived artifact does not contain the local user's own voice.
+ *
+ * "from recorded audio" reads as "the meeting was recorded", and until ADR-0007 it
+ * silently meant "the other participants were recorded": the meeting tab carries
+ * only what comes out of it, so a user recording tab audio alone is absent from
+ * their own summary. A reader wondering why one voice never appears deserves the
+ * reason rather than a document that omits it.
+ *
+ * Set in the third person, not the second: the artifact gets forwarded, and its
+ * later readers are not the person whose microphone it is.
+ */
+const NO_LOCAL_MIC_CLAUSE = "local microphone not recorded";
+
+/**
  * The Meta line is not enough where owners are anonymous: action items are what
  * get acted on, so the caveat is repeated where a wrong owner does its damage.
  */
@@ -121,7 +135,12 @@ function formatOffset(ms: number): string {
  * The engine is named only when the reader opted in: it aids reproducibility but
  * discloses their tooling to everyone the file reaches.
  */
-function metaLine(transcript: Transcript, provenanceClause: string, nameEngine: boolean): string {
+function metaLine(
+  transcript: Transcript,
+  provenance: TranscriptProvenance,
+  provenanceClause: string,
+  nameEngine: boolean,
+): string {
   const parts = [
     new Date(transcript.endedAt ?? transcript.startedAt).toISOString().slice(0, 10),
     escapeHtml(transcript.platform),
@@ -136,6 +155,12 @@ function metaLine(transcript: Transcript, provenanceClause: string, nameEngine: 
   // used the extension. Duration answers what the count stood in for, in a unit
   // everyone reads, and the transcript itself is one click away.
   parts.push(provenanceClause);
+  // Only where audio was actually recorded: on a caption-only artifact the
+  // microphone is beside the point, and naming it would read as a second fault
+  // where there is one plain fact already stated.
+  if (provenance !== "captions-only" && transcript.localMicrophone !== true) {
+    parts.push(NO_LOCAL_MIC_CLAUSE);
+  }
   if (nameEngine && transcript.engine) {
     parts.push(`${escapeHtml(transcript.engine.id)} ${escapeHtml(transcript.engine.model)}`);
   }
@@ -154,7 +179,8 @@ export function renderArtifact(
   const date = new Date(transcript.endedAt ?? transcript.startedAt);
   // An unstated provenance is indistinguishable from the best case, so a
   // Transcript that carries no claim is read as the weakest one.
-  const provenance = PROVENANCE[transcript.provenance ?? "captions-only"];
+  const provenanceKey = transcript.provenance ?? "captions-only";
+  const provenance = PROVENANCE[provenanceKey];
   const summary = markdownToHtml(summaryMarkdown);
   const segments = transcript.segments
     .map(
@@ -171,7 +197,7 @@ export function renderArtifact(
 </head>
 <body>
 <h1>${escapeHtml(transcript.title)}</h1>
-<p class="meta">${metaLine(transcript, provenance.clause, opts.nameEngine === true)}</p>
+<p class="meta">${metaLine(transcript, provenanceKey, provenance.clause, opts.nameEngine === true)}</p>
 ${transcript.provenance === "audio-unattributed" ? noteUnverifiedOwners(summary) : summary}
 <details>
 <summary>${provenance.sectionLabel}</summary>

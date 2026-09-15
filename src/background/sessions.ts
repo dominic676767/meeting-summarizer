@@ -31,6 +31,21 @@ export interface MeetingSession {
   spans: CaptureSpan[];
   /** Non-fatal capture problem (quota, recorder fault) to surface to the user. */
   captureWarning: string | null;
+  /** The local microphone is live in the mix right now. */
+  micRecording: boolean;
+  /**
+   * Whether every Capture Span of this Meeting included the local microphone, so
+   * the Audio Recording holds the user's own side of the call as well as the
+   * remote participants'. Null until the first Capture Start.
+   *
+   * Folded with AND across spans: a Meeting where one stretch was recorded without
+   * the microphone does not contain the whole of the local user, and the Summary
+   * Artifact must not imply otherwise.
+   */
+  localMicrophone: boolean | null;
+  /** Why the microphone could not be used, for the tooltip. Null when it is fine
+   * or was never asked for. */
+  micError: string | null;
   /** The in-page prompt hides itself for the rest of this Meeting once dismissed. */
   promptDismissed: boolean;
   /**
@@ -74,6 +89,11 @@ interface PersistedSession {
   audioWords: boolean | null;
   /** Absent on a record from before silent recordings were refused. */
   noSpeech?: boolean;
+  /** Absent on a record from before the microphone was mixed in, which is a
+   * recording of the remote participants alone — so absent reads as false. */
+  micRecording?: boolean;
+  localMicrophone?: boolean | null;
+  micError?: string | null;
   entries: ReturnType<TranscriptAccumulator["toJSON"]>;
   /** Written by versions before Capture Spans; read only by `spansOf`. */
   recorded?: boolean;
@@ -126,6 +146,11 @@ async function doRehydrate(): Promise<void> {
         recordingId: p.recordingId ?? null,
         spans: spansOf(p),
         captureWarning: p.captureWarning ?? null,
+        micRecording: p.micRecording ?? false,
+        // A span recorded before the microphone existed had none in it, so the
+        // absent field reads as false rather than as "unknown, assume captured".
+        localMicrophone: p.spans?.length ? (p.localMicrophone ?? false) : (p.localMicrophone ?? null),
+        micError: p.micError ?? null,
         promptDismissed: p.promptDismissed ?? false,
         audioWords: p.audioWords ?? null,
         noSpeech: p.noSpeech ?? false,
@@ -153,6 +178,9 @@ export async function persistSessions(): Promise<void> {
         recordingId: s.recordingId,
         spans: s.spans,
         captureWarning: s.captureWarning,
+        micRecording: s.micRecording,
+        localMicrophone: s.localMicrophone,
+        micError: s.micError,
         promptDismissed: s.promptDismissed,
         audioWords: s.audioWords,
         noSpeech: s.noSpeech,
@@ -187,6 +215,9 @@ export async function ensureSession(tabId: number, platform: string): Promise<Me
       recordingId: null,
       spans: [],
       captureWarning: null,
+      micRecording: false,
+      localMicrophone: null,
+      micError: null,
       promptDismissed: false,
       audioWords: null,
       noSpeech: false,
@@ -226,6 +257,10 @@ export function sessionToTranscript(s: MeetingSession): Transcript {
     startedAt: s.startedAt,
     endedAt: Date.now(),
     provenance: "captions-only",
+    // Carried on the caption Transcript so it survives fusion, which keeps the
+    // base Transcript's metadata: whether the local user is in the audio is a fact
+    // about the recording, not about the words that came out of it.
+    localMicrophone: s.localMicrophone === true,
     segments: s.accumulator.toSegments(),
   };
 }

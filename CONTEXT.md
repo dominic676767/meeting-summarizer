@@ -10,7 +10,9 @@ One unit of live-caption text scraped from the meeting client's DOM: speaker nam
 
 ### Audio Recording
 
-The captured tab audio for one Meeting: its [[Capture Span]]s, encoded incrementally to browser-managed storage (never held whole in memory). The source of truth for *what was said*. Every span of it is discarded once the Summary Artifact is written.
+The captured audio for one Meeting: its [[Capture Span]]s, encoded incrementally to browser-managed storage (never held whole in memory). The source of truth for *what was said*. Every span of it is discarded once the Summary Artifact is written.
+
+Two streams, summed: the meeting tab (the remote participants) and the local microphone (the user's own voice). Tab audio alone is only half the meeting — the tab carries what comes *out* of it, and no meeting client echoes your own voice back to you — so a recording without the microphone is missing the user's whole side of the call (ADR-0007). The microphone is on by default but never opened before the user has answered the disclosure, and where it is refused or switched off the recording degrades to the remote participants alone and says so on the Summary Artifact.
 
 ### Capture Span
 
