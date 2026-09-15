@@ -8,7 +8,9 @@ This was found the worst way: two Summary Artifacts stamped "from recorded audio
 
 ## The privacy escalation, and why the default is off
 
-Recording somebody's microphone is categorically different from recording a tab. It is the one escalation here that cannot be taken back, it triggers a permission prompt, and this extension is meant for members of the public.
+Recording somebody's microphone is categorically different from recording a tab. It is the one escalation here that cannot be taken back, and this extension is meant for members of the public.
+
+**And the browser will not ask on our behalf.** An offscreen document has no UI, so `getUserMedia` cannot raise Chromium's own permission prompt there; the extension declares `audioCapture`, which grants the microphone to its own pages without prompting. That removes the browser from the loop entirely — there is no version of this where somebody else tells the user. The extension's own disclosure is not a courtesy on top of a system prompt, it is the only disclosure that exists, which is why its wording and its consent semantics carry the whole weight.
 
 **`micCapture.enabled` therefore defaults to `false`, and a disclosure the user answers turns it on.** The tempting alternative — default `true`, gated on a separate `confirmedAt` confirmation — was rejected: it makes the safe state depend on a second mechanism holding, so anything that reaches around the gate (a refactor dropping the check, or a user saving the options page for an unrelated reason) starts recording a microphone without consent. Off by default fails to silence rather than to surveillance.
 
@@ -20,7 +22,7 @@ Recording somebody's microphone is categorically different from recording a tab.
 
 - **A microphone is a fourth thing that can end on its own**, on top of the three ADR-0005/e39cd25 cover, and it is the only one a user can revoke deliberately mid-meeting from Chrome's site controls. That does not end the Meeting — the remote participants are still being captured — but the span stops holding the local user, so `localMicrophone` goes false and the user is warned while they can still act.
 - **`localMicrophone` is folded with AND across Capture Spans.** A Meeting where one stretch was recorded without the microphone does not contain the whole of the local user, and the Summary Artifact must not imply it does.
-- **A denied or absent microphone degrades to tab-only capture with a warning**, never a failed recording. Half a meeting beats none.
+- **Recording never waits on the microphone and never fails on it.** An unanswered disclosure, a denied permission, and a machine with no input device all land in the same place — today's tab-only capture, plus a warning naming which of the three happened, because only one of them is something the user can fix. Losing the local user's words is bad; losing the meeting is the one outcome this product may not produce.
 - **The disclosure copy cannot claim the audio stays on this machine** — that is false whenever the cloud Transcription Provider is selected, which is precisely the case where recording your own voice matters most. So the disclosure has two variants rather than one conditional sentence, and reaching it while a cloud engine is selected is itself the signal that the cloud variant is needed: local-engine consent is never cleared, so a user can only arrive there by having switched.
 - **The cloud variant must name the destination.** "The cloud" is not a destination; OpenAI is. Copy that names the service, states the cost in the same sentence as the benefit, and makes no retention promise this project cannot keep, because we do not control what happens to audio once it leaves.
 
@@ -28,4 +30,5 @@ Recording somebody's microphone is categorically different from recording a tab.
 
 - **Tab audio only** — the status quo this replaces. Silently omits the user from their own meeting summaries.
 - **Microphone only** — already rejected in ADR-0004, and rightly: it captures the local user and no one else. The error there was concluding tab-only was therefore the meeting.
-- **Default `enabled: true` behind a confirmation gate** — rejected above: fail-unsafe.
+- **Default `enabled: true` behind a confirmation gate** — rejected above: fail-unsafe. The argument for it was that off-by-default ships a summarizer quietly wrong for every user who never finds the switch. That cost is real, and it is paid instead by making the disclosure prominent rather than by pre-ticking the box.
+- **Ask for the microphone on every Capture Start** — rejected: a prompt during the first minute of a call is a prompt dismissed on reflex, which is worse disclosure than one considered answer.
