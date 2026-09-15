@@ -19,6 +19,7 @@ import {
 import {
   createTranscriptionProvider,
   TranscriptionError,
+  TranscriptionSilent,
   type DecodeAudio,
 } from "../src/transcription/provider";
 
@@ -112,8 +113,12 @@ describe("OpenAI Transcription Provider", () => {
   it("declares its own input limit, well past local Whisper's", async () => {
     expect(OPENAI_TRANSCRIPTION_MAX_INPUT_MS).toBeGreaterThan(WHISPER_MAX_INPUT_MS);
     const { fn, calls } = fakeFetch({ segments: [] });
-    // 25 minutes: chunked at this engine's boundary, not the local engine's.
-    await openAiProvider({ fetchFn: fn, seconds: 1500 }).transcribe(recording());
+    // 25 minutes: chunked at this engine's boundary, not the local engine's. A
+    // response with no segments is 25 minutes that carried no speech, which the
+    // provider now refuses; the boundary the chunks fell on is what this asserts.
+    await expect(
+      openAiProvider({ fetchFn: fn, seconds: 1500 }).transcribe(recording()),
+    ).rejects.toThrow(TranscriptionSilent);
     expect(calls.length).toBe(3);
   });
 

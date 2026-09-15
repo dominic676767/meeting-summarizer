@@ -34,7 +34,13 @@ The ordered, speaker-attributed record of one Meeting that the summarization pip
 
 ### Degraded Capture
 
-A Meeting where no Audio Recording exists — the user never started capture, or capture failed — so the Transcript falls back to caption words alone. The Summary Artifact states plainly that it was produced from captions, not audio.
+A Meeting whose Transcript falls back to caption words alone: no Audio Recording exists (the user never started capture, or capture failed), or one exists but no audio words came out of it — transcription failed, the user skipped the wait, or it was a [[Silent Recording]]. The Summary Artifact states plainly that it was produced from captions, not audio.
+
+### Silent Recording
+
+An Audio Recording whose transcription output is refused for carrying no speech, so it never counts as audio words. Fed silence a Transcription Provider does not return nothing: it returns filler — Whisper's canonical artifact is the single word "you" — and unchecked that one token is stamped as recorded audio and replaces the caption words wholesale. So degenerate output is rejected before fusion, judged on the recording's duration and the substance of its content rather than a word count, and the Meeting keeps its caption words (a [[Degraded Capture]] with a reason).
+
+A third outcome beside success and failure, and it must stay distinguishable from both: nothing failed, so it is never reported as a transcription error, and unlike a [[Held Recording]] it is not kept for retry — retrying silence only reproduces silence.
 
 ### Meeting
 

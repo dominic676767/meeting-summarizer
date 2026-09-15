@@ -10,6 +10,7 @@
 // chunking, offset correction, progress, cancellation) is testable with no
 // browser, no WASM, and no real audio.
 import type { Utterance } from "../domain/types";
+import { rejectAsSilent } from "./silence";
 
 /** One Capture Span's audio, as the recorder wrote it. */
 export interface RecordedSpan {
@@ -67,6 +68,25 @@ export class TranscriptionCancelled extends TranscriptionError {
   constructor() {
     super("transcription cancelled");
     this.name = "TranscriptionCancelled";
+  }
+}
+
+/**
+ * The Audio Recording carried no speech, so its output is refused before it can
+ * count as audio words (see `./silence`).
+ *
+ * Also not a failure — there was nothing to hear — and pointedly not a Held
+ * Recording: a retry would transcribe the same silence and hallucinate over it
+ * again. The Meeting falls back to caption words, which is the whole reason the
+ * Speaker Track is kept. It is still an error type rather than an empty result
+ * so that no caller can mistake it for a transcription that succeeded.
+ */
+export class TranscriptionSilent extends TranscriptionError {
+  readonly reason: string;
+  constructor(reason: string) {
+    super(reason);
+    this.name = "TranscriptionSilent";
+    this.reason = reason;
   }
 }
 
@@ -186,6 +206,16 @@ export function createTranscriptionProvider(
         }
         doneMs += msFor(samples.length, sampleRate);
       }
+
+      // The last thing the provider does is refuse to pass off silence as speech.
+      // Fed a silent recording an engine returns its filler — Whisper's is the
+      // single word "you" — and downstream nothing can tell that from a real
+      // word: it is stamped as recorded audio and replaces the caption words
+      // wholesale. Judged here because this is where the recording's own duration
+      // is known, and against that duration rather than a bare word count, so a
+      // genuinely short exchange still counts as audio.
+      const silent = rejectAsSilent(utterances, totalMs);
+      if (silent) throw new TranscriptionSilent(silent);
       return utterances;
     },
   };

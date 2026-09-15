@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createTranscriptionProvider,
   TranscriptionCancelled,
+  TranscriptionSilent,
   TranscriptionError,
   type DecodeAudio,
   type EngineSpan,
@@ -208,6 +209,89 @@ describe("Transcription Provider", () => {
     });
     await expect(promise).rejects.toThrow(TranscriptionCancelled);
     expect(transcribeSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// --- Silence, which an engine answers with words anyway -----------------------
+//
+// Fed a silent recording Whisper returns its canonical artifact, the single word
+// "you". Downstream nothing can tell that from speech: it is stamped as recorded
+// audio and replaces the caption words wholesale, which is how two Summary
+// Artifacts came to be one hallucinated token apologising for having nothing to
+// summarize. So the provider refuses it here, before it can count as audio words.
+
+describe("Transcription Provider: refusing output that carries no speech", () => {
+  const artifact = (text: string, seconds: number) =>
+    fakeEngine({ maxInputMs: 3_600_000, spansFor: () => [{ text, startSec: 0, endSec: seconds }] });
+
+  it("refuses the single word Whisper answers silence with", async () => {
+    // The real case: a 27-second recording whose whole transcript was "you".
+    const err = await provider(artifact("you", 27), 27)
+      .transcribe(recording())
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TranscriptionSilent);
+  });
+
+  it("refuses the artifact's other stock forms", async () => {
+    for (const text of ["Thank you.", "Thanks for watching!", "[BLANK_AUDIO]", "   "]) {
+      await expect(provider(artifact(text, 41), 41).transcribe(recording())).rejects.toThrow(
+        TranscriptionSilent,
+      );
+    }
+  });
+
+  it("refuses an artifact looped for the length of the recording", async () => {
+    // Engines answer long silences with repetition as readily as with one token,
+    // and thirty copies of a word is still one word's worth of information.
+    const looped = "you ".repeat(30).trim();
+    await expect(provider(artifact(looped, 600), 600).transcribe(recording())).rejects.toThrow(
+      TranscriptionSilent,
+    );
+  });
+
+  it("refuses a few words against a recording far too long to have held only those", async () => {
+    // Not a known artifact — the guard cannot be a list of strings alone, or the
+    // next hallucination walks straight through it.
+    await expect(provider(artifact("Okay.", 2_400), 2_400).transcribe(recording())).rejects.toThrow(
+      TranscriptionSilent,
+    );
+  });
+
+  it("says the recording carried no speech instead of reporting a failure", async () => {
+    const err = (await provider(artifact("you", 27), 27)
+      .transcribe(recording())
+      .catch((e: unknown) => e)) as TranscriptionSilent;
+    // The three outcomes must stay apart: silence is not the user skipping the
+    // wait, and it is not an outage whose audio is worth holding for a retry.
+    expect(err.reason).toMatch(/no speech/);
+    expect(err).not.toBeInstanceOf(TranscriptionCancelled);
+  });
+
+  it("does not mistake an engine outage for silence", async () => {
+    const err = await provider(fakeEngine({ failWith: new Error("out of memory") }), 27)
+      .transcribe(recording())
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TranscriptionError);
+    expect(err).not.toBeInstanceOf(TranscriptionSilent);
+  });
+
+  it("keeps a genuinely short exchange's words", async () => {
+    // Twenty seconds of real speech is a handful of words, and those words are
+    // the accurate ones this product exists to capture.
+    const engine = artifact("Yes — let's ship the beta on Friday.", 6);
+    const utterances = await provider(engine, 20).transcribe(recording());
+    expect(utterances.map((u) => u.text)).toEqual(["Yes — let's ship the beta on Friday."]);
+  });
+
+  it("keeps one real exchange inside a long, mostly quiet recording", async () => {
+    // A lull is not a hallucination. Forty minutes with one exchange in it still
+    // has words that were said, and they must reach the Transcript.
+    const engine = artifact(
+      "The security review is the blocker; I will chase the reviewers tomorrow.",
+      2_400,
+    );
+    const utterances = await provider(engine, 2_400).transcribe(recording());
+    expect(utterances).toHaveLength(1);
   });
 });
 

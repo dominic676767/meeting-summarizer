@@ -12,6 +12,7 @@ import { fuseTranscript } from "../src/transcription/fusion";
 import {
   createTranscriptionProvider,
   TranscriptionError,
+  TranscriptionSilent,
   type DecodeAudio,
   type EngineSpan,
   type TranscriptionEngine,
@@ -92,6 +93,27 @@ describe("Held Recording retry", () => {
 
     expect(utterances).toEqual([{ text: "Agreed.", startMs: 95_000, endMs: 98_000 }]);
     expect(fuseTranscript(speakerTrack, utterances).segments[0]?.speaker).toBe("Bob");
+  });
+
+  it("a recording that carried no speech is not the Held Recording path", async () => {
+    // A silent recording is not an outage: nothing failed, and a retry would
+    // transcribe the same silence and hallucinate over it again. So it is refused
+    // as its own outcome — TranscriptionSilent, not the TranscriptionError the
+    // hold is keyed on — and the Meeting keeps its caption words.
+    const speakerTrack = meeting(
+      seg("Alice", "we should ship the beta next friday", START + 1_000),
+      seg("Bob", "agreed i will own the release checklist", START + 12_000),
+    );
+    const engine = engineOf({ spans: [{ text: "you", startSec: 0, endSec: 27 }] });
+
+    const outcome = await provider(engine).transcribe(recording()).catch((e: unknown) => e);
+    expect(outcome).toBeInstanceOf(TranscriptionSilent);
+
+    // What the Meeting falls back to: every caption line, and a provenance that
+    // does not claim the audio it could not use.
+    const fallback = fuseTranscript(speakerTrack, []);
+    expect(fallback.segments).toEqual(speakerTrack.segments);
+    expect(fallback.provenance).toBe("captions-only");
   });
 
   it("a retry that fails again surfaces the new reason, and the audio is still all there", async () => {

@@ -170,9 +170,11 @@ describe("fusion: attributing Utterances to the Speaker Track", () => {
     expect(speakers(fused)).toEqual([UNKNOWN_SPEAKER, UNKNOWN_SPEAKER]);
   });
 
-  it("produces no segments from no Utterances, leaving the caption fallback to the caller", () => {
+  it("keeps the caption words when no Utterances arrived", () => {
+    // Nothing to fuse must not mean nothing left: fusion replaces the caption
+    // words wholesale, so an empty replacement would erase the Meeting.
     const base = meeting([seg("Alice", "caption words", START)]);
-    expect(fuseTranscript(base, []).segments).toEqual([]);
+    expect(fuseTranscript(base, []).segments).toEqual(base.segments);
   });
 });
 
@@ -220,6 +222,68 @@ describe("fusion: recording provenance on the Transcript", () => {
     // to caption words, and fusion must not upgrade that claim.
     const base = { ...meeting([seg("Alice", "caption words", START)]), provenance: "captions-only" as const };
     expect(fuseTranscript(base, []).provenance).toBe("captions-only");
+  });
+});
+
+// --- A hallucination must never outrank real captions ------------------------
+//
+// The real failure this guards: two Summary Artifacts were built from silent
+// recordings whose whole Transcript was Whisper's canonical silence artifact, the
+// single word "you". Fusion replaces the caption words wholesale, so had those
+// meetings' captions carried the conversation, one invented word would have
+// stood where the conversation had been — and the artifact would have claimed it
+// came from recorded audio.
+
+describe("fusion: transcription output that carries no speech", () => {
+  /** The Meeting as it actually happened, in the caption words. */
+  const conversation = () =>
+    meeting([
+      seg("Alice", "we should ship the beta next friday", START + 1_000),
+      seg("Bob", "agreed i will own the release checklist", START + 12_000),
+      seg("Alice", "open question do we support firefox esr", START + 25_000),
+    ]);
+
+  it("keeps every caption segment when the only Utterance is the silence artifact", () => {
+    const base = conversation();
+    const fused = fuseTranscript(base, [u("you", 0, 27_000)]);
+    expect(fused.segments).toEqual(base.segments);
+    expect(fused.segments.map((s) => s.text)).toEqual([
+      "we should ship the beta next friday",
+      "agreed i will own the release checklist",
+      "open question do we support firefox esr",
+    ]);
+  });
+
+  it("leaves the provenance caption-only rather than claiming recorded audio", () => {
+    const fused = fuseTranscript(conversation(), [u("you", 0, 27_000)]);
+    expect(fused.provenance).toBe("captions-only");
+    expect(fused.provenance).not.toBe("fused");
+    expect(fused.provenance).not.toBe("audio-unattributed");
+  });
+
+  it("keeps the captions when the engine looped its artifact instead of repeating it once", () => {
+    const base = conversation();
+    const fused = fuseTranscript(base, [
+      u("Thank you.", 0, 9_000),
+      u("Thank you. Thank you. Thanks for watching.", 9_000, 27_000),
+      u("you you you you", 27_000, 41_000),
+    ]);
+    expect(fused.segments).toEqual(base.segments);
+    expect(fused.provenance).toBe("captions-only");
+  });
+
+  it("still fuses a genuinely short exchange, artifact-shaped courtesies and all", () => {
+    // A real 20-second exchange is a handful of words, and it must not be
+    // mistaken for silence: these words are the accurate ones.
+    const fused = fuseTranscript(
+      meeting([seg("Alice", "thanks bob", START + 1_000)]),
+      [u("Thanks, Bob — let's ship the beta on Friday.", 1_000, 8_000)],
+      track(["Alice", 0, 10_000]),
+    );
+    expect(fused.segments.map((s) => s.text)).toEqual([
+      "Thanks, Bob — let's ship the beta on Friday.",
+    ]);
+    expect(fused.provenance).toBe("fused");
   });
 });
 

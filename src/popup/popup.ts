@@ -26,6 +26,16 @@ const recordingList = document.getElementById("held-recording-list")!;
 const hintEl = document.getElementById("hint")!;
 const settingsBtn = document.getElementById("open-settings") as HTMLButtonElement;
 
+/**
+ * The Degraded Capture line, in the two forms it honestly takes. The first is
+ * every other cause — no audio recorded, transcription failed, the wait skipped
+ * — and matches the markup's default. The second is a recording that was
+ * transcribed and carried no speech: still not an error, but a fact the user
+ * would otherwise have to guess at.
+ */
+const DEGRADED_NO_AUDIO_WORDS = "Captions only — the summary was not built from recorded audio.";
+const DEGRADED_NO_SPEECH = "Captions only — the recording carried no speech.";
+
 function send<T>(msg: PopupMessage): Promise<T> {
   return ext.runtime.sendMessage(msg) as Promise<T>;
 }
@@ -221,6 +231,13 @@ function render(status: StatusReply): void {
   // is no longer happening.
   statusEl.title = "";
   degradedEl.hidden = !(status.state === "done" && status.degraded);
+  // Both lines are Muted supporting text, never Alert Red: a caption-only
+  // summary is a normal outcome, not a fault. Where the recording was silent the
+  // user is told *why* it is caption-only, so an audio recording that yielded
+  // nothing does not read as the tool having ignored it.
+  if (!degradedEl.hidden) {
+    degradedEl.textContent = status.noSpeech ? DEGRADED_NO_SPEECH : DEGRADED_NO_AUDIO_WORDS;
+  }
   if (status.state !== "transcribing") {
     detailEl.hidden = true;
     barEl.hidden = true;

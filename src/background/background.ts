@@ -245,15 +245,28 @@ export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | 
     s.transcription = null;
     // Words from the recording replace the caption words wholesale — that is
     // the point of v2 — while the captions live on as the Speaker Track fusion
-    // takes the names from.
+    // takes the names from. Which is exactly why the words have to be speech
+    // before they count: output the Transcription Provider refused as silence
+    // arrives here as no words at all, so a hallucinated token can never
+    // displace a real caption Transcript or claim to be recorded audio.
     s.audioWords = outcome.utterances.length > 0;
+    // Recorded so the popup can say the recording carried no speech, rather than
+    // leaving the user with an unexplained caption-only summary.
+    s.noSpeech = outcome.noSpeech !== null;
+    if (s.noSpeech) {
+      console.info(`meeting-summarizer: transcription rejected — ${outcome.noSpeech}`);
+    }
     if (s.audioWords) {
       transcript = { ...fuseTranscript(captionTranscript, outcome.utterances), engine: outcome.engine };
-    } else if (!outcome.cancelled) {
+    } else if (!outcome.cancelled && !s.noSpeech) {
       // A transcription outage must cost a retry, not the meeting: hold the
       // Audio Recording so the user can retry it — after switching Transcription
       // Provider if that is what it takes. The caption-only summary below still
       // lands, so the outage costs accuracy now rather than everything.
+      //
+      // A recording refused for carrying no speech is deliberately not held: an
+      // outage and a silent recording are different states, and a retry of
+      // silence only reproduces the silence it already found.
       await holdRecording(
         { recordingId: s.recordingId, transcript: captionTranscript, spans: s.spans },
         outcome.error ?? "transcription produced no words",
@@ -323,7 +336,9 @@ async function transcribeRecording(
   tabId: number,
   s: MeetingSession,
 ): Promise<OffscreenTranscribeReply> {
-  if (!s.recordingId) return { utterances: [], cancelled: false, error: "no recording" };
+  if (!s.recordingId) {
+    return { utterances: [], cancelled: false, noSpeech: null, error: "no recording" };
+  }
   try {
     const settings = await loadSettings();
     await ensureOffscreenDocument();
@@ -340,7 +355,7 @@ async function transcribeRecording(
     return { ...reply, engine: engineOf(settings.transcription) };
   } catch (err) {
     console.error("meeting-summarizer: transcription failed", err);
-    return { utterances: [], cancelled: false, error: reasonOf(err) };
+    return { utterances: [], cancelled: false, noSpeech: null, error: reasonOf(err) };
   }
 }
 
@@ -423,14 +438,19 @@ async function retryHeldRecording(recordingId: string): Promise<void> {
     const entry = await getHeldRecording(recordingId);
     if (!entry) return;
     let utterances: Utterance[];
+    let noSpeech: string | null;
     try {
-      utterances = await transcribeHeldRecording(entry);
+      ({ utterances, noSpeech } = await transcribeHeldRecording(entry));
     } catch (err) {
       await updateHeldRecordingReason(recordingId, reasonOf(err));
       throw err;
     }
+    // No speech in the audio means the retry ends the chain rather than repeating
+    // it: fusion leaves the caption Transcript intact, and it goes on to a
+    // caption-only Summary Artifact instead of back into the Held Recording list
+    // where the user would keep retrying the same silence.
     const transcript = fuseTranscript(entry.transcript, utterances);
-    const held = await holdTranscript(transcript, "transcribed, summary pending", {
+    const held = await holdTranscript(transcript, noSpeech ?? "transcribed, summary pending", {
       recordingId,
       spans: entry.spans,
     });
@@ -443,9 +463,17 @@ async function retryHeldRecording(recordingId: string): Promise<void> {
   }
 }
 
-/** Transcription under whatever settings are current, with every non-result
- * turned into a throw: the caller's job is to keep the audio held. */
-async function transcribeHeldRecording(entry: HeldRecording): Promise<Utterance[]> {
+/**
+ * Transcription under whatever settings are current, with every non-result turned
+ * into a throw: the caller's job is to keep the audio held.
+ *
+ * Silence is the one exception, and it is not a non-result: the run finished and
+ * found nothing to hear. It comes back as no Utterances and a reason, because
+ * throwing would hold the audio for a retry that can only find the same silence.
+ */
+async function transcribeHeldRecording(
+  entry: HeldRecording,
+): Promise<{ utterances: Utterance[]; noSpeech: string | null }> {
   const settings = await loadSettings();
   await ensureOffscreenDocument();
   try {
@@ -461,8 +489,9 @@ async function transcribeHeldRecording(entry: HeldRecording): Promise<Utterance[
     } satisfies OffscreenMessage)) as OffscreenTranscribeReply;
     if (reply.error) throw new Error(reply.error);
     if (reply.cancelled) throw new Error("transcription cancelled");
+    if (reply.noSpeech) return { utterances: [], noSpeech: reply.noSpeech };
     if (reply.utterances.length === 0) throw new Error("transcription produced no words");
-    return reply.utterances;
+    return { utterances: reply.utterances, noSpeech: null };
   } finally {
     await closeOffscreenUnlessRecording();
   }
@@ -498,6 +527,7 @@ async function statusFor(tabId: number): Promise<StatusReply> {
       recorded: s ? hasRecording(s) : false,
       audioWords: s?.audioWords ?? null,
     }),
+    noSpeech: s?.noSpeech ?? false,
     captureWarning,
     transcription: s?.transcription ?? null,
   };

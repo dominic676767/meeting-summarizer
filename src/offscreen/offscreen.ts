@@ -11,7 +11,11 @@ import type {
   TranscriptionProgress,
 } from "../messages";
 import { createTranscriptionProviderFor } from "../transcription/factory";
-import { TranscriptionCancelled, type TranscriptionProvider } from "../transcription/provider";
+import {
+  TranscriptionCancelled,
+  TranscriptionSilent,
+  type TranscriptionProvider,
+} from "../transcription/provider";
 import { deleteSpan, openAudioStore, readSpan, type AudioStore } from "./audio-store";
 
 let recorder: MediaRecorder | undefined;
@@ -147,7 +151,9 @@ function progressReporter(tabId: number, startedAt: number) {
 async function transcribe(
   msg: OffscreenMessage & { type: "offscreen-transcribe" },
 ): Promise<OffscreenTranscribeReply> {
-  if (running) return { utterances: [], cancelled: true, error: "transcription already running" };
+  if (running) {
+    return { utterances: [], cancelled: true, noSpeech: null, error: "transcription already running" };
+  }
   const report = progressReporter(msg.tabId, Date.now());
   const abort = new AbortController();
   let provider: (TranscriptionProvider & { close(): void }) | undefined;
@@ -194,14 +200,21 @@ async function transcribe(
           }),
       },
     );
-    return { utterances, cancelled: false, error: null };
+    return { utterances, cancelled: false, noSpeech: null, error: null };
   } catch (err) {
+    // Silence is reported as itself, before the cancellation and failure checks:
+    // the recording was refused for carrying no speech, which is neither an
+    // outage to hold the audio for nor an error to show the user.
+    if (err instanceof TranscriptionSilent) {
+      return { utterances: [], cancelled: false, noSpeech: err.reason, error: null };
+    }
     if (err instanceof TranscriptionCancelled || abort.signal.aborted) {
-      return { utterances: [], cancelled: true, error: null };
+      return { utterances: [], cancelled: true, noSpeech: null, error: null };
     }
     return {
       utterances: [],
       cancelled: false,
+      noSpeech: null,
       error: err instanceof Error ? err.message : String(err),
     };
   } finally {

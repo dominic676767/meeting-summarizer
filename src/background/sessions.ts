@@ -40,6 +40,14 @@ export interface MeetingSession {
    */
   audioWords: boolean | null;
   /**
+   * The Audio Recording was transcribed and its output refused for carrying no
+   * speech. Recorded separately from `audioWords` because a Degraded Capture has
+   * several causes and only this one has an explanation the user can act on
+   * ("nothing was heard"), while a failure keeps the audio for retry and this
+   * does not — retrying silence reproduces silence.
+   */
+  noSpeech: boolean;
+  /**
    * The live transcription measure. Deliberately not persisted: it arrives from
    * the offscreen document once a second, and writing storage that often to
    * survive a suspension would cost more than re-learning it on the next tick.
@@ -64,6 +72,8 @@ interface PersistedSession {
   captureWarning: string | null;
   promptDismissed: boolean;
   audioWords: boolean | null;
+  /** Absent on a record from before silent recordings were refused. */
+  noSpeech?: boolean;
   entries: ReturnType<TranscriptAccumulator["toJSON"]>;
   /** Written by versions before Capture Spans; read only by `spansOf`. */
   recorded?: boolean;
@@ -118,6 +128,7 @@ async function doRehydrate(): Promise<void> {
         captureWarning: p.captureWarning ?? null,
         promptDismissed: p.promptDismissed ?? false,
         audioWords: p.audioWords ?? null,
+        noSpeech: p.noSpeech ?? false,
         transcription: null,
         accumulator: TranscriptAccumulator.fromJSON(p.entries),
       });
@@ -144,6 +155,7 @@ export async function persistSessions(): Promise<void> {
         captureWarning: s.captureWarning,
         promptDismissed: s.promptDismissed,
         audioWords: s.audioWords,
+        noSpeech: s.noSpeech,
         entries: s.accumulator.toJSON(),
       };
     }
@@ -177,6 +189,7 @@ export async function ensureSession(tabId: number, platform: string): Promise<Me
       captureWarning: null,
       promptDismissed: false,
       audioWords: null,
+      noSpeech: false,
       transcription: null,
       accumulator: new TranscriptAccumulator(),
     };

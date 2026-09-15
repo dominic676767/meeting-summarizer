@@ -16,6 +16,7 @@ import type {
   TranscriptSegment,
   Utterance,
 } from "../domain/types";
+import { carriesNoSpeech } from "./silence";
 
 /** Marker for speech no name can be attached to. Never a guess. */
 export const UNKNOWN_SPEAKER = "Unknown speaker";
@@ -74,8 +75,15 @@ export function fuseTranscript(
   utterances: Utterance[],
   track: SpeakerTrackEntry[] = speakerTrackFrom(base),
 ): Transcript {
+  // Fusion replaces the caption words wholesale, so output with no speech in it
+  // must never reach this: one hallucinated "you" would stand where a whole
+  // conversation had been. Nothing to fuse leaves the caption Transcript exactly
+  // as it arrived — every segment, and a provenance that never claims audio.
+  if (carriesNoSpeech(utterances)) {
+    return { ...base, provenance: base.provenance ?? "captions-only" };
+  }
   const segments = utterances.map((u) => toSegment(u, base.startedAt, attribute(u, track)));
-  return { ...base, provenance: provenanceOf(segments, base), segments };
+  return { ...base, provenance: provenanceOf(segments), segments };
 }
 
 /**
@@ -84,9 +92,9 @@ export function fuseTranscript(
  * that overlapped nothing is worth exactly as much as no track at all — so the
  * answer is stored here rather than guessed from the segments later.
  */
-function provenanceOf(segments: TranscriptSegment[], base: Transcript): TranscriptProvenance {
-  // No Utterances is the caller's caption fallback, not an audio Transcript.
-  if (segments.length === 0) return base.provenance ?? "captions-only";
+function provenanceOf(segments: TranscriptSegment[]): TranscriptProvenance {
+  // Reached only with real audio words in hand: output carrying no speech left
+  // above with the caption Transcript's own provenance untouched.
   return segments.some((s) => s.attribution === "speaker-track") ? "fused" : "audio-unattributed";
 }
 

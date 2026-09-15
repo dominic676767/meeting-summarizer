@@ -124,6 +124,13 @@ export interface StatusReply {
    */
   degraded: boolean;
   /**
+   * This Meeting's Audio Recording carried no speech, so its words were refused
+   * rather than lost: a Degraded Capture with a reason. False where audio words
+   * arrived, where transcription failed, and where no audio was recorded — those
+   * are different states and the user must be able to tell them apart.
+   */
+  noSpeech: boolean;
+  /**
    * A non-fatal capture problem the user must know about (storage quota, a
    * recorder fault) surfaced instead of a silent stop. Null when capture is
    * healthy.
@@ -159,6 +166,13 @@ export interface OffscreenTranscribeReply {
   engine?: { id: string; model: string };
   /** The user chose captions over waiting — not a failure. */
   cancelled: boolean;
+  /**
+   * Why the output was refused as carrying no speech, or null where it was
+   * accepted. A third outcome beside success and failure, and it must stay
+   * distinguishable from both: the recording was silent, so there is nothing to
+   * report as an error and nothing a retry could recover.
+   */
+  noSpeech: string | null;
   error: string | null;
 }
 
