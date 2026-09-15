@@ -83,12 +83,23 @@
       <input type="checkbox" id="mic-capture" style="width: auto" />
       Record my microphone as well as the meeting's audio
     </label>
-    <p class="note">
-      On by default. The meeting tab carries only the other participants — Teams never sends your
-      own voice back to you — so with this off <strong>your own words are missing from every
-      summary</strong>. The audio still stays on this machine unless you choose a cloud
-      transcription engine below. Takes effect the next time you start recording.
+    <!-- Two variants, switched on the selected Transcription Provider. The cloud
+         one is reachable only by someone who already consented under the local
+         one, because selecting a cloud engine withdraws that consent — so it has
+         to name the destination rather than reassure. Neither carries the engine's
+         own upside: that benefit belongs to a choice already made, and leaning on
+         it inside a consent request argues a different question. -->
+    <p class="note" id="mic-why-local">
+      Your microphone is recorded and mixed with the meeting audio, then transcribed on this
+      computer. Without it, only the other participants are recorded and your own words are missing
+      from the summary.
     </p>
+    <p class="note hidden" id="mic-why-cloud">
+      The recording — your microphone mixed with the meeting audio — is uploaded to OpenAI to be
+      transcribed, so a recording of your voice leaves this computer. To keep it on this machine,
+      switch transcription to the local engine below.
+    </p>
+    <p class="note">Takes effect the next time you start recording.</p>
 
     <h2>Transcription</h2>
     <label for="transcription-provider">Engine that turns the meeting's audio into words</label>

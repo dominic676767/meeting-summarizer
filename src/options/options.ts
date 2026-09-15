@@ -71,6 +71,12 @@ function showTranscriptionPanel(provider: string): void {
   for (const p of TRANSCRIPTION_PROVIDERS) {
     $(`panel-transcription-${p}`).classList.toggle("hidden", p !== provider);
   }
+  // The microphone disclosure has to describe the destination the audio will
+  // actually reach, so it follows the engine rather than stating locality that a
+  // cloud selection makes false.
+  const cloud = provider !== "local-whisper";
+  $("mic-why-local").classList.toggle("hidden", cloud);
+  $("mic-why-cloud").classList.toggle("hidden", !cloud);
 }
 
 providerSelect.addEventListener("change", () => showPanel(providerSelect.value));
