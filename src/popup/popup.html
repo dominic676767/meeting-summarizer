@@ -1,9 +1,16 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
+    <title>Meeting Summarizer</title>
     <style>
-      body { font: 13px system-ui, sans-serif; margin: 0; min-width: 300px; }
+      /* An id or class `display` rule outranks the UA sheet's [hidden]
+         { display: none }, so hidden elements stay on screen — which had the
+         progress bar permanently visible and, worse, kept a stale
+         "Recording" badge up after capture stopped. This must come first and
+         win, or every future display rule reopens the same bug. */
+      [hidden] { display: none !important; }
+      body { font: 13px system-ui, sans-serif; margin: 0; min-width: 300px; max-width: 360px; }
       main { padding: 12px; }
       h1 { font-size: 14px; margin: 0 0 8px; }
       #status { margin-bottom: 10px; }
@@ -25,6 +32,11 @@
       .held-group { margin-top: 12px; }
       .held-group ul { list-style: none; padding: 0; margin: 6px 0 0; }
       .held-group li { display: flex; justify-content: space-between; gap: 8px; align-items: center; padding: 4px 0; border-top: 1px solid #eee; }
+      /* A meeting title or a provider error can be one unbroken 180-character
+         token. Without these it stretched the popup past 1500px and pushed
+         Retry off screen — the control you need precisely when it failed. */
+      .held-group li > span { min-inline-size: 0; overflow-wrap: anywhere; }
+      .held-group li > button { flex: 0 0 auto; }
       .reason { color: #aa0000; font-size: 12px; }
       h2 { font-size: 12px; margin: 0; color: #555; }
       footer { margin-top: 12px; padding-top: 10px; border-top: 1px solid #eee; }
@@ -40,7 +52,7 @@
       <div id="status-region" role="status" aria-live="polite">
         <div id="status" class="idle">Not in a meeting.</div>
         <div id="detail" hidden></div>
-        <progress id="model-progress" max="100" value="0" hidden></progress>
+        <progress id="model-progress" max="100" value="0" aria-label="Transcription model download" hidden></progress>
       </div>
       <div id="title"></div>
       <!-- True whether no audio was recorded or its words never arrived: either

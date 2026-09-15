@@ -2,6 +2,7 @@
 // Summary shape toggle, and editable Prompt Templates.
 import type {
   MeetingLanguage,
+  Settings,
   ProviderId,
   SummaryShape,
   TranscriptionProviderId,
@@ -146,9 +147,39 @@ $("save").addEventListener("click", async () => {
     structured: $<HTMLTextAreaElement>("template-structured").value,
     narrative: $<HTMLTextAreaElement>("template-narrative").value,
   };
-  await saveSettings(s);
-  $("saved").classList.remove("hidden");
-  setTimeout(() => $("saved").classList.add("hidden"), 1500);
+  // A rejected storage write used to vanish into an unhandled rejection, so a
+  // user whose settings did not save was told "Saved." — or nothing at all. The
+  // entered values are left in place either way, so a failure costs a second
+  // click rather than the whole form.
+  const result = $("saved");
+  try {
+    await saveSettings(s);
+    result.classList.remove("failed");
+    result.textContent = keyMissingFor(s)
+      ? `Saved — but ${keyMissingFor(s)} still needs a key before a meeting can be summarized.`
+      : "Saved.";
+  } catch (err) {
+    result.classList.add("failed");
+    result.textContent = `Not saved: ${err instanceof Error ? err.message : String(err)}`;
+  }
 });
+
+/**
+ * The selected summary Provider's missing credential, if any. Saving an
+ * incomplete configuration is allowed — a half-filled form is worth keeping —
+ * but it must not read as ready when the next meeting will fail on it.
+ */
+function keyMissingFor(s: Settings): string | null {
+  switch (s.provider) {
+    case "anthropic":
+      return s.anthropic.apiKey ? null : "Claude";
+    case "openai":
+      return s.openai.apiKey ? null : "OpenAI";
+    case "bedrock":
+      return s.bedrock.apiKey ? null : "Bedrock";
+    case "ollama":
+      return s.ollama.baseUrl ? null : "Ollama";
+  }
+}
 
 void init();

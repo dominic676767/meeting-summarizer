@@ -72,10 +72,18 @@ function heldRow(opts: {
     btn.disabled = true;
     btn.textContent = opts.pendingLabel;
     try {
-      const res = await opts.retry();
+      // A rejected message — closed channel, service worker restarting — used
+      // to escape here and strand the button disabled on "Retrying…" forever,
+      // skipping the refresh below. The one control that recovers the meeting
+      // has to survive its own transport failing.
+      const res = await opts.retry().catch((err: unknown) => ({
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      }));
       if (!res.ok) {
         btn.disabled = false;
         btn.textContent = opts.retryLabel;
+        if (res.error) reason.textContent = res.error;
       }
     } finally {
       retryPending = false;
@@ -296,8 +304,10 @@ function render(status: StatusReply): void {
   }
   // Announce the state to assistive tech: warnings interrupt, everything else is polite.
   regionEl.setAttribute("aria-live", statusEl.className === "warning" ? "assertive" : "polite");
-  const waiting = status.state === "transcribing" || status.state === "summarizing";
-  regionEl.setAttribute("aria-busy", waiting ? "true" : "false");
+  // Deliberately no aria-busy here. It was set for the whole transcribe and
+  // summarize wait, which tells assistive tech "these updates are not ready to
+  // announce" — suppressing the very phase changes this region exists to
+  // report. The long wait is conveyed by naming the phase, not by a busy flag.
 }
 
 async function refresh(): Promise<void> {
@@ -305,21 +315,38 @@ async function refresh(): Promise<void> {
   await refreshHeld();
 }
 
-startBtn.addEventListener("click", async () => {
-  render(await send<StatusReply>({ type: "start-capture" }));
-});
+/**
+ * Runs a capture action with the button disabled until it answers.
+ *
+ * Without this, a slow reply left the control enabled and the status unchanged,
+ * so a second click dispatched a second `start-capture` — and the user had no
+ * signal that the first one was doing anything. A transport failure is shown
+ * rather than swallowed, and the poll below re-renders the true state either
+ * way, so this never leaves a button stuck on a state the background disagrees
+ * with.
+ */
+function onAction(btn: HTMLButtonElement, msg: PopupMessage, pendingLabel: string): void {
+  const label = btn.textContent ?? "";
+  btn.addEventListener("click", async () => {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.textContent = pendingLabel;
+    try {
+      render(await send<StatusReply>(msg));
+    } catch (err) {
+      statusEl.className = "warning";
+      statusEl.textContent = `That didn't go through: ${err instanceof Error ? err.message : String(err)}`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = label;
+    }
+  });
+}
 
-stopBtn.addEventListener("click", async () => {
-  render(await send<StatusReply>({ type: "stop-capture" }));
-});
-
-summarizeBtn.addEventListener("click", async () => {
-  render(await send<StatusReply>({ type: "summarize-now" }));
-});
-
-skipBtn.addEventListener("click", async () => {
-  render(await send<StatusReply>({ type: "skip-transcription" }));
-});
+onAction(startBtn, { type: "start-capture" }, "Starting…");
+onAction(stopBtn, { type: "stop-capture" }, "Stopping…");
+onAction(summarizeBtn, { type: "summarize-now" }, "Summarizing…");
+onAction(skipBtn, { type: "skip-transcription" }, "Skipping…");
 
 settingsBtn.addEventListener("click", () => void ext.runtime.openOptionsPage());
 

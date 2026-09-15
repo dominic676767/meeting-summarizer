@@ -50,6 +50,9 @@ const STYLE = `
   .meta { color: #666; font-size: 0.85rem; }
   details { margin-top: 2rem; border-top: 1px solid #ddd; padding-top: 1rem; }
   summary { cursor: pointer; font-weight: 600; }
+  /* Titles and transcript lines can carry an unbroken URL; prose still wraps
+     normally, but a long token breaks rather than widening the document. */
+  h1, .seg, .meta { overflow-wrap: anywhere; }
   .seg { margin: 0.35rem 0; }
   .speaker { font-weight: 600; }
   .at { color: #666; font-size: 0.85rem; font-variant-numeric: tabular-nums; }

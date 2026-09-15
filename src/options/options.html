@@ -1,7 +1,8 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
+    <title>Meeting Summarizer — Settings</title>
     <style>
       body { font: 13px system-ui, sans-serif; margin: 16px; max-width: 640px; }
       h1 { font-size: 16px; }
@@ -15,6 +16,7 @@
       .hidden { display: none; }
       button { font: inherit; padding: 6px 14px; margin-top: 14px; }
       #saved { color: #0e8a16; margin-left: 8px; }
+      #saved.failed { color: #aa0000; }
     </style>
   </head>
   <body>
@@ -146,24 +148,26 @@
       <option value="structured">Structured (TL;DR, decisions, action items, open questions)</option>
       <option value="narrative">Narrative recap</option>
     </select>
-    <p class="note">
+    <p class="note" id="template-help">
       Templates are fully editable — <code>{{transcript}}</code> is replaced with the meeting
       transcript. Defaults answer in the transcript's language; edit one line to force English.
     </p>
 
     <fieldset>
       <legend>Structured template</legend>
-      <textarea id="template-structured" rows="10" style="width: 100%; box-sizing: border-box; font: 12px monospace;"></textarea>
-      <button id="reset-structured" type="button">Reset to default</button>
+      <label for="template-structured">Structured template text</label>
+      <textarea id="template-structured" rows="10" aria-describedby="template-help" style="width: 100%; box-sizing: border-box; font: 12px monospace;"></textarea>
+      <button id="reset-structured" type="button">Reset structured template to default</button>
     </fieldset>
 
     <fieldset>
       <legend>Narrative template</legend>
-      <textarea id="template-narrative" rows="6" style="width: 100%; box-sizing: border-box; font: 12px monospace;"></textarea>
-      <button id="reset-narrative" type="button">Reset to default</button>
+      <label for="template-narrative">Narrative template text</label>
+      <textarea id="template-narrative" rows="6" aria-describedby="template-help" style="width: 100%; box-sizing: border-box; font: 12px monospace;"></textarea>
+      <button id="reset-narrative" type="button">Reset narrative template to default</button>
     </fieldset>
 
-    <button id="save">Save</button><span id="saved" class="hidden">Saved.</span>
+    <button id="save">Save</button><span id="saved" role="status" aria-live="polite"></span>
 
     <script src="options.js" type="module"></script>
   </body>

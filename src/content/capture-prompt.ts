@@ -24,6 +24,12 @@ function mountPrompt(): void {
   root.innerHTML = `
     <style>
       * { box-sizing: border-box; }
+      /* '.card.collapsed { display: flex }' outranks the UA sheet's
+         [hidden] { display: none }, so setting card.hidden left the badge on
+         screen — it went on reporting "Recording — 1:03" after capture had
+         stopped. A popup that lies about live capture is worse than no
+         indicator, so hidden wins here regardless of what follows. */
+      [hidden] { display: none !important; }
       .card {
         font: 13px system-ui, sans-serif; color: #24292e; background: #fff;
         border: 1px solid #eee; border-radius: 4px; padding: 12px; width: 260px;
