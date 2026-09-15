@@ -15,8 +15,8 @@ export const DEFAULT_SETTINGS: Settings = {
   // Local WASM Whisper is the working default: no API key, and the audio never
   // leaves the machine (ADR-0004). Cloud transcription is strictly opt-in.
   nameEngineInArtifact: false,
-  // On by default — the meeting tab carries only the other participants, so
-  // without this the user's own words are missing from every summary (ADR-0007).
+  // The meeting tab carries only the other participants, so without the
+  // microphone the user's own words are missing from every summary (ADR-0007).
   //
   // Off by default all the same. Recording somebody's microphone is the one
   // escalation in this extension that cannot be taken back, so the SAFE state
