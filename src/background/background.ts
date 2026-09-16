@@ -25,7 +25,12 @@ import {
   refuseAudioAsSilent,
   silenceWarning,
 } from "./capture-signal";
-import { foldLocalMicrophone, micCaptureState, shouldCaptureMic } from "./mic-capture";
+import {
+  foldLocalMicrophone,
+  micCaptureState,
+  recordingBadge,
+  shouldCaptureMic,
+} from "./mic-capture";
 import { beginSpan, orderedSpans, spanIdsOf } from "./capture-spans";
 import { isMeetingUrl } from "./meeting-url";
 import { getHeld, holdTranscript, listHeld, releaseHeld, updateHeldReason } from "./held";
@@ -219,13 +224,21 @@ async function startShortcut(): Promise<string | null> {
 
 async function updateBadge(tabId: number): Promise<void> {
   const s = await getSession(tabId);
-  let text = "";
+  // Text and tooltip together, and from the session's own record of what the
+  // recorder has open rather than from the microphone setting, so the badge cannot
+  // claim a microphone that is not live (ADR-0007, `recordingBadge`).
+  const live = recordingBadge({
+    recording: s?.recording === true,
+    micRecording: s?.micRecording === true,
+  });
+  let text = live.text;
   let color = "#0e8a16";
   if (s?.recording) {
     // Always-visible recording indicator, Alert Red — the user approved red
     // carrying both warning and "live" meanings. Distinct from the caption
     // count, so live audio capture is never mistaken for caption scraping.
-    text = "REC";
+    // The same red whether or not the microphone is in the mix: both are live
+    // capture, and the letters are what tell them apart.
     color = "#d73a4a";
   } else if (s?.inMeeting) {
     if (s.accumulator.size === 0) {
@@ -238,6 +251,7 @@ async function updateBadge(tabId: number): Promise<void> {
   try {
     await action.setBadgeBackgroundColor({ color, tabId });
     await action.setBadgeText({ text, tabId });
+    await action.setTitle({ title: live.title, tabId });
   } catch {
     // Tab already gone (e.g. summarizing on tab close) — cosmetic only,
     // never allowed to abort a summarization.
@@ -592,6 +606,20 @@ async function statusFor(tabId: number): Promise<StatusReply> {
       }
       micRecording = os.micRecording;
       micError = os.micError;
+      if (s.micRecording !== os.micRecording) {
+        // Written back to the session, not just answered with: the badge is drawn
+        // from the session, so a stale `true` left here keeps three letters claiming
+        // a microphone the recorder has already lost. `mic-track-ended` normally
+        // reports that loss, but a message sent while the service worker is asleep is
+        // a message nobody hears, and this poll is the recorder's own account.
+        s.micRecording = os.micRecording;
+        // A span that stopped holding the local user cannot be talked back into
+        // holding them, so the Summary Artifact's claim drops the same way it does
+        // when the revocation did arrive.
+        if (!os.micRecording) s.localMicrophone = false;
+        await persistSessions();
+        await updateBadge(tabId);
+      }
     } catch {
       // Offscreen not reachable — leave the last known warning in place.
     }
