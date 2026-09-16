@@ -7,7 +7,8 @@
 //     the tab must reach the speakers, the microphone must never reach them, and
 //     both must reach the recording;
 //   - the microphone's state machine, which decides whether a Capture Start asks
-//     for the microphone at all and what the recording indicator may claim;
+//     for the microphone at all, what the recording indicator may claim, and what
+//     the always-visible badge says in the three letters everyone sees;
 //   - the Summary Artifact, which must not imply the local user was captured when
 //     they were not.
 //
@@ -18,6 +19,7 @@ import { mixCapture, type MixGraph } from "../src/offscreen/audio-mix";
 import {
   foldLocalMicrophone,
   micCaptureState,
+  recordingBadge,
   shouldCaptureMic,
 } from "../src/background/mic-capture";
 import { renderArtifact } from "../src/pipeline/artifact";
@@ -150,6 +152,58 @@ describe("what the recording indicator may say about the microphone", () => {
     expect(micCaptureState({ settings: unanswered, recording: false, micRecording: false })).toBe(
       "unconfirmed",
     );
+  });
+});
+
+describe("what the always-visible badge says about the microphone", () => {
+  it("names the microphone when the recorder has it in the mix", () => {
+    expect(recordingBadge({ recording: true, micRecording: true })?.text).toBe("MIC");
+  });
+
+  it("says only REC when the Meeting is being recorded without the microphone", () => {
+    expect(recordingBadge({ recording: true, micRecording: false })?.text).toBe("REC");
+  });
+
+  it("tells the two apart in the letters rather than by colour", () => {
+    // The defect this exists for: "REC" over both facts, in the one place the user
+    // cannot miss. Both states are live capture and both stay Alert Red, so the text
+    // is the whole difference — and it has to be a difference, or the badge is back
+    // to saying the same thing either way.
+    expect(recordingBadge({ recording: true, micRecording: true })?.text).not.toBe(
+      recordingBadge({ recording: true, micRecording: false })?.text,
+    );
+  });
+
+  it("stops claiming the microphone as soon as a mid-meeting revocation drops it", () => {
+    // Chrome's site controls can pull the microphone while the call runs. The remote
+    // participants are still captured, so the badge stays live — but it may not go on
+    // telling the user their own voice is in the recording.
+    expect(recordingBadge({ recording: true, micRecording: false })?.title).not.toContain(
+      "microphone on",
+    );
+  });
+
+  it("distinguishes the two states in words, not only in three letters", () => {
+    // For anyone who cannot read "MIC" against red, or who has the tooltip and not
+    // the badge: the sentence has to carry the same fact.
+    const withMic = recordingBadge({ recording: true, micRecording: true })?.title;
+    const tabOnly = recordingBadge({ recording: true, micRecording: false })?.title;
+    expect(withMic).toContain("microphone on");
+    expect(tabOnly).toContain("microphone off");
+    expect(withMic).not.toBe(tabOnly);
+  });
+
+  it("says nothing at all when nothing is being recorded", () => {
+    // What an idle badge shows is the caption count's business, not the
+    // microphone's — see `badgeFor`, which owns that half.
+    expect(recordingBadge({ recording: false, micRecording: false })).toBeNull();
+  });
+
+  it("claims nothing from a microphone flag left behind by a finished recording", () => {
+    // `micRecording` outliving `recording` should not happen — stopping releases the
+    // track — but a session is rehydrated from storage, so the pair is resolved in
+    // favour of the quieter claim rather than trusted.
+    expect(recordingBadge({ recording: false, micRecording: true })).toBeNull();
   });
 });
 

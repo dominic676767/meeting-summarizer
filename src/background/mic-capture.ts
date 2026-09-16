@@ -60,6 +60,66 @@ export function micCaptureState(v: MicCaptureView): MicCaptureState {
   return v.recording ? "unavailable" : "armed";
 }
 
+export interface RecordingBadgeView {
+  /** Audio is being recorded right now. */
+  recording: boolean;
+  /** The microphone is live in the mix right now, as the recorder reports it. */
+  micRecording: boolean;
+}
+
+export interface RecordingBadgeLabel {
+  /** The badge's three letters. */
+  text: string;
+  /** The same claim in words, for the badge's tooltip. */
+  title: string;
+}
+
+/**
+ * What the always-visible toolbar badge claims about live capture, or null when
+ * nothing is being recorded and the microphone therefore has nothing to claim.
+ *
+ * The badge has to carry this claim because the other two surfaces can be absent
+ * exactly when it matters: the in-page card is dismissible for the rest of the
+ * Meeting, and the popup has to be opened, which makes it something the user goes
+ * looking for rather than an indicator. ADR-0007 then loads the badge with more
+ * than convenience — an offscreen document raises no Chromium prompt and
+ * `audioCapture` grants the microphone without one, so after a single consent this
+ * extension's own surfaces are all that can say whose voice is being recorded in
+ * *this* Meeting. Three letters spent equally on both facts said nothing about the
+ * one that matters.
+ *
+ * Deliberately blind to `micCapture.enabled`, unlike `micCaptureState`: the badge
+ * reports what the recorder has open, never what the settings page asked for. So
+ * everything short of the recorder saying yes — a revoked microphone, a refused
+ * one, a session rehydrated from before the microphone existed — reads as tab-only.
+ * Under-reporting costs the user a glance at the popup; over-reporting tells
+ * somebody their microphone is live when it is not, which is the failure that makes
+ * an indicator worth less than no indicator.
+ *
+ * The colour is not decided here, and that is the point: both states are live
+ * capture, both take Alert Red, and only the text changes. A difference carried by
+ * colour alone is not a difference every user can see.
+ */
+export function recordingBadge(v: RecordingBadgeView): RecordingBadgeLabel | null {
+  if (v.recording && v.micRecording) {
+    return {
+      text: "MIC",
+      title: "Recording, microphone on — your own voice is in the recording.",
+    };
+  }
+  if (v.recording) {
+    return {
+      text: "REC",
+      title: "Recording, microphone off — only the other participants are being recorded.",
+    };
+  }
+  // Null rather than a blank label: what an idle badge shows is the caption count's
+  // business, and a caller that forgets this case should fail loudly instead of
+  // silently wiping a badge that had something to say. It also means a `micRecording`
+  // left behind by a finished recording can never be read as live capture here.
+  return null;
+}
+
 /**
  * Whether the Meeting's Audio Recording contains the local user's own voice,
  * folded across its Capture Starts.
