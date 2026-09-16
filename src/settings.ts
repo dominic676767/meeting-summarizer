@@ -50,10 +50,10 @@ export async function loadSettings(): Promise<Settings> {
     openai: { ...DEFAULT_SETTINGS.openai, ...s.openai },
     ollama: { ...DEFAULT_SETTINGS.ollama, ...s.ollama },
     bedrock: { ...DEFAULT_SETTINGS.bedrock, ...s.bedrock },
-    // A user upgrading into microphone capture inherits `enabled: true` and a
-    // null `confirmedAt`, so their next meeting is unchanged until they answer
-    // the disclosure. An upgrade must never start recording a microphone on its
-    // own.
+    // A user upgrading into microphone capture inherits `enabled: false` and a
+    // null `confirmedAt`, so their next meeting is unchanged until they switch it
+    // on and answer the disclosure. An upgrade must never start recording a
+    // microphone on its own, and neither gate is asked to hold that alone.
     micCapture: { ...DEFAULT_SETTINGS.micCapture, ...s.micCapture },
     // Additive for a v1 user: existing keys, templates and shape are untouched
     // and transcription arrives with its working default.

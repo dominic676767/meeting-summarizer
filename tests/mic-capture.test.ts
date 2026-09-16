@@ -92,9 +92,9 @@ describe("mixing the microphone into the Audio Recording", () => {
 
 describe("whether a Capture Start asks for the microphone", () => {
   it("does not ask before the disclosure has been answered", () => {
-    // On by default, but an escalation the user was never told about is one they
-    // did not agree to — and an offscreen document cannot raise Chromium's own
-    // prompt, so this is the only disclosure there is.
+    // Switched on is not consented to: an escalation the user was never told
+    // about is one they did not agree to — and an offscreen document cannot raise
+    // Chromium's own prompt, so this is the only disclosure there is.
     expect(shouldCaptureMic({ enabled: true, confirmedAt: null })).toBe(false);
   });
 
