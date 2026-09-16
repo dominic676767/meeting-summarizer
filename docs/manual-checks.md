@@ -29,7 +29,7 @@ Where an answer changes a decision, it belongs in the ADR as well. #24's Chrome-
 ## Tab audio capture (#12)
 
 - [ ] **The user keeps hearing the meeting for the whole call while recording.** `tabCapture` stops the tab's audio reaching the speakers unless the stream is reconnected through an `AudioContext` (ADR-0004). Nothing in the code can hear the difference and the meeting client reports nothing wrong — the only witness is the user's own ears, and the failure is total.
-- [ ] **The recording indicator is visible whenever audio is being captured, and reads differently from capturing captions alone.** The badge text is a pure function of session state and is tested as one; whether the rendered toolbar badge is actually legible and actually distinguishable is not.
+- [ ] **The recording indicator is visible whenever audio is being captured, and reads differently from capturing captions alone.** The badge text is a pure function of session state and is tested as one; whether the rendered toolbar badge is actually legible and actually distinguishable is not. Now largely covered by the badge checks under #24 — run those and this one is answered with them.
 - [ ] **Audio appends incrementally to browser-managed storage over a long meeting**, and memory does not grow with the meeting's length. The point of OPFS here is that an Audio Recording is never held whole in memory, which only a long real recording demonstrates.
 - [ ] **A storage-quota failure surfaces as a capture warning and the recording continues.** Needs a genuinely exhausted quota; a test can only exercise the branch, not the browser's behaviour on reaching it.
 - [ ] **Local WASM Whisper runs in the browser** and finishes a real meeting's audio, including the one-time model download.
@@ -40,9 +40,28 @@ Where an answer changes a decision, it belongs in the ADR as well. #24's Chrome-
 - [ ] **The user does not hear themselves.** `tests/mic-capture.test.ts` asserts the absence of the `mic → speakers` wire, which is the only way to catch a loopback outside a real call — but an echo is inaudible in the Audio Recording and audible only to the person wearing the headphones, so somebody has to wear them.
 - [ ] **A microphone denied at the OS level degrades to tab-only capture** rather than failing the recording, and the popup says which of the three causes happened (switched off, disclosure unanswered, refused). The states are pure and tested; that Chromium's actual refusal lands in the "refused" one is not.
 
-## Chrome's own microphone surfaces (#24)
+## The recording badge (#24)
+
+What the badge says for a given session is a pure function — `badgeFor` in `src/background/badge.ts` — and the whole table is asserted in `tests/badge.test.ts`. What Chromium does with the answer is not, and neither is whether a person can read it.
+
+- [ ] **`MIC` while the recorder has the microphone in the mix, `REC` while it does not.** Consent given in Settings, a real meeting, capture started: the letters have to match what is actually open, not what was asked for.
+- [ ] **A microphone revoked mid-Meeting drops the badge to `REC` while recording continues**, without the popup being opened. Revoke from Chrome's site controls or unplug the input device. This is the `mic-track-ended` path, and it is the one that fails silently — see the residual gap below.
+- [ ] **Record, stop, then hover.** The tooltip must stop mentioning the microphone. `chrome.action.setTitle` being per-tab and sticky is the assumption the entire design rests on: if a stopped recording's sentence survives, the badge goes on claiming a live microphone in words. Nothing outside a browser can check this.
+- [ ] **Two meeting tabs, one recording with the microphone and one without.** Each tab's badge and tooltip must show its own state; badge text and title are both set per-tab and nothing proves Chromium keeps them apart.
+- [ ] **`MIC` and `REC` both render in full** at default and 200% OS zoom, on light and dark toolbar themes — and are distinguishable in a greyscale screenshot, which is the colour-alone check the pure function cannot make.
+- [ ] **Past 999 caption lines the badge shows `999` and the tooltip the exact count.**
+
+### Chrome's own microphone surfaces
 
 Both of these decide how much this extension's own indicator has to carry, because an offscreen document has no UI and `audioCapture` grants the microphone without a prompt (ADR-0007).
 
 - [ ] **Does Chrome show any microphone-in-use indicator for a `getUserMedia` call made in an offscreen document** rather than in the meeting tab? The meeting tab's microphone pip is not expected to light, since the call is not in that tab.
 - [ ] **Does `chrome://settings/content/microphone` list the extension after consent**, giving the user a findable way to revoke it?
+
+### Known gap, not a check
+
+`statusFor` refreshes `micRecording` from the recorder, but it runs only when the popup asks. `captions-update` and `meeting-status` redraw the badge often without refreshing it, so they repaint a stale claim rather than correct it: a microphone lost without `mic-track-ended` arriving keeps the badge on `MIC` until somebody opens the popup — the surface the badge exists to spare them. Recorded here so the revocation check above is not read as covering it.
+
+## The popup and logo redesign (#25)
+
+Not yet landed — these live in `design-system/meeting-summarizer/MASTER.md` on the `popup-logo-redesign` branch and move here when it merges, per the rule above. In outline: the popup fixtures for every capture state, light and dark mode, increased text size, keyboard focus, reduced motion, forced colors, long meeting titles, delayed and rejected actions, the rasterized icon read at 16px against both toolbar themes, and `node scripts/check-popup-size.mjs` against a real Chromium — the last of which exists because Chromium sizes an action popup from its own document, and no page preview takes that path.
