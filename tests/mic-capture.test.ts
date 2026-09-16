@@ -157,11 +157,11 @@ describe("what the recording indicator may say about the microphone", () => {
 
 describe("what the always-visible badge says about the microphone", () => {
   it("names the microphone when the recorder has it in the mix", () => {
-    expect(recordingBadge({ recording: true, micRecording: true }).text).toBe("MIC");
+    expect(recordingBadge({ recording: true, micRecording: true })?.text).toBe("MIC");
   });
 
   it("says only REC when the Meeting is being recorded without the microphone", () => {
-    expect(recordingBadge({ recording: true, micRecording: false }).text).toBe("REC");
+    expect(recordingBadge({ recording: true, micRecording: false })?.text).toBe("REC");
   });
 
   it("tells the two apart in the letters rather than by colour", () => {
@@ -169,8 +169,8 @@ describe("what the always-visible badge says about the microphone", () => {
     // cannot miss. Both states are live capture and both stay Alert Red, so the text
     // is the whole difference — and it has to be a difference, or the badge is back
     // to saying the same thing either way.
-    expect(recordingBadge({ recording: true, micRecording: true }).text).not.toBe(
-      recordingBadge({ recording: true, micRecording: false }).text,
+    expect(recordingBadge({ recording: true, micRecording: true })?.text).not.toBe(
+      recordingBadge({ recording: true, micRecording: false })?.text,
     );
   });
 
@@ -178,7 +178,7 @@ describe("what the always-visible badge says about the microphone", () => {
     // Chrome's site controls can pull the microphone while the call runs. The remote
     // participants are still captured, so the badge stays live — but it may not go on
     // telling the user their own voice is in the recording.
-    expect(recordingBadge({ recording: true, micRecording: false }).title).not.toContain(
+    expect(recordingBadge({ recording: true, micRecording: false })?.title).not.toContain(
       "microphone on",
     );
   });
@@ -186,27 +186,24 @@ describe("what the always-visible badge says about the microphone", () => {
   it("distinguishes the two states in words, not only in three letters", () => {
     // For anyone who cannot read "MIC" against red, or who has the tooltip and not
     // the badge: the sentence has to carry the same fact.
-    const withMic = recordingBadge({ recording: true, micRecording: true }).title;
-    const tabOnly = recordingBadge({ recording: true, micRecording: false }).title;
+    const withMic = recordingBadge({ recording: true, micRecording: true })?.title;
+    const tabOnly = recordingBadge({ recording: true, micRecording: false })?.title;
     expect(withMic).toContain("microphone on");
     expect(tabOnly).toContain("microphone off");
     expect(withMic).not.toBe(tabOnly);
   });
 
-  it("leaves the badge to the caption count when nothing is being recorded", () => {
-    expect(recordingBadge({ recording: false, micRecording: false }).text).toBe("");
-    expect(recordingBadge({ recording: false, micRecording: false }).title).toContain(
-      "not recording",
-    );
+  it("says nothing at all when nothing is being recorded", () => {
+    // What an idle badge shows is the caption count's business, not the
+    // microphone's — see `badgeFor`, which owns that half.
+    expect(recordingBadge({ recording: false, micRecording: false })).toBeNull();
   });
 
   it("claims nothing from a microphone flag left behind by a finished recording", () => {
     // `micRecording` outliving `recording` should not happen — stopping releases the
-    // track — but a tooltip is sticky and a session is rehydrated from storage, so
-    // the pair is resolved in favour of the quieter claim rather than trusted.
-    const stale = recordingBadge({ recording: false, micRecording: true });
-    expect(stale.text).toBe("");
-    expect(stale.title).not.toContain("microphone on");
+    // track — but a session is rehydrated from storage, so the pair is resolved in
+    // favour of the quieter claim rather than trusted.
+    expect(recordingBadge({ recording: false, micRecording: true })).toBeNull();
   });
 });
 

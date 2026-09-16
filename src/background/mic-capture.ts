@@ -68,17 +68,15 @@ export interface RecordingBadgeView {
 }
 
 export interface RecordingBadgeLabel {
-  /**
-   * The badge's three letters. Empty when nothing is being recorded, because the
-   * badge belongs to the caption count then.
-   */
+  /** The badge's three letters. */
   text: string;
   /** The same claim in words, for the badge's tooltip. */
   title: string;
 }
 
 /**
- * What the always-visible toolbar badge claims about live capture.
+ * What the always-visible toolbar badge claims about live capture, or null when
+ * nothing is being recorded and the microphone therefore has nothing to claim.
  *
  * The badge has to carry this claim because the other two surfaces can be absent
  * exactly when it matters: the in-page card is dismissible for the rest of the
@@ -102,7 +100,7 @@ export interface RecordingBadgeLabel {
  * capture, both take Alert Red, and only the text changes. A difference carried by
  * colour alone is not a difference every user can see.
  */
-export function recordingBadge(v: RecordingBadgeView): RecordingBadgeLabel {
+export function recordingBadge(v: RecordingBadgeView): RecordingBadgeLabel | null {
   if (v.recording && v.micRecording) {
     return {
       text: "MIC",
@@ -115,10 +113,11 @@ export function recordingBadge(v: RecordingBadgeView): RecordingBadgeLabel {
       title: "Recording, microphone off — only the other participants are being recorded.",
     };
   }
-  // Said in words rather than left to whatever the last recording set, because a
-  // tooltip is sticky: a title still claiming a live microphone after the recorder
-  // stopped is the same lie one stop later.
-  return { text: "", title: "Meeting Summarizer — not recording." };
+  // Null rather than a blank label: what an idle badge shows is the caption count's
+  // business, and a caller that forgets this case should fail loudly instead of
+  // silently wiping a badge that had something to say. It also means a `micRecording`
+  // left behind by a finished recording can never be read as live capture here.
+  return null;
 }
 
 /**

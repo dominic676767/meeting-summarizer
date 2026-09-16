@@ -25,12 +25,8 @@ import {
   refuseAudioAsSilent,
   silenceWarning,
 } from "./capture-signal";
-import {
-  foldLocalMicrophone,
-  micCaptureState,
-  recordingBadge,
-  shouldCaptureMic,
-} from "./mic-capture";
+import { foldLocalMicrophone, micCaptureState, shouldCaptureMic } from "./mic-capture";
+import { badgeFor } from "./badge";
 import { beginSpan, orderedSpans, spanIdsOf } from "./capture-spans";
 import { isMeetingUrl } from "./meeting-url";
 import { getHeld, holdTranscript, listHeld, releaseHeld, updateHeldReason } from "./held";
@@ -224,34 +220,21 @@ async function startShortcut(): Promise<string | null> {
 
 async function updateBadge(tabId: number): Promise<void> {
   const s = await getSession(tabId);
-  // Text and tooltip together, and from the session's own record of what the
-  // recorder has open rather than from the microphone setting, so the badge cannot
-  // claim a microphone that is not live (ADR-0007, `recordingBadge`).
-  const live = recordingBadge({
+  // Text, colour and tooltip in one pure decision (`badge.ts`), and the microphone
+  // half of it read from what the recorder has open rather than from the setting, so
+  // the badge cannot claim a microphone that is not live (ADR-0007). Nothing about
+  // what the badge says is decided here: this function is the part that cannot be
+  // tested, so it is kept to the three API calls.
+  const badge = badgeFor({
     recording: s?.recording === true,
     micRecording: s?.micRecording === true,
+    inMeeting: s?.inMeeting === true,
+    segmentCount: s?.accumulator.size ?? 0,
   });
-  let text = live.text;
-  let color = "#0e8a16";
-  if (s?.recording) {
-    // Always-visible recording indicator, Alert Red — the user approved red
-    // carrying both warning and "live" meanings. Distinct from the caption
-    // count, so live audio capture is never mistaken for caption scraping.
-    // The same red whether or not the microphone is in the mix: both are live
-    // capture, and the letters are what tell them apart.
-    color = "#d73a4a";
-  } else if (s?.inMeeting) {
-    if (s.accumulator.size === 0) {
-      text = "!";
-      color = "#d73a4a"; // in a meeting, no captions arriving
-    } else {
-      text = s.accumulator.size > 999 ? "999" : String(s.accumulator.size);
-    }
-  }
   try {
-    await action.setBadgeBackgroundColor({ color, tabId });
-    await action.setBadgeText({ text, tabId });
-    await action.setTitle({ title: live.title, tabId });
+    await action.setBadgeBackgroundColor({ color: badge.color, tabId });
+    await action.setBadgeText({ text: badge.text, tabId });
+    await action.setTitle({ title: badge.title, tabId });
   } catch {
     // Tab already gone (e.g. summarizing on tab close) — cosmetic only,
     // never allowed to abort a summarization.
@@ -607,11 +590,15 @@ async function statusFor(tabId: number): Promise<StatusReply> {
       micRecording = os.micRecording;
       micError = os.micError;
       if (s.micRecording !== os.micRecording) {
-        // Written back to the session, not just answered with: the badge is drawn
-        // from the session, so a stale `true` left here keeps three letters claiming
-        // a microphone the recorder has already lost. `mic-track-ended` normally
-        // reports that loss, but a message sent while the service worker is asleep is
-        // a message nobody hears, and this poll is the recorder's own account.
+        // Written back to the session, not merely answered with: the badge is drawn
+        // from the session, so a stale `true` left here would survive this poll and
+        // keep three letters claiming a microphone the recorder has already lost.
+        //
+        // It corrects the badge; it does not notice in time. This function runs only
+        // when the popup asks, so a microphone lost without `mic-track-ended` arriving
+        // leaves the badge claiming MIC until somebody opens the popup — the surface
+        // the badge exists to spare them. Closing that gap needs a trigger that does
+        // not depend on the popup, which is a design decision larger than this change.
         s.micRecording = os.micRecording;
         // A span that stopped holding the local user cannot be talked back into
         // holding them, so the Summary Artifact's claim drops the same way it does
