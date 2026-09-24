@@ -228,6 +228,7 @@ async function updateBadge(tabId: number): Promise<void> {
   const badge = badgeFor({
     recording: s?.recording === true,
     micRecording: s?.micRecording === true,
+    warning: s?.captureWarning?.message ?? null,
     inMeeting: s?.inMeeting === true,
     segmentCount: s?.accumulator.size ?? 0,
   });
@@ -580,12 +581,20 @@ async function statusFor(tabId: number): Promise<StatusReply> {
   if (s?.recording) {
     try {
       const os = await sendToOffscreen({ type: "offscreen-status" });
+      let changed = false;
       if (os.error) {
         captureWarning = {
           message:
             "Recording — some audio could not be saved. Captions are still being captured, so a summary will still land.",
           detail: os.error,
         };
+        // Written back for the same reason as the microphone below: the badge is
+        // drawn from the session, and a storage fault only this reply knew about
+        // would otherwise reach the popup and never the badge.
+        if (s.captureWarning?.detail !== os.error) {
+          s.captureWarning = captureWarning;
+          changed = true;
+        }
       }
       micRecording = os.micRecording;
       micError = os.micError;
@@ -593,17 +602,20 @@ async function statusFor(tabId: number): Promise<StatusReply> {
         // Written back to the session, not merely answered with: the badge is drawn
         // from the session, so a stale `true` left here would survive this poll and
         // keep three letters claiming a microphone the recorder has already lost.
-        //
-        // It corrects the badge; it does not notice in time. This function runs only
-        // when the popup asks, so a microphone lost without `mic-track-ended` arriving
-        // leaves the badge claiming MIC until somebody opens the popup — the surface
-        // the badge exists to spare them. Closing that gap needs a trigger that does
-        // not depend on the popup, which is a design decision larger than this change.
         s.micRecording = os.micRecording;
         // A span that stopped holding the local user cannot be talked back into
         // holding them, so the Summary Artifact's claim drops the same way it does
         // when the revocation did arrive.
         if (!os.micRecording) s.localMicrophone = false;
+        changed = true;
+      }
+      // It corrects the badge; it does not notice in time. This function runs only
+      // when the popup asks, so a storage fault, or a microphone lost without
+      // `mic-track-ended` arriving, leaves the badge on its last claim until somebody
+      // opens the popup — the surface the badge exists to spare them. Nothing else
+      // polls the recorder, so closing that gap means giving it a trigger that does
+      // not depend on the popup.
+      if (changed) {
         await persistSessions();
         await updateBadge(tabId);
       }
@@ -744,6 +756,10 @@ ext.runtime.onMessage.addListener((raw: unknown, sender) => {
       s.captureWarning = silenceWarning(s.captureWarning, msg.detail);
       console.warn(`meeting-summarizer: recording is silent — ${msg.detail}`);
       await persistSessions();
+      // Redrawn here and not left to the next caption update: a Meeting gone silent
+      // may well be one whose captions have stopped too, and a warning that only
+      // reaches the popup is one the user has to go looking for.
+      await updateBadge(msg.tabId);
       return { ok: true };
     })();
   }

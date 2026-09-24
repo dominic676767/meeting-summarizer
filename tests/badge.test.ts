@@ -12,7 +12,14 @@ const ALERT_RED = "#d73a4a";
 const SIGNAL_GREEN = "#0e8a16";
 
 function view(over: Partial<BadgeView> = {}): BadgeView {
-  return { recording: false, micRecording: false, inMeeting: false, segmentCount: 0, ...over };
+  return {
+    recording: false,
+    micRecording: false,
+    warning: null,
+    inMeeting: false,
+    segmentCount: 0,
+    ...over,
+  };
 }
 
 describe("the badge while audio is being recorded", () => {
@@ -49,6 +56,69 @@ describe("the badge while audio is being recorded", () => {
   });
 });
 
+describe("the badge while a recording has a fault", () => {
+  const SILENT = "No sound has reached the recording yet.";
+  const MIC_LOST = "Your microphone stopped being recorded.";
+
+  it("marks a fault with the microphone live as MIC!, keeping the microphone", () => {
+    // The fault must not cost the user the fact the badge exists for: their own
+    // voice is still in the recording, and the letters still say so.
+    expect(
+      badgeFor(view({ recording: true, micRecording: true, inMeeting: true, warning: SILENT })),
+    ).toEqual({
+      text: "MIC!",
+      color: ALERT_RED,
+      title: `${SILENT} Recording, microphone on — your own voice is in the recording.`,
+    });
+  });
+
+  it("marks a fault without the microphone as REC!", () => {
+    expect(
+      badgeFor(view({ recording: true, micRecording: false, inMeeting: true, warning: MIC_LOST })),
+    ).toEqual({
+      text: "REC!",
+      color: ALERT_RED,
+      title:
+        `${MIC_LOST} ` +
+        "Recording, microphone off — only the other participants are being recorded.",
+    });
+  });
+
+  it("leads the tooltip with the fault, then says whether the microphone is live", () => {
+    const withMic = badgeFor(view({ recording: true, micRecording: true, warning: SILENT }));
+    const tabOnly = badgeFor(view({ recording: true, micRecording: false, warning: SILENT }));
+    expect(withMic.title.startsWith(SILENT)).toBe(true);
+    expect(tabOnly.title.startsWith(SILENT)).toBe(true);
+    expect(withMic.title).toContain("microphone on");
+    expect(tabOnly.title).toContain("microphone off");
+  });
+
+  it("stays Alert Red and differs from healthy recording in the text alone", () => {
+    for (const micRecording of [true, false]) {
+      const healthy = badgeFor(view({ recording: true, micRecording }));
+      const faulty = badgeFor(view({ recording: true, micRecording, warning: SILENT }));
+      expect(faulty.color).toBe(healthy.color);
+      expect(faulty.text).toBe(`${healthy.text}!`);
+    }
+  });
+
+  it("fits the four characters a badge has room for", () => {
+    for (const micRecording of [true, false]) {
+      const faulty = badgeFor(view({ recording: true, micRecording, warning: SILENT }));
+      expect(faulty.text.length).toBeLessThanOrEqual(4);
+    }
+  });
+
+  it("changes nothing once the recording has stopped", () => {
+    // A warning outlives the recording it was about, so an idle badge ignores it
+    // rather than go on reporting a fault in audio that is no longer being taken.
+    const idle = [view(), view({ inMeeting: true }), view({ inMeeting: true, segmentCount: 7 })];
+    for (const v of idle) {
+      expect(badgeFor({ ...v, warning: SILENT })).toEqual(badgeFor(v));
+    }
+  });
+});
+
 describe("the badge while a Meeting is running but nothing is being recorded", () => {
   it("counts the caption lines on Signal Green", () => {
     expect(badgeFor(view({ inMeeting: true, segmentCount: 42 }))).toEqual({
@@ -59,8 +129,7 @@ describe("the badge while a Meeting is running but nothing is being recorded", (
   });
 
   it("says a count is not a recording", () => {
-    // The review that asked for this: a number on a green badge reads as "working",
-    // and a user hovering to find out what it means must not be left to assume the
+    // A number on a green badge reads as "working", and a user hovering to find out what it means must not be left to assume the
     // meeting is being recorded.
     expect(badgeFor(view({ inMeeting: true, segmentCount: 42 })).title).toContain(
       "not recording",
@@ -105,6 +174,14 @@ describe("every state the badge can be in describes itself", () => {
   const states: Array<[string, BadgeView]> = [
     ["recording with the microphone", view({ recording: true, micRecording: true, inMeeting: true })],
     ["recording without the microphone", view({ recording: true, inMeeting: true })],
+    [
+      "a faulty recording with the microphone",
+      view({ recording: true, micRecording: true, inMeeting: true, warning: "No sound." }),
+    ],
+    [
+      "a faulty recording without the microphone",
+      view({ recording: true, inMeeting: true, warning: "No sound." }),
+    ],
     ["in a Meeting with captions", view({ inMeeting: true, segmentCount: 7 })],
     ["in a Meeting with no captions", view({ inMeeting: true })],
     ["no Meeting", view()],
