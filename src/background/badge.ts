@@ -13,13 +13,17 @@
 // have to agree — a tooltip describing one state while the letters describe
 // another is a smaller version of the same defect as letters that describe no
 // state at all.
-import { recordingBadge } from "./mic-capture";
+import { recordingBadge, type RecordingBadgeView } from "./mic-capture";
 
-export interface BadgeView {
-  /** Audio is being recorded right now. */
-  recording: boolean;
-  /** The microphone is live in the mix right now, as the recorder reports it. */
-  micRecording: boolean;
+export interface BadgeView extends RecordingBadgeView {
+  /**
+   * The message of the session's active capture warning — silence, a storage
+   * fault, a revoked microphone — or null when capture is healthy. Only read while
+   * recording: a warning is not cleared when a recording stops, so once idle it is
+   * a report about audio that is no longer being taken, and the popup is where
+   * that belongs.
+   */
+  warning: string | null;
   /** A Meeting is visible in this tab. */
   inMeeting: boolean;
   /** Caption Segments accumulated for this Meeting so far. */
@@ -41,10 +45,10 @@ export interface Badge {
 }
 
 /**
- * Alert Red. Both live-capture states and the captions-off warning, which is the
- * double duty DESIGN.md's Text-or-Dot Rule governs and the user approved for this
- * badge specifically: a toolbar badge has no room for a dot beside text, so the
- * words in the tooltip carry the distinction the form cannot.
+ * Alert Red. Every live-capture state, faulty or not, and the captions-off warning,
+ * which is the double duty DESIGN.md's Text-or-Dot Rule governs and the user
+ * approved for this badge specifically: a toolbar badge has no room for a dot
+ * beside text, so the words in the tooltip carry the distinction the form cannot.
  */
 const ALERT_RED = "#d73a4a";
 /** Signal Green: captions are arriving and the tool is doing its job. */
@@ -63,6 +67,13 @@ const BADGE_COUNT_CAP = 999;
  *
  * Letters for capture and digits for captions, so the two are never read as each
  * other — a count is the tool working, not a recording.
+ *
+ * A fault while recording appends `!` to the live letters rather than replacing
+ * them: `MIC!` and `REC!`. The `!` is the mark the captions-off warning already
+ * uses for "something here needs you", and keeping the letters in front of it
+ * means a fault never costs the user the one fact the badge exists to carry —
+ * whether their own voice is being recorded. Four characters is what a Chromium
+ * badge fits before it starts clipping, so this is the whole of the room.
  */
 export function badgeFor(v: BadgeView): Badge {
   // Whether the microphone is named is `recordingBadge`'s decision, and the colour
@@ -70,6 +81,13 @@ export function badgeFor(v: BadgeView): Badge {
   // text alone. A difference carried by colour would be no difference to a user who
   // cannot see it.
   const live = recordingBadge(v);
+  if (live && v.warning !== null) {
+    // The fault first, in its own words, because it is the part the user can act
+    // on; the microphone sentence after it, because a fault is exactly when a user
+    // most needs to know whether their voice is still in the recording. Still
+    // Alert Red: under the Text-or-Dot Rule it is the text that changes.
+    return { text: `${live.text}!`, color: ALERT_RED, title: `${v.warning} ${live.title}` };
+  }
   if (live) return { text: live.text, color: ALERT_RED, title: live.title };
   if (!v.inMeeting) {
     return { text: "", color: SIGNAL_GREEN, title: "Meeting Summarizer — no meeting detected." };

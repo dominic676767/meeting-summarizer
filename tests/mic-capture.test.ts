@@ -156,43 +156,9 @@ describe("what the recording indicator may say about the microphone", () => {
 });
 
 describe("what the always-visible badge says about the microphone", () => {
-  it("names the microphone when the recorder has it in the mix", () => {
-    expect(recordingBadge({ recording: true, micRecording: true })?.text).toBe("MIC");
-  });
-
-  it("says only REC when the Meeting is being recorded without the microphone", () => {
-    expect(recordingBadge({ recording: true, micRecording: false })?.text).toBe("REC");
-  });
-
-  it("tells the two apart in the letters rather than by colour", () => {
-    // The defect this exists for: "REC" over both facts, in the one place the user
-    // cannot miss. Both states are live capture and both stay Alert Red, so the text
-    // is the whole difference — and it has to be a difference, or the badge is back
-    // to saying the same thing either way.
-    expect(recordingBadge({ recording: true, micRecording: true })?.text).not.toBe(
-      recordingBadge({ recording: true, micRecording: false })?.text,
-    );
-  });
-
-  it("stops claiming the microphone as soon as a mid-meeting revocation drops it", () => {
-    // Chrome's site controls can pull the microphone while the call runs. The remote
-    // participants are still captured, so the badge stays live — but it may not go on
-    // telling the user their own voice is in the recording.
-    expect(recordingBadge({ recording: true, micRecording: false })?.title).not.toContain(
-      "microphone on",
-    );
-  });
-
-  it("distinguishes the two states in words, not only in three letters", () => {
-    // For anyone who cannot read "MIC" against red, or who has the tooltip and not
-    // the badge: the sentence has to carry the same fact.
-    const withMic = recordingBadge({ recording: true, micRecording: true })?.title;
-    const tabOnly = recordingBadge({ recording: true, micRecording: false })?.title;
-    expect(withMic).toContain("microphone on");
-    expect(tabOnly).toContain("microphone off");
-    expect(withMic).not.toBe(tabOnly);
-  });
-
+  // The letters and sentences of the two live states are checked where the badge
+  // is decided, in `badge.test.ts`. What is left here is the half only this seam
+  // owns: when there is no microphone claim to make at all.
   it("says nothing at all when nothing is being recorded", () => {
     // What an idle badge shows is the caption count's business, not the
     // microphone's — see `badgeFor`, which owns that half.

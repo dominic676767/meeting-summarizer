@@ -44,12 +44,12 @@ Where an answer changes a decision, it belongs in the ADR as well. #24's Chrome-
 
 What the badge says for a given session is a pure function — `badgeFor` in `src/background/badge.ts` — and the whole table is asserted in `tests/badge.test.ts`. What Chromium does with the answer is not, and neither is whether a person can read it.
 
-- [ ] **`MIC` while the recorder has the microphone in the mix, `REC` while it does not.** Consent given in Settings, a real meeting, capture started: the letters have to match what is actually open, not what was asked for.
+- [ ] **The recorder reports `micRecording` truthfully in a real meeting.** Consent given in Settings, capture started: with the microphone genuinely in the mix the report must be true, and with it absent — refused, or no input device — false. Which letters follow from the report is `badgeFor`'s table and already tested; whether the report matches what a real `getUserMedia` stream actually opened is not.
 - [ ] **A microphone revoked mid-Meeting drops the badge to `REC` while recording continues**, without the popup being opened. Revoke from Chrome's site controls or unplug the input device. This is the `mic-track-ended` path, and it is the one that fails silently — see the residual gap below.
 - [ ] **Record, stop, then hover.** The tooltip must stop mentioning the microphone. `chrome.action.setTitle` being per-tab and sticky is the assumption the entire design rests on: if a stopped recording's sentence survives, the badge goes on claiming a live microphone in words. Nothing outside a browser can check this.
 - [ ] **Two meeting tabs, one recording with the microphone and one without.** Each tab's badge and tooltip must show its own state; badge text and title are both set per-tab and nothing proves Chromium keeps them apart.
-- [ ] **`MIC` and `REC` both render in full** at default and 200% OS zoom, on light and dark toolbar themes — and are distinguishable in a greyscale screenshot, which is the colour-alone check the pure function cannot make.
-- [ ] **Past 999 caption lines the badge shows `999` and the tooltip the exact count.**
+- [ ] **A fault while recording shows `MIC!` or `REC!` without the popup being opened.** Force silence (mute the meeting and yourself) or revoke the microphone mid-recording: all four characters must show unclipped, and the tooltip must lead with the warning. Four characters is the most a Chromium badge is believed to fit, and only a browser can say whether it does.
+- [ ] **`MIC`, `REC`, and a three-digit count such as `999` all render in full** at default and 200% OS zoom, on light and dark toolbar themes — and are distinguishable in a greyscale screenshot, which is the colour-alone check the pure function cannot make.
 
 ### Chrome's own microphone surfaces
 
@@ -64,4 +64,4 @@ Both of these decide how much this extension's own indicator has to carry, becau
 
 ## The popup and logo redesign (#25)
 
-Not yet landed — these live in `design-system/meeting-summarizer/MASTER.md` on the `popup-logo-redesign` branch and move here when it merges, per the rule above. In outline: the popup fixtures for every capture state, light and dark mode, increased text size, keyboard focus, reduced motion, forced colors, long meeting titles, delayed and rejected actions, the rasterized icon read at 16px against both toolbar themes, and `node scripts/check-popup-size.mjs` against a real Chromium — the last of which exists because Chromium sizes an action popup from its own document, and no page preview takes that path.
+Not yet landed. Its checks live in `design-system/meeting-summarizer/MASTER.md` on the `popup-logo-redesign` branch and move here when #25 merges, per the rule above.
