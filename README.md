@@ -44,6 +44,8 @@ Local Whisper is the default and needs no key. Pick a model size in Settings —
 
 Choosing a different cloud engine asks for microphone consent again, because the recording would go to a different company.
 
+How the three engines compare on the same audio — word error rate, and how often each word is credited to the right speaker — is measured with the harness in `eval/`; the method and the rules for what audio may be used are in [docs/evaluations](docs/evaluations/README.md).
+
 ## Summary shapes
 
 Structured (TL;DR / decisions / action items with owners / open questions — default) or narrative recap. Both prompt templates are fully editable in Settings; defaults answer in the transcript's language.
