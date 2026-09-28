@@ -195,7 +195,11 @@ export function createElevenLabsTranscriptionEngine(opts: {
       // Scribe tags them regardless.
       form.append("tag_audio_events", "false");
 
-      const timeoutMs = timeoutMsFor(durationSec * 1000);
+      // Whole milliseconds, rounded up. A window's duration is almost never a
+      // whole number of ms (16 samples make one), and Node refuses a fractional
+      // delay outright rather than rounding it; rounding up rather than down
+      // means a slow upload is never cut off early.
+      const timeoutMs = Math.ceil(timeoutMsFor(durationSec * 1000));
       const timeout = AbortSignal.timeout(timeoutMs);
       const abort = signal ? AbortSignal.any([signal, timeout]) : timeout;
       try {

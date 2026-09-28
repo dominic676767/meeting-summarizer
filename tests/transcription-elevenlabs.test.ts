@@ -324,6 +324,29 @@ describe("ElevenLabs Scribe Transcription Provider", () => {
     }
   });
 
+  it("gives the upload a whole-millisecond deadline, rounded up, whatever the clip's length", async () => {
+    // 16_001 samples is 1000.0625 ms of audio. Node refuses a fractional delay
+    // outright (ERR_OUT_OF_RANGE), so an unrounded deadline failed every real
+    // clip before its upload began; rounding down could cut a slow upload short.
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    try {
+      const engine = createElevenLabsTranscriptionEngine({
+        apiKey: "xi-t",
+        model: "scribe_v2",
+        language: "en",
+        fetchFn: fakeFetch(oneWord).fn,
+      });
+      await engine.transcribe(new Float32Array(16_001));
+      const unrounded = SCRIBE_TIMEOUT_GRACE_MS + (16_001 / SAMPLE_RATE) * 1000;
+      const delay = timeoutSpy.mock.calls[0]![0];
+      expect(Number.isInteger(delay)).toBe(true);
+      expect(delay).toBeGreaterThanOrEqual(unrounded);
+      expect(delay).toBe(Math.ceil(unrounded));
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
   it("stops an upload in flight when the user skips the wait", async () => {
     const { fn, calls } = hangingFetch();
     const abort = new AbortController();
