@@ -62,6 +62,32 @@ Both of these decide how much this extension's own indicator has to carry, becau
 
 `statusFor` refreshes `micRecording` from the recorder, but it runs only when the popup asks. `captions-update` and `meeting-status` redraw the badge often without refreshing it, so they repaint a stale claim rather than correct it: a microphone lost without `mic-track-ended` arriving keeps the badge on `MIC` until somebody opens the popup — the surface the badge exists to spare them. Recorded here so the revocation check above is not read as covering it.
 
+## ElevenLabs Scribe (#34)
+
+Everything Scribe decides about a transcript is a pure function and is tested with the HTTP call faked: the word list turned into spans, the renumbered and part-named labels, the request's fields, the timeout, the cancel reaching an upload in flight, and the consent rule (`micConsentAfterSave`). None of that proves the live endpoint answers the request the engine sends, or that the pages show what the code sets. These checks do. They need a real ElevenLabs key, so they are also the only place the engine meets the real service before a release.
+
+**Run them on audio you are allowed to upload.** A mock meeting with people who have agreed to be recorded and sent to ElevenLabs, never a work or customer call. Choosing this engine uploads the meeting.
+
+Setup: `npm run build`, reload the unpacked extension, and in Settings choose **ElevenLabs Scribe**, paste the key, and leave the model as `scribe_v2`. Turn on **Name the transcription engine in saved summaries** for the artifact check below.
+
+- [ ] **The live endpoint accepts the request and returns diarized words.** A two-person mock meeting of a few minutes, captions on, ends in a Summary Artifact whose transcript came from recorded audio. The request shape is asserted against a fake; only the real service can say it accepts bare PCM with `file_format=pcm_s16le_16` and the language code, and that the extension's host permission lets the offscreen document reach it.
+- [ ] **Where captions give no name, lines read `Speaker 1` / `Speaker 2`, not `Unknown speaker`.** Turn live captions off for a stretch of the meeting and speak in turns. The fallback is tested in fusion; that Scribe really separates two voices in a real mix (tab audio plus microphone, ADR-0007) is the claim this engine exists to make.
+- [ ] **Stopping and resuming capture names each label's part.** Stop recording partway, resume, and again leave a stretch uncaptioned: labels in the second stretch read `Speaker 1 (part 2)`. Tested with a fake engine; this checks the parts line up with real Capture Spans.
+- [ ] **The popup says where the audio is while it waits**: *Uploading to ElevenLabs to transcribe…*, with no percentage, until the summary is written.
+- [ ] **"Skip transcription, use captions" during the upload ends the wait within a few seconds**, produces a caption-only summary, and leaves nothing in the Held Recordings list. Also look at the ElevenLabs usage page afterwards and record whether the cancelled upload was billed. The extension cannot know, and a user skipping a long upload should be told if it still costs them.
+- [ ] **A wrong key holds the Recording, and fixing the key recovers it.** Save a deliberately wrong key, run a short meeting: it lands in Held Recordings with an HTTP 401 reason. Correct the key and use **Retry transcription**: the same meeting is summarized from audio.
+- [ ] **The Meeting Language reaches the live endpoint.** Set the language to Malay and hold a short stretch in Malay, then Chinese in Mandarin: the transcript comes back in that language and script, not translated and not romanized. How *accurate* it is belongs to the evaluation in `docs/evaluations/`, not here.
+- [ ] **The Summary Artifact names the engine as `ElevenLabs scribe_v2`** when engine naming is on, and names no engine when it is off.
+
+### Consent when the destination changes (ADR-0008)
+
+The rule is pure and tested. What is not is the options page wiring the right inputs into it and showing the right company name.
+
+- [ ] **Local → ElevenLabs asks again, naming ElevenLabs.** With microphone consent given under local Whisper, select ElevenLabs Scribe and save. The microphone disclosure's cloud variant must read *uploaded to ElevenLabs*, and the popup must treat the microphone as unconfirmed until the disclosure is answered again.
+- [ ] **OpenAI → ElevenLabs asks again, naming ElevenLabs.** The same, starting from consent given under OpenAI. This is the case ADR-0008 changed.
+- [ ] **Saving again under ElevenLabs does not ask again.** After answering the disclosure under ElevenLabs, change an unrelated setting such as the summary shape and save: consent stays.
+- [ ] **ElevenLabs → local keeps consent**, and the disclosure goes back to the on-this-machine wording.
+
 ## The popup and logo redesign (#25)
 
 Not yet landed. Its checks live in `design-system/meeting-summarizer/MASTER.md` on the `popup-logo-redesign` branch and move here when #25 merges, per the rule above.
