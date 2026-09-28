@@ -230,17 +230,20 @@ $("save").addEventListener("click", async () => {
   // from every incidental Save.
   const micChecked = $<HTMLInputElement>("mic-capture").checked;
   // Consent has to stay specific to what was promised. A user says yes to the
-  // microphone partly because transcription happens on their machine; selecting a
-  // cloud engine makes that untrue, and their voice would start being uploaded
-  // under a consent that predates the change. So the confirmation is withdrawn
-  // and the disclosure asks again, naming the destination. Failing toward one
-  // extra ask beats failing toward an upload nobody agreed to.
-  const switchedToCloud =
-    s.transcription.provider !== "local-whisper" &&
+  // microphone partly because transcription happens on their machine, or partly
+  // because they trust the one company the disclosure named; selecting a cloud
+  // engine that uploads somewhere else makes that untrue, and their voice would
+  // start being uploaded under a consent that predates the change. So the
+  // confirmation is withdrawn and the disclosure asks again, naming the new
+  // destination — from one cloud engine to another too (ADR-0008 amends
+  // ADR-0007 here). Failing toward one extra ask beats failing toward an upload
+  // nobody agreed to.
+  const destinationChanged =
+    uploadsAudio(s.transcription.provider) &&
     s.transcription.provider !== micConsentProviderAsLoaded;
   s.micCapture = {
     enabled: micChecked,
-    confirmedAt: switchedToCloud
+    confirmedAt: destinationChanged
       ? null
       : micChecked === micCaptureAsLoaded
         ? s.micCapture.confirmedAt
