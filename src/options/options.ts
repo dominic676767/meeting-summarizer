@@ -10,6 +10,7 @@ import type {
 } from "../domain/types";
 import { DEFAULT_TEMPLATES } from "../pipeline/templates";
 import { loadSettings, saveSettings } from "../settings";
+import { TRANSCRIPTION_ENGINE_NAMES, uploadsAudio } from "../transcription/engines";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const providerSelect = $<HTMLSelectElement>("provider");
@@ -17,7 +18,7 @@ const PROVIDERS: ProviderId[] = ["anthropic", "openai", "ollama", "bedrock"];
 // Kept on their own prefix: the two axes share vendor names, and the point of
 // this page is that they are not the same setting.
 const transcriptionSelect = $<HTMLSelectElement>("transcription-provider");
-const TRANSCRIPTION_PROVIDERS: TranscriptionProviderId[] = ["local-whisper", "openai"];
+const TRANSCRIPTION_PROVIDERS: TranscriptionProviderId[] = ["local-whisper", "openai", "elevenlabs"];
 
 /**
  * The languages offered, in the order they appear in the select. A Record over
@@ -74,9 +75,13 @@ function showTranscriptionPanel(provider: string): void {
   // The microphone disclosure has to describe the destination the audio will
   // actually reach, so it follows the engine rather than stating locality that a
   // cloud selection makes false.
-  const cloud = provider !== "local-whisper";
+  const id = provider as TranscriptionProviderId;
+  const cloud = uploadsAudio(id);
   $("mic-why-local").classList.toggle("hidden", cloud);
   $("mic-why-cloud").classList.toggle("hidden", !cloud);
+  // "The cloud" is not a destination (ADR-0007): the disclosure names the one
+  // company this engine uploads to.
+  $("mic-why-cloud-engine").textContent = TRANSCRIPTION_ENGINE_NAMES[id];
 }
 
 providerSelect.addEventListener("change", () => showPanel(providerSelect.value));
@@ -103,6 +108,8 @@ async function init(): Promise<void> {
   $<HTMLSelectElement>("whisper-model").value = s.transcription.localWhisper.model;
   $<HTMLInputElement>("transcription-openai-key").value = s.transcription.openai.apiKey;
   $<HTMLInputElement>("transcription-openai-model").value = s.transcription.openai.model;
+  $<HTMLInputElement>("transcription-elevenlabs-key").value = s.transcription.elevenlabs.apiKey;
+  $<HTMLInputElement>("transcription-elevenlabs-model").value = s.transcription.elevenlabs.model;
   $<HTMLInputElement>("mic-capture").checked = s.micCapture.enabled;
   micCaptureAsLoaded = s.micCapture.enabled;
   micConsentProviderAsLoaded = s.transcription.provider;
@@ -209,6 +216,10 @@ $("save").addEventListener("click", async () => {
     openai: {
       apiKey: $<HTMLInputElement>("transcription-openai-key").value.trim(),
       model: $<HTMLInputElement>("transcription-openai-model").value.trim(),
+    },
+    elevenlabs: {
+      apiKey: $<HTMLInputElement>("transcription-elevenlabs-key").value.trim(),
+      model: $<HTMLInputElement>("transcription-elevenlabs-model").value.trim(),
     },
   };
   // Consent is only recorded when the user actually MOVED the checkbox. Saving

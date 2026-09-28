@@ -15,6 +15,10 @@ import {
   spansFromScribe,
   type ScribeWord,
 } from "../src/transcription/elevenlabs";
+import type { TranscriptionSettings } from "../src/domain/types";
+import { DEFAULT_SETTINGS } from "../src/settings";
+import { TRANSCRIPTION_ENGINE_NAMES, uploadsAudio } from "../src/transcription/engines";
+import { createTranscriptionProviderFor } from "../src/transcription/factory";
 import { OPENAI_TRANSCRIPTION_MAX_INPUT_MS } from "../src/transcription/openai";
 import {
   createTranscriptionProvider,
@@ -329,5 +333,48 @@ describe("ElevenLabs Scribe Transcription Provider", () => {
     await vi.waitFor(() => expect(calls.length).toBe(1));
     abort.abort();
     await expect(promise).rejects.toThrow(TranscriptionCancelled);
+  });
+});
+
+describe("Selecting Scribe", () => {
+  const deps = (fetchFn?: typeof fetch) => ({
+    workerUrl: "whisper-worker.js",
+    fetchFn,
+    decode: fakeDecode(5),
+  });
+  const scribeSettings = (
+    overrides: Partial<TranscriptionSettings["elevenlabs"]> = {},
+  ): TranscriptionSettings => ({
+    ...DEFAULT_SETTINGS.transcription,
+    provider: "elevenlabs",
+    elevenlabs: { apiKey: "xi-t", model: "scribe_v2", ...overrides },
+  });
+
+  it("is never the default: nothing is uploaded until the user opts in", () => {
+    expect(DEFAULT_SETTINGS.transcription.provider).toBe("local-whisper");
+    expect(DEFAULT_SETTINGS.transcription.elevenlabs).toEqual({ apiKey: "", model: "scribe_v2" });
+  });
+
+  it("uses Scribe once the user opts in", async () => {
+    const { fn, calls } = fakeFetch(oneWord);
+    const provider = createTranscriptionProviderFor(scribeSettings(), deps(fn));
+    expect(provider.name).toBe("elevenlabs");
+    await provider.transcribe(recording());
+    expect(calls[0]!.url).toBe("https://api.elevenlabs.io/v1/speech-to-text");
+  });
+
+  it("refuses Scribe with no key before any audio leaves the machine", () => {
+    const { fn, calls } = fakeFetch({});
+    expect(() => createTranscriptionProviderFor(scribeSettings({ apiKey: "" }), deps(fn))).toThrow(
+      TranscriptionError,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  it("is named, and counted as an upload, wherever the user reads about it", () => {
+    expect(TRANSCRIPTION_ENGINE_NAMES.elevenlabs).toBe("ElevenLabs");
+    expect(uploadsAudio("elevenlabs")).toBe(true);
+    expect(uploadsAudio("openai")).toBe(true);
+    expect(uploadsAudio("local-whisper")).toBe(false);
   });
 });

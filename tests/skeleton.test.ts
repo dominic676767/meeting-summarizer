@@ -47,6 +47,11 @@ describe("walking skeleton", () => {
     expect(manifest.host_permissions).toContain("https://huggingface.co/*");
   });
 
+  it("reaches every cloud transcription endpoint a user can opt into", () => {
+    expect(manifest.host_permissions).toContain("https://api.openai.com/*");
+    expect(manifest.host_permissions).toContain("https://api.elevenlabs.io/*");
+  });
+
   it("targets Chromium Manifest V3 with a service worker", () => {
     // ADR-0003: Firefox retired because it cannot capture tab audio at all.
     expect(manifest.manifest_version).toBe(3);

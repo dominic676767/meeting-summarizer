@@ -29,6 +29,7 @@ import { foldLocalMicrophone, micCaptureState, shouldCaptureMic } from "./mic-ca
 import { badgeFor } from "./badge";
 import { beginSpan, orderedSpans, spanIdsOf } from "./capture-spans";
 import { isMeetingUrl } from "./meeting-url";
+import { TRANSCRIPTION_ENGINE_NAMES } from "../transcription/engines";
 import { getHeld, holdTranscript, listHeld, releaseHeld, updateHeldReason } from "./held";
 import {
   getHeldRecording,
@@ -398,9 +399,15 @@ function reasonOf(err: unknown): string {
  */
 /** The engine that ran, as the artifact names it when the user opts in. */
 function engineOf(t: Settings["transcription"]): { id: string; model: string } {
-  return t.provider === "openai"
-    ? { id: "OpenAI", model: t.openai.model }
-    : { id: "local Whisper", model: t.localWhisper.model };
+  const id = TRANSCRIPTION_ENGINE_NAMES[t.provider];
+  switch (t.provider) {
+    case "openai":
+      return { id, model: t.openai.model };
+    case "elevenlabs":
+      return { id, model: t.elevenlabs.model };
+    case "local-whisper":
+      return { id, model: t.localWhisper.model };
+  }
 }
 
 async function transcribeRecording(
