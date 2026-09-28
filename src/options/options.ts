@@ -9,6 +9,7 @@ import type {
   WhisperModelSize,
 } from "../domain/types";
 import { DEFAULT_TEMPLATES } from "../pipeline/templates";
+import { micConsentAfterSave } from "../background/mic-capture";
 import { loadSettings, saveSettings } from "../settings";
 import { TRANSCRIPTION_ENGINE_NAMES, uploadsAudio } from "../transcription/engines";
 
@@ -222,32 +223,20 @@ $("save").addEventListener("click", async () => {
       model: $<HTMLInputElement>("transcription-elevenlabs-model").value.trim(),
     },
   };
-  // Consent is only recorded when the user actually MOVED the checkbox. Saving
-  // the page for an unrelated reason — changing the summary shape, pasting a key
-  // — must never be read as answering the microphone disclosure: leaving a box
-  // as you found it is the absence of a decision, not a decision. Without this,
-  // any future change back to a ticked default would silently harvest consent
-  // from every incidental Save.
+  // Whether this Save leaves microphone consent on file is a rule of its own —
+  // an untouched box confirms nothing, and a new destination asks again — kept
+  // pure and tested where it lives (micConsentAfterSave).
   const micChecked = $<HTMLInputElement>("mic-capture").checked;
-  // Consent has to stay specific to what was promised. A user says yes to the
-  // microphone partly because transcription happens on their machine, or partly
-  // because they trust the one company the disclosure named; selecting a cloud
-  // engine that uploads somewhere else makes that untrue, and their voice would
-  // start being uploaded under a consent that predates the change. So the
-  // confirmation is withdrawn and the disclosure asks again, naming the new
-  // destination — from one cloud engine to another too (ADR-0008 amends
-  // ADR-0007 here). Failing toward one extra ask beats failing toward an upload
-  // nobody agreed to.
-  const destinationChanged =
-    uploadsAudio(s.transcription.provider) &&
-    s.transcription.provider !== micConsentProviderAsLoaded;
   s.micCapture = {
     enabled: micChecked,
-    confirmedAt: destinationChanged
-      ? null
-      : micChecked === micCaptureAsLoaded
-        ? s.micCapture.confirmedAt
-        : Date.now(),
+    confirmedAt: micConsentAfterSave({
+      storedConfirmedAt: s.micCapture.confirmedAt,
+      providerConsentGivenUnder: micConsentProviderAsLoaded,
+      providerNowSelected: s.transcription.provider,
+      micWasChecked: micCaptureAsLoaded,
+      micNowChecked: micChecked,
+      now: Date.now(),
+    }),
   };
   s.nameEngineInArtifact = $<HTMLInputElement>("name-engine").checked;
   s.shape = $<HTMLSelectElement>("shape").value as SummaryShape;

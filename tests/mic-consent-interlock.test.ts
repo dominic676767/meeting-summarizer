@@ -1,31 +1,11 @@
+// Microphone consent survives only what it was given for. The rule and its
+// reasoning live on micConsentAfterSave, which the options page calls; this
+// pins that function, not a copy of it (#33).
 import { describe, expect, it } from "vitest";
+import type { TranscriptionProviderId } from "../src/domain/types";
+import { micConsentAfterSave as confirmedAtAfterSave } from "../src/background/mic-capture";
 
-/**
- * The rule this encodes: microphone consent is specific to what was promised.
- * The disclosure that earns a yes says transcription happens on this machine, so
- * selecting a cloud engine invalidates the claim the consent rested on — and the
- * user's voice must not start being uploaded under a consent that predates the
- * change.
- *
- * Extracted rather than driven through the options page, because the page touches
- * DOM and storage at import; this is the decision, which is what needs pinning.
- */
-type Provider = "local-whisper" | "openai";
-
-function confirmedAtAfterSave(opts: {
-  storedConfirmedAt: number | null;
-  providerConsentGivenUnder: Provider;
-  providerNowSelected: Provider;
-  micWasChecked: boolean;
-  micNowChecked: boolean;
-  now: number;
-}): number | null {
-  const switchedToCloud =
-    opts.providerNowSelected !== "local-whisper" &&
-    opts.providerNowSelected !== opts.providerConsentGivenUnder;
-  if (switchedToCloud) return null;
-  return opts.micNowChecked === opts.micWasChecked ? opts.storedConfirmedAt : opts.now;
-}
+type Provider = TranscriptionProviderId;
 
 const base = {
   storedConfirmedAt: 1000,
@@ -64,6 +44,30 @@ describe("microphone consent survives only what it was given for", () => {
     expect(confirmedAtAfterSave({ ...base, storedConfirmedAt: null, micNowChecked: false })).toBe(
       9999,
     );
+  });
+
+  it("withdraws consent given under one cloud engine when the user picks another", () => {
+    // A yes to "uploaded to OpenAI" is not a yes to "uploaded to ElevenLabs"
+    // (ADR-0008 amends ADR-0007 here).
+    expect(
+      confirmedAtAfterSave({
+        ...base,
+        providerConsentGivenUnder: "openai",
+        providerNowSelected: "elevenlabs",
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps consent when the user moves back to the local engine", () => {
+    // Nothing leaves the machine any more, so no promise the consent rested on
+    // has been broken.
+    expect(
+      confirmedAtAfterSave({
+        ...base,
+        providerConsentGivenUnder: "openai",
+        providerNowSelected: "local-whisper",
+      }),
+    ).toBe(1000);
   });
 
   it("withdrawing on a cloud switch outranks a checkbox the user just ticked", () => {
