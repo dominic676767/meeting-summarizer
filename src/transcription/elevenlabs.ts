@@ -3,12 +3,41 @@
 // anonymous speaker label, which fills the Utterance's diarization label that
 // fusion already falls back to when no Speaker Track name overlaps (ADR-0004).
 //
-// Strictly opt-in, like OpenAI: choosing it uploads the meeting's audio.
+// Strictly opt-in, like OpenAI: choosing it uploads the meeting's audio, and
+// nothing here is reachable without the user picking this engine and entering
+// its own key.
 //
-// This module starts with the pure half: Scribe's word list → timed spans. The
-// request itself is a thin wrapper around it, so everything that decides what
-// the transcript says is testable without a network.
-import type { EngineSpan } from "./provider";
+// Two halves. `spansFromScribe` is pure — Scribe's word list → timed spans — and
+// decides everything about what the transcript says, so it is testable without
+// a network. The engine around it only uploads a window and hands back the
+// result; the provider wrapper still decodes, chunks and makes offsets absolute.
+import type { MeetingLanguage } from "../domain/types";
+import type { FetchFn } from "./openai";
+import { pcm16 } from "./pcm";
+import { TranscriptionError, type EngineSpan, type TranscriptionEngine } from "./provider";
+
+const ENDPOINT = "https://api.elevenlabs.io/v1/speech-to-text";
+
+/** Scribe's low-latency input is 16 kHz mono PCM, which is also what Whisper
+ * listens at, so every engine here decodes to the same rate. */
+export const SCRIBE_SAMPLE_RATE = 16_000;
+
+/**
+ * One upload per hour of audio. Scribe accepts files far larger than this, and
+ * a longer window is worth having: its speaker labels hold only within one
+ * request, so every extra window is another place two labels can split one
+ * person. An hour covers most Capture Spans in one call, and bounds how long
+ * one request can run.
+ */
+export const SCRIBE_MAX_INPUT_MS = 3_600_000;
+
+/**
+ * How long a window may take before it is given up on: this much, plus the
+ * window's own duration. Nothing else in the extension times a request out, and
+ * an hour's upload that silently stalls would otherwise spin forever. Giving up
+ * throws a TranscriptionError, which holds the Recording for a retry.
+ */
+export const SCRIBE_TIMEOUT_GRACE_MS = 60_000;
 
 /** One entry in Scribe's `words` list. Spacing is its own entry, not part of a word. */
 export interface ScribeWord {
@@ -123,4 +152,77 @@ export function spansFromScribe(body: ScribeTranscription, durationSec: number):
   }
   flush();
   return spans;
+}
+
+export function createElevenLabsTranscriptionEngine(opts: {
+  apiKey: string;
+  model: string;
+  /** The language the endpoint is told to expect, as its `language_code`. */
+  language: MeetingLanguage;
+  fetchFn?: FetchFn;
+  /** Injected by tests; defaults to the grace period plus the audio's duration. */
+  timeoutMsFor?: (audioMs: number) => number;
+}): TranscriptionEngine {
+  const fetchFn = opts.fetchFn ?? fetch;
+  const timeoutMsFor = opts.timeoutMsFor ?? ((audioMs) => SCRIBE_TIMEOUT_GRACE_MS + audioMs);
+  return {
+    name: "elevenlabs",
+    sampleRate: SCRIBE_SAMPLE_RATE,
+    maxInputMs: SCRIBE_MAX_INPUT_MS,
+    // Nothing to fetch or initialise: the model runs on ElevenLabs' machines.
+    load() {
+      return Promise.resolve();
+    },
+    async transcribe(samples, signal) {
+      const durationSec = samples.length / SCRIBE_SAMPLE_RATE;
+      const form = new FormData();
+      form.append("model_id", opts.model);
+      // Bare PCM rather than a WAV: Scribe reads the declared format directly.
+      form.append(
+        "file",
+        new Blob([pcm16(samples)], { type: "application/octet-stream" }),
+        "meeting.pcm",
+      );
+      form.append("file_format", "pcm_s16le_16");
+      // The user's declaration, for the same reason OpenAI is sent it: one
+      // answer for the whole Meeting rather than a guess per window.
+      form.append("language_code", opts.language);
+      // The reason to choose this engine at all.
+      form.append("diarize", "true");
+      // Word timings are what spans are cut from; fusion attributes by them.
+      form.append("timestamps_granularity", "word");
+      // Sounds are not speech. Also filtered in `spansFromScribe`, in case
+      // Scribe tags them regardless.
+      form.append("tag_audio_events", "false");
+
+      const timeoutMs = timeoutMsFor(durationSec * 1000);
+      const timeout = AbortSignal.timeout(timeoutMs);
+      const abort = signal ? AbortSignal.any([signal, timeout]) : timeout;
+      try {
+        const res = await fetchFn(ENDPOINT, {
+          method: "POST",
+          headers: { "xi-api-key": opts.apiKey },
+          body: form,
+          signal: abort,
+        });
+        if (!res.ok) {
+          const detail = await res.text().catch(() => "");
+          throw new TranscriptionError(
+            `elevenlabs transcription: HTTP ${res.status} ${detail.slice(0, 300)}`,
+          );
+        }
+        return spansFromScribe((await res.json()) as ScribeTranscription, durationSec);
+      } catch (cause) {
+        // A user's cancel is rethrown as it came: the wrapper, which knows the
+        // signal was the user's, turns it into TranscriptionCancelled.
+        if (timeout.aborted && !signal?.aborted) {
+          throw new TranscriptionError(
+            `elevenlabs transcription: no response after ${Math.round(timeoutMs / 1000)} s`,
+            { cause },
+          );
+        }
+        throw cause;
+      }
+    },
+  };
 }
