@@ -35,3 +35,21 @@ markup, the adapter breaks here first.
    `teams-post-call.html`.
 5. Update the selectors in the Teams adapter to match, and keep both fixture
    and adapter in the same commit.
+
+# Zoom DOM fixtures
+
+Trimmed captures of the Zoom web client's **meeting frame**: on `app.zoom.us` that is the
+`#webclient` iframe, not the top document. They are the start of the regression net for the
+Zoom adapter (#40). Every Zoom selector not in a fixture here is still a lead from the
+served client code (`docs/research/zoom-web-client.md`), not a fact.
+
+- `zoom-in-meeting.html`: 2 people, speaker view, captions on.
+- `zoom-host-ended.html`: the ended-by-host dialog, with the leave button still present.
+
+## Capturing more
+
+Join in Chrome as a participant. In the meeting tab's DevTools console (context `top`), define
+`zoomDump` from #37 and call it once per state; it saves the top document and the iframe
+separately, each headed by its URL. Raw captures contain names, emails, meeting IDs, meeting
+passwords in URLs, and photo URLs. **Never commit one raw.** Cut it down to the elements a
+test needs, replace every name with *Participant A/B/…*, and drop inline styles and image URLs.

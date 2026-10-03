@@ -348,6 +348,36 @@ All from the served CSS `styles.wc_meeting.min.css` and JS:
 
 ---
 
+## Real-meeting results, 2026-10-03 (#37, first session)
+
+These come from one 2-person meeting on `app.zoom.us` in iframe mode: the host plus one browser participant, in speaker view, with captions on. Trimmed fixtures are in `tests/fixtures/zoom-in-meeting.html` and `tests/fixtures/zoom-host-ended.html`.
+
+- **U4, confirmed:**
+  - An overlay line is an `aria-hidden` `.zmu-data-selector-item__icon` showing the speaker's *initial* ("T"), then `span.live-transcription-subtitle__item` with the text.
+  - There is no name anywhere in the overlay.
+  - The new overlay (`__box--overlay`) is what current builds render.
+- **U1, partly settled:**
+  - During the meeting, the top frame's URL was `/wc/<id>/join?ref_from=launch&pwd=…`, with no `fromPWA=1`. The iframe's URL was the same path without `pwd`.
+  - After the host ended the meeting, `tabs.onUpdated` reported the top frame going to `/wc/home?ref_from=launch`, then `/wc/?ref_from=launch`, both with `status: loading`.
+  - So in iframe mode the end ended at the Web App home, not at `/wc/leave`.
+  - Still open:
+    - leaving as a participant, rather than the host ending;
+    - the `zoom.us/j` entry point;
+    - whether `/wc/leave` appears in tab mode.
+- **U8, partly settled:**
+  - Confirmed in the DOM: `#wc-footer`, and `.footer__leave-btn-container` with `button[aria-label="Leave"]`. The `aria-label` is presumably localized.
+  - **The ended-by-host dialog is a generic `.zm-modal`.** Its only distinguishing content is the localized text "This meeting has been ended by host".
+  - **The leave button stays in the DOM while that dialog shows.** It showed for at least 20 s, until the top frame navigated. "Leave button present" therefore still reads as in the meeting at this point. End detection has to rely on the top frame's navigation away from the meeting path (#39), or on an open `.zm-modal` combined with something not localized.
+  - `.head-meeting-topic` was absent. `document.title` *is* the topic ("<host>'s Personal Meeting Room").
+  - `.preview-root`, `.waiting-room-container`, `#wc-leave` and `.dialog-reconnect-container` were not seen, because those states were not captured.
+- **U9, one data point:**
+  - With 2 participants in speaker view, neither tile carried a `--active` class, and no `.asntip` label was present. This fits "a 1:1 call has no usable indicator".
+  - Tile names were confirmed in `.video-avatar__avatar-footer > span`, and in `img.video-avatar__avatar-img[alt]` when the person has a photo.
+- **Not captured:**
+  - the full-transcript panel: no `lt-full-transcript` markup in any capture, so U5 and U6 are open;
+  - breakout rooms: the "breakout" captures only show the toolbar auto-hiding (`footer__hidden`, `meeting-header__hidden`), so U7 is open;
+  - the pre-join preview, the waiting room, and 3 or more participants.
+
 ## UNVERIFIED: what a DOM capture or test would settle
 
 Each item needs a capture in a real meeting: two accounts, one host, one participant, captions on. Save `document.documentElement.outerHTML` from **both** frames, plus `location.href` at each step.
