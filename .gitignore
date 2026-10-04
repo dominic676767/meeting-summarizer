@@ -4,3 +4,4 @@ node_modules/
 dist/
 .impeccable/hook.cache.json
 .codex/
+.DS_Store
