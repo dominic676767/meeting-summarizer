@@ -88,6 +88,23 @@ The rule is pure and tested. What is not is the options page wiring the right in
 - [ ] **Saving again under ElevenLabs does not ask again.** After answering the disclosure under ElevenLabs, change an unrelated setting such as the summary shape and save: consent stays.
 - [ ] **ElevenLabs → local keeps consent**, and the disclosure goes back to the on-this-machine wording.
 
+## Amazon SageMaker (#50)
+
+Everything the engine decides is a pure function and is tested with the network faked: the request (route header, multipart body, `to_language`), the signing (pinned to AWS's published `get-vanilla` example), how a reply and a failure are read, the credentials parser, the pause windows, and the factory's refusals. None of that proves that a real endpoint accepts the call, or that the pages show what the code sets. These checks do. They need your own JumpStart endpoint and temporary AWS credentials, so they are also the only place the engine meets SageMaker before a release.
+
+**Run them on audio you are allowed to upload to that AWS account.** A mock meeting with people who have agreed to it, never a work or customer call.
+
+Setup: deploy `huggingface-asr-qwen3-asr-1-7b` from SageMaker JumpStart. `npm run build`, reload the unpacked extension, and in Settings choose **Amazon SageMaker**. Enter the region and the endpoint name, and paste temporary credentials that allow only `sagemaker:InvokeEndpoint` on that endpoint. Turn on **Name the transcription engine in saved summaries** for the artifact check below.
+
+- [ ] **The Test button reports OK, and names each broken part.** First with everything right. Then one fault at a time: a wrong endpoint name (*Endpoint: … was not found in …*), credentials without the permission (*Credentials: … may not invoke …*), and credentials that have expired (*Credentials: … expired*). The mapping is tested on fake replies; only a real endpoint shows that AWS sends those error types.
+- [ ] **A paste is stored in memory only.** After a valid paste, the box empties and the panel names the key, masked. In the Settings page's DevTools, Application → Extension storage: **Session** holds `sagemakerCredentials`, and **Local** holds no part of them. Close and reopen the browser: the panel says there are no credentials.
+- [ ] **A real meeting is transcribed from audio, with caption names.** A two-person mock meeting of a few minutes, captions on, ends in a Summary Artifact whose transcript came from recorded audio, and whose lines carry the right speakers. This is the claim that the pause windows make up for the missing timestamps.
+- [ ] **The Meeting Language reaches the model.** Set the language to German and hold a short stretch in German: the transcript comes back in German, not translated. Then choose Ukrainian: the panel's note says the model guesses, and a transcript still comes back.
+- [ ] **Credentials that expire during a meeting cost a retry, not the meeting.** Paste credentials with a short life, from `aws configure export-credentials`, so that the expiry is known. Start recording and wait until they expire: the popup warns while it records. At Meeting End the recording lands in Held Recordings with the *expired* reason, and a caption summary is written. Paste fresh credentials and use **Retry transcription**: the same meeting is summarized from audio.
+- [ ] **"Skip transcription, use captions" ends the wait within a few seconds**, produces a caption-only summary, and leaves nothing in the Held Recordings list.
+- [ ] **The Summary Artifact names the engine as `Amazon SageMaker <endpoint>`** when engine naming is on, and names no engine when it is off.
+- [ ] **Local → SageMaker, and ElevenLabs → SageMaker, ask again for microphone consent**, and the disclosure reads *uploaded to Amazon SageMaker, in the AWS account your credentials belong to*.
+
 ## The popup and logo redesign (#25)
 
 Not yet landed. Its checks live in `design-system/meeting-summarizer/MASTER.md` on the `popup-logo-redesign` branch and move here when #25 merges, per the rule above.

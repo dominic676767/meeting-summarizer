@@ -30,7 +30,7 @@ Summarizes what was actually said, not what the caption panel happened to show, 
 - The toolbar badge shows captured caption-segment count; a red `!` signals captions are off.
 - Transcription then summarization trigger automatically on detected meeting end (call controls disappearing, call-ended DOM state, or tab closed), or on demand via *Summarize now* in the popup.
 - Two visual surfaces: the **popup** (status, capture start, manual trigger, held-item retry) and **Settings/options** (provider choice, API key, prompt templates). A third rendered output is the **Summary Artifact** HTML file.
-- Setup has real-world friction the UI must account for: Ollama needs its origin allowed for the extension; Bedrock needs a bearer API key (SigV4 credentials are not supported); cloud transcription engines require their own credentials, while the default local Whisper needs none.
+- Setup has real-world friction the UI must account for: Ollama needs its origin allowed for the extension; Bedrock needs a bearer API key; cloud transcription engines require their own credentials, while the default local Whisper needs none. SageMaker is the most demanding: the user deploys the endpoint, and pastes temporary AWS credentials that expire and that the browser forgets when it closes.
 
 ## Capabilities and Constraints
 

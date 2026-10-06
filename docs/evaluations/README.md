@@ -1,6 +1,6 @@
 # Evaluating the Transcription Providers
 
-The harness under `eval/` runs the three Transcription Providers on the same clip and scores each against a hand-corrected reference. The providers are local Whisper, OpenAI's `whisper-1` and ElevenLabs Scribe. Each runs through the extension's own code: the engine it ships, wrapped by the same `createTranscriptionProvider`. So chunking, offsets, part-labelling and the Silent Recording check are the product's, and the numbers describe what a user gets.
+The harness under `eval/` runs the Transcription Providers on the same clip and scores each against a hand-corrected reference. The providers are local Whisper, OpenAI's `whisper-1`, ElevenLabs Scribe and, when it is asked for by name, Qwen3-ASR on your own SageMaker endpoint. Each runs through the extension's own code: the engine it ships, wrapped by the same `createTranscriptionProvider`. So chunking, offsets, part-labelling, pause windows and the Silent Recording check are the product's, and the numbers describe what a user gets.
 
 This document is the method. The results at the end hold numbers only, never a transcript.
 
@@ -8,7 +8,7 @@ This document is the method. The results at the end hold numbers only, never a t
 
 - **Non-work audio only.** A clip is either a mock meeting whose every participant agreed to be recorded for this purpose, or a public clip you are allowed to use. Public clips are kept locally and never redistributed. A real meeting from work is never a clip, however harmless it seems: its participants agreed to a meeting, not to an evaluation.
 - **Nothing but method and numbers enters git.** Clips, reference transcripts and engine output all live under `.eval/`, which is git-ignored. So is any `.wav` or `.reference.json` anywhere else in the repository, except the one committed test fixture. The JSON results contain every engine's Utterances, which are the clip's content, so they stay under `.eval/results/` too.
-- A cloud engine's run sends the clip to that company under its own terms: OpenAI for `whisper-1`, ElevenLabs for Scribe. The data rules above are what make that acceptable.
+- A cloud engine's run sends the clip to that company under its own terms: OpenAI for `whisper-1`, ElevenLabs for Scribe. A SageMaker run sends it to your own AWS account, which keeps what its setup keeps. The data rules above are what make that acceptable.
 
 ## Preparing a clip
 
@@ -54,14 +54,16 @@ npm run eval -- --audio .eval/clips/a.wav --reference .eval/clips/a.reference.js
 | --- | --- |
 | `--manifest <path>` | The clips to run. Or give one clip with `--audio`, `--reference` and `--language`. |
 | `--clips <a,b>` | Only these clips from the manifest. An unknown name is an error, not a skip. |
-| `--engines <ids>` | Any of `local-whisper`, `openai`, `elevenlabs`. Default: all three. |
+| `--engines <ids>` | Any of `local-whisper`, `openai`, `elevenlabs`, `sagemaker`. Default: the first three. SageMaker runs only when named, because it needs an endpoint you deployed. |
 | `--whisper-model <size>` | `tiny`, `base` or `small`. Default: `base`, the extension's default. |
 | `--out <dir>` | Where the JSON results go. Default: `.eval/results`. |
 | `--yes` | Proceed once the cloud bill has been printed. |
 
 Keys come only from `OPENAI_API_KEY` and `ELEVENLABS_API_KEY` in the environment. There is no flag for one. A key is never printed or written, and is scrubbed from any error an endpoint returns.
 
-**Before any cloud call** the harness prints the audio minutes and uploads each cloud engine will be billed for. For Scribe it also prints the share of a 4.5-hour free plan. Without `--yes` it then stops, and nothing runs, local Whisper included. The figure is the clips' audio duration rounded up to a tenth of a minute. A provider's own rounding per request may differ slightly.
+SageMaker reads the AWS CLI's own variables, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`, plus `AWS_REGION` and `SAGEMAKER_ENDPOINT`. So `eval "$(aws configure export-credentials --format env)"` sets the credentials. They are scrubbed from errors like a key.
+
+**Before any cloud call** the harness prints the audio minutes and uploads each cloud engine will be billed for. For Scribe it also prints the share of a 4.5-hour free plan. For SageMaker it says that the endpoint bills by its running time, not by the minute, and the upload count is approximate, because its windows are cut at pauses. Without `--yes` it then stops, and nothing runs, local Whisper included. The figure is the clips' audio duration rounded up to a tenth of a minute. A provider's own rounding per request may differ slightly.
 
 The Markdown table goes to stdout and everything else to stderr, so `npm run -s eval -- … > table.md` captures the table alone.
 
@@ -72,8 +74,9 @@ The Markdown table goes to stdout and everything else to stderr, so `npm run -s 
 | local Whisper | `onnx-community/whisper-<size>`, q8 | 2 minutes |
 | OpenAI | `whisper-1` | 10 minutes |
 | ElevenLabs | `scribe_v2` | 1 hour |
+| Amazon SageMaker | Qwen3-ASR, on your endpoint | about 10 seconds, cut at pauses; 30 seconds at most |
 
-Model ids and input limits are read from the extension's code, not restated. A clip longer than an engine's limit is split into windows exactly as a Capture Span is. A diarizing engine's labels then carry their part ("Speaker 1 (part 2)"), as ADR-0008 decided.
+Model ids and input limits are read from the extension's code, not restated. A clip longer than an engine's limit is split into windows exactly as a Capture Span is. A diarizing engine's labels then carry their part ("Speaker 1 (part 2)"), as ADR-0008 decided. SageMaker's windows are cut at pauses instead, as ADR-0009 decided, because its words come back without timings.
 
 Local Whisper runs in Node through transformers.js, with the worker's model repository, `dtype: "q8"`, `session_options: { graphOptimizationLevel: "disabled" }`, `whisperRunOptions(language)` and span mapping. What cannot be the same is the host, and every report says so:
 
