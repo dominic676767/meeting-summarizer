@@ -2,7 +2,8 @@
 // limits an engine set. Built on synthetic audio whose loud and quiet stretches
 // are known to the sample, so every expected cut can be stated exactly.
 import { describe, expect, it } from "vitest";
-import { pauseWindows, type SampleWindow } from "../src/transcription/pauses";
+import { SILENT_BELOW_RMS } from "../src/offscreen/signal";
+import { loudestRms, pauseWindows, type SampleWindow } from "../src/transcription/pauses";
 
 const RATE = 16_000;
 const OPTS = { targetMs: 10_000, maxMs: 30_000 };
@@ -92,6 +93,27 @@ describe("pauseWindows", () => {
     const windows = pauseWindows(samples, RATE, { targetMs: 20_000, maxMs: 25_000 });
     expectContiguous(windows, samples.length);
     for (const length of lengths(windows)) expect(length).toBeLessThanOrEqual(25);
+  });
+
+  it("measures a window by its loudest 200 ms, so one short word lifts it above silence", () => {
+    const whole = (samples: Float32Array) => ({ start: 0, end: samples.length });
+    const silence = audio(10, [{ from: 0, to: 10, level: 0 }]);
+    expect(loudestRms(silence, RATE, whole(silence))).toBe(0);
+    // A floor far below the recorder's silence level stays below it.
+    const floor = audio(10, [{ from: 0, to: 10, level: 0.0002 }]);
+    expect(loudestRms(floor, RATE, whole(floor))).toBeLessThan(SILENT_BELOW_RMS);
+    // A quarter-second word in ten seconds of nothing.
+    const word = audio(10, [
+      { from: 0, to: 4, level: 0 },
+      { from: 4.25, to: 10, level: 0 },
+    ]);
+    expect(loudestRms(word, RATE, whole(word))).toBeGreaterThan(0.4);
+  });
+
+  it("measures only the window it is given", () => {
+    const samples = audio(20, [{ from: 0, to: 10, level: 0 }]);
+    expect(loudestRms(samples, RATE, { start: 0, end: 10 * RATE })).toBe(0);
+    expect(loudestRms(samples, RATE, { start: 10 * RATE, end: 20 * RATE })).toBeCloseTo(0.5);
   });
 
   it("covers every sample once, in order, through pauses and sound alike", () => {

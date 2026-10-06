@@ -407,13 +407,15 @@ flowchart TD
     which -- "local-whisper (default)" --> lw["createLocalWhisperEngine()<br/>Web Worker, model tiny/base/small<br/>max window 120 s"]
     which -- "openai (opt-in)" --> oa["createOpenAiTranscriptionEngine()<br/>whisper-1, WAV upload<br/>max window 600 s"]
     which -- "elevenlabs (opt-in)" --> el["createElevenLabsTranscriptionEngine()<br/>scribe_v2, bare PCM upload, diarized<br/>max window 60 min, timeout 60 s + window"]
-    which -- "sagemaker (opt-in)" --> sm["createSageMakerTranscriptionEngine()<br/>your endpoint, Qwen3-ASR<br/>SigV4 from @smithy/signature-v4, fetch<br/>WAV in multipart, route=/v1/audio/transcriptions<br/>text only: windows cut at pauses, about 10 s, max 30 s"]
+    which -- "sagemaker (opt-in)" --> sm["createSageMakerTranscriptionEngine()<br/>your endpoint, Qwen3-ASR<br/>SigV4 from @smithy/signature-v4, fetch<br/>WAV in multipart, route=/v1/audio/transcriptions<br/>text only: windows cut at pauses, about 10 s, max 30 s<br/>4 in flight, max_completion_tokens capped"]
     lw & oa & el & sm --> core
 
     subgraph core["createTranscriptionProvider().transcribe() — provider.ts"]
         load["engine.load()<br/>model-download progress"] --> dec["decode every span<br/>decodeToMono() at engine rate"]
         dec --> win["split each span into windows<br/>back to back at maxInputMs, or cut at pauses<br/>for an engine that sets windowing"]
-        win --> eng["engine.transcribe(window, signal)<br/>the cancel reaches a cloud upload"]
+        win --> skip{"cut at pauses, and loudest 200 ms<br/>below SILENT_BELOW_RMS?"}
+        skip -- "yes: no signal" --> none["no call, no words"]
+        skip -- "no" --> eng["engine.transcribe(window, signal)<br/>up to engine.concurrency in flight<br/>the cancel reaches a cloud upload"]
         eng --> utt["toUtterance()<br/>startMs = span offset + window offset + engine time<br/>a diarization label gets (part N) when there were several calls"]
         utt --> sil{"rejectAsSilent()<br/>silence.ts"}
     end
@@ -430,7 +432,7 @@ The Whisper worker (`whisper-worker.ts`) loads `transformers.js` `automatic-spee
 
 The cloud engines encode with `pcm.ts`: OpenAI and SageMaker wrap the 16-bit PCM in a WAV, and Scribe uploads it bare. All three pass the user's cancel signal to their request. Scribe also gives up after 60 s plus the window's length, with a `TranscriptionError`, so the Recording is held. Scribe is the only engine that diarizes. Its labels hold only inside one call, so the wrapper adds the part number when a recording takes several calls (ADR-0008). `engines.ts` gives each engine the name that the consent disclosure, the popup and the Summary Artifact show, and says which engines upload audio.
 
-The SageMaker engine calls the user's own endpoint with `fetch`, and signs each call with the AWS SDK's own SigV4 signer, `@smithy/signature-v4`, hashing on Web Crypto (ADR-0009). It signs with temporary AWS credentials that the service worker reads from `storage.session` and sends in `offscreen-transcribe`, only when SageMaker is the selected engine. The header `route=/v1/audio/transcriptions` sends the call to vLLM's transcription route, and `to_language` forces the Meeting Language; for the three Meeting Languages that Qwen3-ASR does not list (`he`, `no`, `uk`) no language is sent. Qwen3-ASR returns text only, so the engine sets `windowing` and the wrapper cuts its windows at pauses: each window becomes one Utterance, and fusion names it from the captions. Every failure is a `SageMakerFailure` with a kind (credentials, endpoint, container, format or other), and expired credentials are refused before any upload. Each call gives up after 90 s; there is no automatic retry.
+The SageMaker engine calls the user's own endpoint with `fetch`, and signs each call with the AWS SDK's own SigV4 signer, `@smithy/signature-v4`, hashing on Web Crypto (ADR-0009). It signs with temporary AWS credentials that the service worker reads from `storage.session` and sends in `offscreen-transcribe`, only when SageMaker is the selected engine. The header `route=/v1/audio/transcriptions` sends the call to vLLM's transcription route, and `to_language` forces the Meeting Language; for the three Meeting Languages that Qwen3-ASR does not list (`he`, `no`, `uk`) no language is sent. Qwen3-ASR returns text only, so the engine sets `windowing` and the wrapper cuts its windows at pauses: each window becomes one Utterance, and fusion names it from the captions. Every failure is a `SageMakerFailure` with a kind (credentials, endpoint, container, format or other), and expired credentials are refused before any upload. Each call gives up after 90 s; there is no automatic retry. Each call caps the reply at `max_completion_tokens` (16 per second of audio + 32), and four windows are in flight at once (`concurrency`). Windows with no signal are skipped by the wrapper: Qwen3-ASR invents words for silence.
 
 ---
 
@@ -592,7 +594,7 @@ The functions to read first, by job.
 | The Test button's report | `testReport` | `src/transcription/sagemaker.ts` |
 | Decode, window, offset, silence check | `createTranscriptionProvider().transcribe` | `src/transcription/provider.ts` |
 | Refuse filler output | `rejectAsSilent`, `carriesNoSpeech` | `src/transcription/silence.ts` |
-| Cut windows at pauses | `pauseWindows` | `src/transcription/pauses.ts` |
+| Cut windows at pauses, and find the ones with no signal | `pauseWindows`, `loudestRms` | `src/transcription/pauses.ts` |
 | Names onto words | `fuseTranscript`, `speakerTrackFrom` | `src/transcription/fusion.ts` |
 | Summarize | `summarizeTranscript` | `src/pipeline/pipeline.ts` |
 | HTML output | `renderArtifact`, `markdownToHtml` | `src/pipeline/artifact.ts` |

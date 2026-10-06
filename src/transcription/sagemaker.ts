@@ -59,6 +59,21 @@ export const SAGEMAKER_TIMEOUT_MS = 90_000;
  */
 export const TRANSCRIPTION_ROUTE = "route=/v1/audio/transcriptions";
 
+/**
+ * The reply's length cap, per second of audio and in all. Speech runs at about
+ * 4–6 tokens a second, so the cap never cuts real words. It exists for noise:
+ * on a live endpoint, 10 s of silence with no language set ran past 70 s,
+ * unanswered, and with a cap it came back in 4 s.
+ */
+export const MAX_TOKENS_PER_SECOND = 16;
+export const MAX_TOKENS_BASE = 32;
+
+/**
+ * Windows in flight at once. Each call costs about 1.7 s however short its
+ * audio, and on a live endpoint four 10-s windows at once took as long as one.
+ */
+export const SAGEMAKER_CONCURRENCY = 4;
+
 const BOUNDARY = "meeting-summarizer-sagemaker";
 
 /**
@@ -147,7 +162,11 @@ export function invokeInput(opts: {
         ["language", opts.language],
       ]
     : [];
-  fields.push(["response_format", "json"]);
+  const seconds = opts.samples.length / SAGEMAKER_SAMPLE_RATE;
+  fields.push(
+    ["response_format", "json"],
+    ["max_completion_tokens", String(Math.ceil(seconds * MAX_TOKENS_PER_SECOND) + MAX_TOKENS_BASE)],
+  );
   return {
     endpointName: opts.endpointName,
     contentType: `multipart/form-data; boundary=${BOUNDARY}`,
@@ -260,6 +279,16 @@ export function sageMakerFailure(
         options,
       );
     case "ModelError":
+      // vLLM's own /invocations takes JSON only. A container that refuses the
+      // multipart body did not take the transcription route: it is the wrong
+      // image, or the route header did not reach it.
+      if (/Unsupported Media Type/i.test(`${e.originalMessage ?? ""} ${message}`)) {
+        return new SageMakerFailure(
+          "format",
+          `the container refused the upload, so the call did not reach vLLM's transcription route: ${(e.originalMessage ?? message).slice(0, 200)}`,
+          options,
+        );
+      }
       return new SageMakerFailure(
         "container",
         `the endpoint's container failed (${e.originalStatus ?? "no status"}): ${(e.originalMessage ?? message).slice(0, 300)}`,
@@ -295,11 +324,9 @@ const TEST_LEADS: Record<SageMakerFailureKind, string> = {
 export function testReport(
   outcome: { ok: true; text: string } | { ok: false; error: unknown },
 ): string {
-  if (outcome.ok) {
-    return outcome.text
-      ? `The endpoint answered: “${outcome.text.slice(0, 80)}”.`
-      : "The endpoint answered. It heard no words in one second of silence, as it should.";
-  }
+  // The words are not quoted: Qwen3-ASR answers the test's silence with words it
+  // invents ("Okay."), and quoting them would read as a fault in a healthy setup.
+  if (outcome.ok) return "The endpoint answered, in the format the engine reads.";
   const { error } = outcome;
   if (!(error instanceof SageMakerFailure)) {
     return `Failed: ${error instanceof Error ? error.message : String(error)}`;
@@ -401,6 +428,7 @@ export function createSageMakerTranscriptionEngine(opts: {
     sampleRate: SAGEMAKER_SAMPLE_RATE,
     maxInputMs: SAGEMAKER_MAX_INPUT_MS,
     windowing: SAGEMAKER_WINDOWING,
+    concurrency: SAGEMAKER_CONCURRENCY,
     // Nothing to fetch or initialise: the model runs on the user's endpoint,
     // which is up whenever the user wants it used.
     load() {

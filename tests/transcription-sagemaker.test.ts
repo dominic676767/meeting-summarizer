@@ -15,6 +15,7 @@ import {
   createTranscriptionProvider,
   TranscriptionCancelled,
   TranscriptionError,
+  TranscriptionSilent,
   type DecodeAudio,
 } from "../src/transcription/provider";
 import {
@@ -44,6 +45,8 @@ const CREDENTIALS: AwsCredentials = {
 const WHERE = { endpointName: "qwen3-asr", region: "eu-west-1" };
 
 const silence = (seconds: number) => new Float32Array(Math.round(seconds * RATE));
+/** Audio with signal in it: the wrapper skips windows of pure silence for this engine. */
+const sound = (seconds: number) => new Float32Array(Math.round(seconds * RATE)).fill(0.5);
 const reply = (body: unknown) => new TextEncoder().encode(JSON.stringify(body));
 
 /** The multipart body's parts by name. latin1 maps each byte to one character. */
@@ -97,6 +100,15 @@ describe("invokeInput", () => {
     expect(parts.get("to_language")?.value).toBe("de");
     expect(parts.get("language")?.value).toBe("de");
     expect(parts.get("response_format")?.value).toBe("json");
+  });
+
+  it("caps the reply at 16 tokens per second of audio, plus 32", () => {
+    expect(partsOf(input("en", 2)).get("max_completion_tokens")?.value).toBe("64");
+    expect(partsOf(input("en", 10)).get("max_completion_tokens")?.value).toBe("192");
+    expect(partsOf(input("en", 30)).get("max_completion_tokens")?.value).toBe("512");
+    // The cap holds for the languages sent without a hint, which is where a
+    // reply ran away on a live endpoint.
+    expect(partsOf(input("uk", 10)).get("max_completion_tokens")?.value).toBe("192");
   });
 
   it("sends no language at all for the Meeting Languages Qwen3-ASR does not list", () => {
@@ -290,6 +302,22 @@ describe("sageMakerFailure", () => {
     expect(failure.message).toContain("qwen3-asr was not found in eu-west-1");
   });
 
+  it("calls a container that refuses the upload a format failure: the route was missed", () => {
+    // What the live endpoint answered when the route header was left out.
+    const failure = sageMakerFailure(
+      {
+        name: "ModelError",
+        message: "Received client error (400) from primary with message",
+        originalStatus: 400,
+        originalMessage:
+          "{\"error\":{\"message\":\"1 validation error:\\n  Unsupported Media Type: Only 'application/json' is allowed\"}}",
+      },
+      WHERE,
+    );
+    expect(failure.kind).toBe("format");
+    expect(failure.message).toContain("did not reach vLLM's transcription route");
+  });
+
   it("passes on what the container said when it failed", () => {
     const failure = sageMakerFailure(
       { name: "ModelError", originalStatus: 500, originalMessage: "audio decode failed" },
@@ -326,6 +354,10 @@ describe("the SageMaker engine", () => {
     expect(e.windowing).toEqual(SAGEMAKER_WINDOWING);
     expect(e.maxInputMs).toBe(SAGEMAKER_MAX_INPUT_MS);
     expect(SAGEMAKER_MAX_INPUT_MS).toBe(30_000);
+  });
+
+  it("asks for four windows in flight at once", () => {
+    expect(engine(() => Promise.resolve(reply({ text: "" }))).concurrency).toBe(4);
   });
 
   it("turns a window's reply into one span that covers the window", async () => {
@@ -379,7 +411,7 @@ describe("the SageMaker engine", () => {
         signal.addEventListener("abort", () => reject(signal.reason));
         queueMicrotask(() => user.abort());
       });
-    const decode: DecodeAudio = () => Promise.resolve({ samples: silence(3), sampleRate: RATE });
+    const decode: DecodeAudio = () => Promise.resolve({ samples: sound(3), sampleRate: RATE });
     const provider = createTranscriptionProvider({ name: "sagemaker", engine: engine(hang), decode });
     await expect(
       provider.transcribe({ spans: [{ data: new Blob(), startOffsetMs: 0 }] }, { signal: user.signal }),
@@ -398,11 +430,14 @@ describe("what the user is told", () => {
     expect(uploadDestination("elevenlabs")).toBe("ElevenLabs");
   });
 
-  it("reports a test that got an answer", () => {
-    expect(testReport({ ok: true, text: "" })).toBe(
-      "The endpoint answered. It heard no words in one second of silence, as it should.",
+  it("reports a test that got an answer without quoting it", () => {
+    // A live endpoint answers the test's silence with "Okay.": invented, and no fault.
+    expect(testReport({ ok: true, text: "Okay." })).toBe(
+      "The endpoint answered, in the format the engine reads.",
     );
-    expect(testReport({ ok: true, text: "Thank you." })).toBe("The endpoint answered: “Thank you.”.");
+    expect(testReport({ ok: true, text: "" })).toBe(
+      "The endpoint answered, in the format the engine reads.",
+    );
   });
 
   it("reports a failed test by the part of the setup to check", () => {
@@ -436,8 +471,23 @@ describe("the factory's SageMaker checks", () => {
     elevenlabs: { apiKey: "", model: "scribe_v2" },
     sagemaker: { region: "eu-west-1", endpointName: "qwen3-asr", ...over },
   });
-  const decode: DecodeAudio = () => Promise.resolve({ samples: silence(5), sampleRate: RATE });
+  const decode: DecodeAudio = () => Promise.resolve({ samples: sound(5), sampleRate: RATE });
   const recording = { spans: [{ data: new Blob(), startOffsetMs: 0 }] };
+
+  it("sends no window of a silent recording, and calls it silence, not a failure", async () => {
+    let calls = 0;
+    const provider = createTranscriptionProviderFor(settings(), {
+      workerUrl: "w.js",
+      decode: () => Promise.resolve({ samples: silence(40), sampleRate: RATE }),
+      awsCredentials: CREDENTIALS,
+      invoke: () => {
+        calls++;
+        return Promise.resolve(reply({ text: "I'm not sure what you're talking about." }));
+      },
+    });
+    await expect(provider.transcribe(recording)).rejects.toBeInstanceOf(TranscriptionSilent);
+    expect(calls).toBe(0);
+  });
 
   it("holds the Recording when no endpoint is configured", () => {
     expect(() =>

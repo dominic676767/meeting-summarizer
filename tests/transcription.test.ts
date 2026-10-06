@@ -470,6 +470,30 @@ describe("Transcription Provider: windows cut at pauses", () => {
     expect(utterances.map((u) => u.startMs)).toEqual(expected);
   });
 
+  it("skips a window cut at pauses that holds no signal, and still counts its audio", async () => {
+    // 10 s of sound, 20 s of digital silence, 10 s of sound.
+    const samples = new Float32Array(40 * SAMPLE_RATE).fill(0.5);
+    samples.fill(0, 10 * SAMPLE_RATE, 30 * SAMPLE_RATE);
+    const engine = { ...fakeEngine(), windowing: { targetMs: 10_000, maxMs: 30_000 } };
+    const progress: number[] = [];
+    const utterances = await createTranscriptionProvider({
+      name: "fake",
+      engine,
+      decode: () => Promise.resolve({ samples, sampleRate: SAMPLE_RATE }),
+    }).transcribe(recording(), { onAudioProgress: (done) => progress.push(done) });
+    // Every window inside the silence was skipped; the two with sound were sent.
+    expect(engine.windowsSec.length).toBeLessThan(4);
+    expect(utterances.every((u) => u.startMs < 10_000 || u.startMs >= 25_000)).toBe(true);
+    expect(progress.at(-1)).toBe(40_000);
+  });
+
+  it("sends a silent window anyway for an engine that does not cut at pauses", async () => {
+    // fakeDecode's audio is all zeros: an engine with long windows still gets it.
+    const engine = fakeEngine({ maxInputMs: 60_000 });
+    await provider(engine, 90).transcribe(recording());
+    expect(engine.windowsSec).toEqual([60, 30]);
+  });
+
   it("never hands the engine more than its input limit, whatever the windowing allows", async () => {
     const engine = {
       ...fakeEngine({ maxInputMs: 12_000 }),
@@ -477,5 +501,62 @@ describe("Transcription Provider: windows cut at pauses", () => {
     };
     await pausedProvider(engine).transcribe(recording());
     expect(Math.max(...engine.windowsSec)).toBeLessThanOrEqual(12);
+  });
+});
+
+describe("Transcription Provider: several windows in flight", () => {
+  /** An engine whose calls finish in reverse order, recording how many overlap. */
+  function slowEngine(concurrency: number, failOn?: number) {
+    let inFlight = 0;
+    let call = 0;
+    const engine = {
+      ...fakeEngine({ maxInputMs: 10_000 }),
+      concurrency,
+      peak: 0,
+      signals: [] as (AbortSignal | undefined)[],
+      async transcribe(samples: Float32Array, signal?: AbortSignal): Promise<EngineSpan[]> {
+        const n = ++call;
+        engine.signals.push(signal);
+        inFlight++;
+        engine.peak = Math.max(engine.peak, inFlight);
+        // Earlier calls wait longer, so they finish after later ones.
+        await new Promise((resolve) => setTimeout(resolve, 40 - n * 4));
+        inFlight--;
+        if (n === failOn) throw new Error(`window ${n} failed`);
+        if (signal?.aborted) throw new Error("aborted");
+        return [{ text: `window ${n}`, startSec: 0, endSec: samples.length / SAMPLE_RATE }];
+      },
+    };
+    return engine;
+  }
+
+  it("keeps no more than the engine's limit in flight", async () => {
+    const engine = slowEngine(3);
+    await provider(engine, 80).transcribe(recording());
+    expect(engine.peak).toBe(3);
+  });
+
+  it("returns the words in Meeting order, whatever order the calls finished in", async () => {
+    const utterances = await provider(slowEngine(4), 80).transcribe(recording());
+    expect(utterances.map((u) => u.text)).toEqual(
+      Array.from({ length: 8 }, (_, i) => `window ${i + 1}`),
+    );
+    expect(utterances.map((u) => u.startMs)).toEqual(Array.from({ length: 8 }, (_, i) => i * 10_000));
+  });
+
+  it("stops the other calls and holds the Recording when one fails", async () => {
+    const engine = slowEngine(4, 2);
+    await expect(provider(engine, 80).transcribe(recording())).rejects.toThrow("window 2 failed");
+    // Calls in flight were told to stop, and no new call started after the failure.
+    expect(engine.signals.every((s) => s?.aborted)).toBe(true);
+    expect(engine.signals.length).toBeLessThan(8);
+  });
+
+  it("stops at once when the user skips the wait", async () => {
+    const abort = new AbortController();
+    const engine = slowEngine(4);
+    const run = provider(engine, 80).transcribe(recording(), { signal: abort.signal });
+    abort.abort();
+    await expect(run).rejects.toBeInstanceOf(TranscriptionCancelled);
   });
 });

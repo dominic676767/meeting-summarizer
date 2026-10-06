@@ -103,3 +103,33 @@ export function pauseWindows(
   windows.push({ start, end: n });
   return windows;
 }
+
+/**
+ * The RMS of the loudest 200 ms in `window`. A window whose loudest stretch is
+ * below the recorder's silence level holds nothing to hear, while one short word
+ * anywhere in it is enough to lift it above.
+ */
+export function loudestRms(samples: Float32Array, sampleRate: number, window: SampleWindow): number {
+  const frameLen = Math.max(1, Math.round((FRAME_MS / 1000) * sampleRate));
+  const pauseFrames = Math.max(1, Math.round(PAUSE_MS / FRAME_MS));
+  const energies: number[] = [];
+  for (let f = window.start; f < window.end; f += frameLen) {
+    let energy = 0;
+    const end = Math.min(window.end, f + frameLen);
+    for (let i = f; i < end; i++) {
+      const s = samples[i] ?? 0;
+      energy += s * s;
+    }
+    energies.push(energy);
+  }
+  if (energies.length === 0) return 0;
+  const run = Math.min(pauseFrames, energies.length);
+  let sum = 0;
+  for (let i = 0; i < run; i++) sum += energies[i] ?? 0;
+  let loudest = sum;
+  for (let i = run; i < energies.length; i++) {
+    sum += (energies[i] ?? 0) - (energies[i - run] ?? 0);
+    loudest = Math.max(loudest, sum);
+  }
+  return Math.sqrt(loudest / Math.min(run * frameLen, window.end - window.start));
+}

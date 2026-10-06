@@ -10,7 +10,8 @@
 // chunking, offset correction, progress, cancellation) is testable with no
 // browser, no WASM, and no real audio.
 import type { Utterance } from "../domain/types";
-import { pauseWindows, type PauseWindowing, type SampleWindow } from "./pauses";
+import { SILENT_BELOW_RMS } from "../offscreen/signal";
+import { loudestRms, pauseWindows, type PauseWindowing, type SampleWindow } from "./pauses";
 import { rejectAsSilent } from "./silence";
 
 /** One Capture Span's audio, as the recorder wrote it. */
@@ -125,6 +126,12 @@ export interface TranscriptionEngine {
    * with one speaker. Without it, windows are `maxInputMs` long.
    */
   readonly windowing?: PauseWindowing;
+  /**
+   * How many windows may be in flight at once. Absent means one at a time. Set
+   * by an engine whose calls each cost a fixed wait, such as a round trip to a
+   * remote endpoint, which several calls in flight share.
+   */
+  readonly concurrency?: number;
   /** Fetch and initialise the model. Cached by the engine; called once per run. */
   load(onProgress?: (loadedBytes: number, totalBytes: number | null) => void): Promise<void>;
   /**
@@ -208,35 +215,47 @@ export function createTranscriptionProvider(
       // one call that produced them: its "Speaker 1" in one window and in the next
       // need not be the same person. So when the recording takes more than one
       // call, every label names its part, and two people never share one.
-      const windows = decoded.map((d) => windowsFor(engine, d.samples, d.sampleRate));
-      const windowCount = windows.reduce((n, w) => n + w.length, 0);
-      let windowIndex = 0;
+      const jobs = windowJobs(engine, decoded);
 
-      const utterances: Utterance[] = [];
+      // With more than one window in flight, one failure must stop the others:
+      // the Recording is held either way, and their answers would be thrown away.
+      // One at a time, the engine is handed the user's own signal, unchanged.
+      const limit = Math.max(1, engine.concurrency ?? 1);
+      const stopOthers = new AbortController();
+      const engineSignal =
+        limit === 1
+          ? hooks?.signal
+          : hooks?.signal
+            ? AbortSignal.any([hooks.signal, stopOthers.signal])
+            : stopOthers.signal;
+
       let doneMs = 0;
-      for (const [i, { samples, sampleRate, startOffsetMs }] of decoded.entries()) {
-        for (const { start, end } of windows[i] ?? []) {
+      const perWindow = await inPool(
+        jobs.length,
+        limit,
+        async (i) => {
           abortIfCancelled(hooks?.signal);
-          // Absolute zero for this window: where the Meeting began, not where the
-          // window did and not where this span's Capture Start was.
-          const baseMs = startOffsetMs + msFor(start, sampleRate);
-          const spans = await attempt(
-            "engine failed",
-            () => engine.transcribe(samples.subarray(start, end), hooks?.signal),
-            hooks?.signal,
-          );
-          windowIndex++;
-          const part = windowCount > 1 ? windowIndex : null;
-          for (const span of spans) {
-            const utterance = toUtterance(span, baseMs, part);
-            if (utterance) utterances.push(utterance);
-          }
+          const job = jobs[i]!;
+          // A window cut at pauses that holds no signal at all is not sent: the
+          // engine would answer it with invented words, and nothing downstream
+          // could tell them from speech.
+          const spans = job.silent
+            ? []
+            : await attempt(
+                "engine failed",
+                () => engine.transcribe(job.samples, engineSignal),
+                hooks?.signal,
+              );
           // Progress counts audio transcribed, not Meeting time elapsed: the gap
           // between two spans was never recorded and is not work to be done.
-          hooks?.onAudioProgress?.(doneMs + msFor(end, sampleRate), totalMs);
-        }
-        doneMs += msFor(samples.length, sampleRate);
-      }
+          doneMs += job.lengthMs;
+          hooks?.onAudioProgress?.(doneMs, totalMs);
+          return spans.flatMap((span) => toUtterance(span, job.baseMs, job.part) ?? []);
+        },
+        () => stopOthers.abort(),
+      );
+      // In Meeting order whatever order the calls finished in.
+      const utterances = perWindow.flat();
 
       // The last thing the provider does is refuse to pass off silence as speech.
       // Fed a silent recording an engine returns its filler — Whisper's is the
@@ -254,6 +273,85 @@ export function createTranscriptionProvider(
 
 function msFor(sampleCount: number, sampleRate: number): number {
   return Math.round((sampleCount / sampleRate) * 1000);
+}
+
+/** One engine call to make, or to skip, with everything its answer needs. */
+interface WindowJob {
+  samples: Float32Array;
+  /** Where the window starts, ms from the Meeting start. */
+  baseMs: number;
+  /** The 1-based call number, or null when the recording takes one call. */
+  part: number | null;
+  /** This window's share of the progress total. */
+  lengthMs: number;
+  /** No signal at all: skipped rather than sent. */
+  silent: boolean;
+}
+
+/**
+ * Every window of every span, in Meeting order. Progress shares are taken as
+ * differences of each window's end, so that they add up to the totals exactly.
+ */
+function windowJobs(
+  engine: TranscriptionEngine,
+  decoded: { samples: Float32Array; sampleRate: number; startOffsetMs: number }[],
+): WindowJob[] {
+  const windows = decoded.map((d) => windowsFor(engine, d.samples, d.sampleRate));
+  const count = windows.reduce((n, w) => n + w.length, 0);
+  const jobs: WindowJob[] = [];
+  let spanDoneMs = 0;
+  let previousEndMs = 0;
+  for (const [i, d] of decoded.entries()) {
+    for (const w of windows[i] ?? []) {
+      const endMs = spanDoneMs + msFor(w.end, d.sampleRate);
+      jobs.push({
+        samples: d.samples.subarray(w.start, w.end),
+        baseMs: d.startOffsetMs + msFor(w.start, d.sampleRate),
+        part: count > 1 ? jobs.length + 1 : null,
+        lengthMs: endMs - previousEndMs,
+        // Only for windows cut at pauses. A long window always holds some sound
+        // worth an answer, and those engines answer silence in their own ways.
+        silent:
+          engine.windowing !== undefined &&
+          loudestRms(d.samples, d.sampleRate, w) < SILENT_BELOW_RMS,
+      });
+      previousEndMs = endMs;
+    }
+    spanDoneMs += msFor(d.samples.length, d.sampleRate);
+  }
+  return jobs;
+}
+
+/**
+ * Runs `run(0)` … `run(count - 1)` with at most `limit` in flight, and returns
+ * their results in index order. The first failure stops new work, calls
+ * `onFailure` so the work in flight can be stopped, and is the one thrown.
+ */
+async function inPool<T>(
+  count: number,
+  limit: number,
+  run: (index: number) => Promise<T>,
+  onFailure: () => void,
+): Promise<T[]> {
+  const results: T[] = new Array<T>(count);
+  let next = 0;
+  let failure: { error: unknown } | null = null;
+  const worker = async () => {
+    while (failure === null && next < count) {
+      const index = next++;
+      try {
+        results[index] = await run(index);
+      } catch (error) {
+        if (failure === null) {
+          failure = { error };
+          onFailure();
+        }
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, count) }, worker));
+  if (failure !== null) throw (failure as { error: unknown }).error;
+  return results;
 }
 
 /**
