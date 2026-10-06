@@ -20,6 +20,7 @@
     "vitest": "^2.1.4"
   },
   "dependencies": {
-    "@huggingface/transformers": "^4.2.0"
+    "@huggingface/transformers": "^4.2.0",
+    "@smithy/signature-v4": "^5.7.4"
   }
 }

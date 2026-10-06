@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 import { billingPlan, formatBilling } from "../eval/billing";
 import { parseCliArgs, UsageError } from "../eval/cli";
-import { engineInfo, redactKeys } from "../eval/engines";
+import { engineInfo, redactKeys, sageMakerFromEnv } from "../eval/engines";
 import { formatDuration, renderMarkdown, type EngineResult, type RunResult } from "../eval/report";
 import { SCRIBE_MAX_INPUT_MS } from "../src/transcription/elevenlabs";
 import { OPENAI_TRANSCRIPTION_MAX_INPUT_MS } from "../src/transcription/openai";
@@ -11,7 +11,7 @@ import { OPENAI_TRANSCRIPTION_MAX_INPUT_MS } from "../src/transcription/openai";
 const parse = (...argv: string[]) => parseCliArgs(argv, "/work", "/repo");
 
 describe("parseCliArgs", () => {
-  it("defaults to every engine, base Whisper, and results inside the repository", () => {
+  it("defaults to the engines that need no endpoint, base Whisper, and results inside the repository", () => {
     expect(parse("--manifest", "clips/clips.json")).toEqual({
       source: { kind: "manifest", path: "/work/clips/clips.json" },
       engines: ["local-whisper", "openai", "elevenlabs"],
@@ -25,6 +25,13 @@ describe("parseCliArgs", () => {
     const options = parse("--manifest", "c.json", "--clips", "a, b", "--engines", "elevenlabs,local-whisper");
     expect(options?.source).toEqual({ kind: "manifest", path: "/work/c.json", names: ["a", "b"] });
     expect(options?.engines).toEqual(["local-whisper", "elevenlabs"]);
+  });
+
+  it("runs SageMaker only when it is asked for by name", () => {
+    expect(parse("--manifest", "c.json", "--engines", "sagemaker,openai")?.engines).toEqual([
+      "openai",
+      "sagemaker",
+    ]);
   });
 
   it("takes one clip given by its three parts", () => {
@@ -82,6 +89,42 @@ describe("billingPlan", () => {
 
   it("has nothing to bill when only local Whisper runs", () => {
     expect(billingPlan([600], [engines[0]!])).toEqual([]);
+  });
+
+  it("says SageMaker bills by running time, and counts its windows cut at pauses", () => {
+    expect(formatBilling(billingPlan([60], [engineInfo("sagemaker", "base")]))).toContain(
+      "Amazon SageMaker Qwen3-ASR: 1.0 min of audio in about 6 uploads (billed by your endpoint's running time, not by the minute)",
+    );
+  });
+});
+
+describe("sageMakerFromEnv", () => {
+  const env = {
+    AWS_ACCESS_KEY_ID: "ASIA-TEST",
+    AWS_SECRET_ACCESS_KEY: "secret",
+    AWS_SESSION_TOKEN: "token",
+    AWS_REGION: "eu-west-1",
+    SAGEMAKER_ENDPOINT: "qwen3-asr",
+  };
+
+  it("reads the AWS CLI's own variables and the endpoint's", () => {
+    expect(sageMakerFromEnv(env)).toEqual({
+      ok: true,
+      config: {
+        accessKeyId: "ASIA-TEST",
+        secretAccessKey: "secret",
+        sessionToken: "token",
+        region: "eu-west-1",
+        endpointName: "qwen3-asr",
+      },
+    });
+  });
+
+  it("names every variable that is not set", () => {
+    expect(sageMakerFromEnv({ ...env, AWS_SESSION_TOKEN: "", SAGEMAKER_ENDPOINT: undefined })).toEqual({
+      ok: false,
+      missing: ["AWS_SESSION_TOKEN", "SAGEMAKER_ENDPOINT"],
+    });
   });
 });
 

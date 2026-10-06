@@ -323,10 +323,11 @@ async function transcribe(
   let provider: (TranscriptionProvider & { close(): void }) | undefined;
   try {
     // Inside the try because selecting an unconfigured engine — a cloud one with
-    // no key — fails here, and that failure must reach the caller as a held
-    // recording rather than a rejected message.
+    // no key, or SageMaker with no credentials — fails here, and that failure
+    // must reach the caller as a held recording rather than a rejected message.
     provider = createTranscriptionProviderFor(msg.transcription, {
       workerUrl: ext.runtime.getURL("whisper-worker.js"),
+      awsCredentials: msg.awsCredentials,
     });
     running = { provider, abort };
     // Every span of the Meeting, in order, each with the offset that keeps its

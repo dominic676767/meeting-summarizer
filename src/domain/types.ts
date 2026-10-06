@@ -145,7 +145,7 @@ export type ProviderId = "anthropic" | "openai" | "ollama" | "bedrock";
  * so the ids that appear in both lists are a coincidence of vendor, not a shared
  * setting — `openai` here is a transcription endpoint with its own key.
  */
-export type TranscriptionProviderId = "local-whisper" | "openai" | "elevenlabs";
+export type TranscriptionProviderId = "local-whisper" | "openai" | "elevenlabs" | "sagemaker";
 
 /** Whisper model size — the accuracy-against-time trade the user picks. */
 export type WhisperModelSize = "tiny" | "base" | "small";
@@ -216,6 +216,12 @@ export interface TranscriptionSettings {
    * ElevenLabs, so there is nothing to confuse it with, but it is still one more
    * destination the user opts into by entering it. */
   elevenlabs: { apiKey: string; model: string };
+  /**
+   * The user's own SageMaker endpoint, running Qwen3-ASR. Where it is, and
+   * nothing more: its AWS credentials are temporary and are kept in session
+   * storage, never with these settings on disk (ADR-0009).
+   */
+  sagemaker: { region: string; endpointName: string };
 }
 
 /**

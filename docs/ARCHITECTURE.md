@@ -35,7 +35,7 @@ flowchart LR
     teams["Teams web meeting tab<br/>audio + live captions"]
     ext["Meeting Summarizer<br/>Chromium extension"]
     hf[("Hugging Face<br/>Whisper model, one-time download")]
-    stt["Cloud transcription<br/>OpenAI / ElevenLabs, opt-in"]
+    stt["Cloud transcription, opt-in<br/>OpenAI / ElevenLabs /<br/>your own SageMaker endpoint"]
     llm["LLM Provider<br/>Claude / OpenAI / Ollama / Bedrock"]
     out[("Downloads/meeting-summaries/<br/>YYYY-MM-DD-title.html")]
 
@@ -79,6 +79,7 @@ flowchart TB
     worker["whisper-worker.ts<br/>Web Worker, ES module<br/>transformers.js + ONNX WASM"]
     popup["popup/popup.ts<br/>toolbar popup, polls every 1s"]
     options["options/options.ts<br/>settings page"]
+    smEndpoint["your SageMaker endpoint<br/>Qwen3-ASR, opt-in"]
     llm["providers/*<br/>HTTPS fetch to the LLM"]
 
     tc -- "captions-update, meeting-status, meeting-ended" --> router
@@ -93,6 +94,8 @@ flowchart TB
     tx -- "local engine" --> worker
     finish --> llm
     options -- "storage.local settings" --> sess
+    tx -- "SageMaker engine, signed fetch" --> smEndpoint
+    options -- "Test the endpoint: 1 s of silence" --> smEndpoint
 ```
 
 Why the split:
@@ -103,7 +106,7 @@ Why the split:
 | Service worker | Owns state and decisions. Can be suspended at any time, so sessions are mirrored to `storage.session`. |
 | Offscreen document | A service worker has no `MediaRecorder`, `AudioContext` or `getUserMedia`. The offscreen page does the recording and runs transcription. |
 | Whisper worker | Keeps the WASM model off the offscreen page's main thread. The only ES-module bundle, because the ONNX runtime uses a dynamic import (ADR-0006). |
-| Popup / Options | User surfaces. The popup is the explicit invocation Chromium requires before `tabCapture` will work. |
+| Popup / Options | User surfaces. The popup is the explicit invocation Chromium requires before `tabCapture` will work. The Options page also calls the SageMaker endpoint itself, with one second of silence, to test the setup before a meeting depends on it. |
 
 ---
 
@@ -148,9 +151,12 @@ flowchart LR
         whisperProtocol["whisper-protocol.ts"]
         whisperWorker["whisper-worker.ts"]
         txOpenai["openai.ts"]
+        sagemaker["sagemaker.ts<br/>SDK signer + fetch"]
         elevenlabs["elevenlabs.ts"]
         engines["engines.ts<br/>engine names"]
         pcm["pcm.ts"]
+        pauses["pauses.ts"]
+        awsCreds["aws-credentials.ts"]
         silence["silence.ts"]
         fusion["fusion.ts"]
     end
@@ -191,9 +197,11 @@ flowchart LR
     bg --> pFactory
     offscreenTs --> audioMix & audioStore & signal
     offscreenTs --> txFactory
-    txFactory --> localWhisper & txOpenai & elevenlabs
-    txOpenai & elevenlabs --> pcm
+    txFactory --> localWhisper & txOpenai & elevenlabs & sagemaker
+    txOpenai & elevenlabs & sagemaker --> pcm
+    txFactory & sagemaker --> awsCreds
     txFactory --> txProvider --> silence
+    txProvider --> pauses
     localWhisper --> whisperProtocol
     whisperWorker --> whisperProtocol
     fusion --> silence
@@ -202,12 +210,15 @@ flowchart LR
     pFactory --> anthropic & openai & ollama & bedrock --> pIface
     popupTs --> settings
     optionsTs --> settings --> templates
+    settings --> awsCreds
     bg & micCapture & popupTs & optionsTs --> engines
+    optionsTs --> awsCreds & sagemaker
+    popupTs --> awsCreds
 ```
 
 `platform.ts` (the `chrome` namespace as `ext`), `messages.ts` (the protocol) and `domain/types.ts` (the vocabulary) are imported almost everywhere and are left off the arrows.
 
-**Pure vs browser-bound.** Most logic is pure and unit-tested: `capture-state`, `capture-signal`, `capture-spans`, `mic-capture`, `badge`, `meeting-url`, `fusion`, `silence`, `provider` (transcription), `pipeline/*`, `providers/*`, `audio-mix`, `signal`. The browser-bound shells (`background.ts`, `offscreen.ts`, `audio-store.ts`, `whisper-worker.ts`, popup, options) are kept thin and checked by hand via [manual-checks.md](manual-checks.md).
+**Pure vs browser-bound.** Most logic is pure and unit-tested: `capture-state`, `capture-signal`, `capture-spans`, `mic-capture`, `badge`, `meeting-url`, `fusion`, `silence`, `provider` (transcription), `pauses`, `aws-credentials`, `sagemaker` (its fetch is injected), `pipeline/*`, `providers/*`, `audio-mix`, `signal`. The browser-bound shells (`background.ts`, `offscreen.ts`, `audio-store.ts`, `whisper-worker.ts`, popup, options) are kept thin and checked by hand via [manual-checks.md](manual-checks.md).
 
 ---
 
@@ -391,19 +402,20 @@ Runs in the offscreen document. The engine is picked from settings at transcribe
 
 ```mermaid
 flowchart TD
-    msg["offscreen-transcribe {spans, settings}"] --> fac["createTranscriptionProviderFor()"]
+    msg["offscreen-transcribe {spans, settings,<br/>AWS credentials only for SageMaker}"] --> fac["createTranscriptionProviderFor()"]
     fac --> which{"settings.provider"}
     which -- "local-whisper (default)" --> lw["createLocalWhisperEngine()<br/>Web Worker, model tiny/base/small<br/>max window 120 s"]
     which -- "openai (opt-in)" --> oa["createOpenAiTranscriptionEngine()<br/>whisper-1, WAV upload<br/>max window 600 s"]
-    lw --> core
     which -- "elevenlabs (opt-in)" --> el["createElevenLabsTranscriptionEngine()<br/>scribe_v2, bare PCM upload, diarized<br/>max window 60 min, timeout 60 s + window"]
-    oa --> core
-    el --> core
+    which -- "sagemaker (opt-in)" --> sm["createSageMakerTranscriptionEngine()<br/>your endpoint, Qwen3-ASR<br/>SigV4 from @smithy/signature-v4, fetch<br/>WAV in multipart, route=/v1/audio/transcriptions<br/>text only: windows cut at pauses, about 10 s, max 30 s<br/>4 in flight, max_completion_tokens capped"]
+    lw & oa & el & sm --> core
 
     subgraph core["createTranscriptionProvider().transcribe() — provider.ts"]
         load["engine.load()<br/>model-download progress"] --> dec["decode every span<br/>decodeToMono() at engine rate"]
-        dec --> win["split each span into windows"]
-        win --> eng["engine.transcribe(window, signal)<br/>the cancel reaches a cloud upload"]
+        dec --> win["split each span into windows<br/>back to back at maxInputMs, or cut at pauses<br/>for an engine that sets windowing"]
+        win --> skip{"cut at pauses, and loudest 200 ms<br/>below SILENT_BELOW_RMS?"}
+        skip -- "yes: no signal" --> none["no call, no words"]
+        skip -- "no" --> eng["engine.transcribe(window, signal)<br/>up to engine.concurrency in flight<br/>the cancel reaches a cloud upload"]
         eng --> utt["toUtterance()<br/>startMs = span offset + window offset + engine time<br/>a diarization label gets (part N) when there were several calls"]
         utt --> sil{"rejectAsSilent()<br/>silence.ts"}
     end
@@ -418,7 +430,9 @@ flowchart TD
 
 The Whisper worker (`whisper-worker.ts`) loads `transformers.js` `automatic-speech-recognition` with `dtype q8`, `device wasm`, graph optimization off. It talks to `local-whisper.ts` using the message types in `whisper-protocol.ts` (`load`, `transcribe` ↔ `model-progress`, `loaded`, `spans`, `failed`).
 
-The two cloud engines encode with `pcm.ts`: OpenAI wraps the 16-bit PCM in a WAV, and Scribe uploads it bare. Both pass the user's cancel signal into `fetch`. Scribe also gives up after 60 s plus the window's length, with a `TranscriptionError`, so the Recording is held. Scribe is the only engine that diarizes. Its labels hold only inside one call, so the wrapper adds the part number when a recording takes several calls (ADR-0008). `engines.ts` gives each engine the name that the consent disclosure, the popup and the Summary Artifact show, and says which engines upload audio.
+The cloud engines encode with `pcm.ts`: OpenAI and SageMaker wrap the 16-bit PCM in a WAV, and Scribe uploads it bare. All three pass the user's cancel signal to their request. Scribe also gives up after 60 s plus the window's length, with a `TranscriptionError`, so the Recording is held. Scribe is the only engine that diarizes. Its labels hold only inside one call, so the wrapper adds the part number when a recording takes several calls (ADR-0008). `engines.ts` gives each engine the name that the consent disclosure, the popup and the Summary Artifact show, and says which engines upload audio.
+
+The SageMaker engine calls the user's own endpoint with `fetch`, and signs each call with the AWS SDK's own SigV4 signer, `@smithy/signature-v4`, hashing on Web Crypto (ADR-0009). It signs with temporary AWS credentials that the service worker reads from `storage.session` and sends in `offscreen-transcribe`, only when SageMaker is the selected engine. The header `route=/v1/audio/transcriptions` sends the call to vLLM's transcription route, and `to_language` forces the Meeting Language; for the three Meeting Languages that Qwen3-ASR does not list (`he`, `no`, `uk`) no language is sent. Qwen3-ASR returns text only, so the engine sets `windowing` and the wrapper cuts its windows at pauses: each window becomes one Utterance, and fusion names it from the captions. Every failure is a `SageMakerFailure` with a kind (credentials, endpoint, container, format or other), and expired credentials are refused before any upload. Each call gives up after 90 s; there is no automatic retry. Each call caps the reply at `max_completion_tokens` (16 per second of audio + 32), and four windows are in flight at once (`concurrency`). Windows with no signal are skipped by the wrapper: Qwen3-ASR invents words for silence.
 
 ---
 
@@ -463,7 +477,7 @@ flowchart LR
         sumFail["summary error"] --> ht[("Held Transcript<br/>storage.local held<br/>+ recordingId, spans")]
     end
 
-    popup["Popup: Retry"] -- "retry-held-recording" --> rhr["retryHeldRecording()<br/>reads CURRENT transcription settings"]
+    popup["Popup: Retry"] -- "retry-held-recording" --> rhr["retryHeldRecording()<br/>reads CURRENT transcription settings<br/>and SageMaker credentials"]
     hr --> rhr
     rhr -- "success or silence" --> fuse2["fuseTranscript()"] --> ht2["holdTranscript()<br/>then releaseHeldRecording()"]
     ht2 --> rh
@@ -492,6 +506,7 @@ flowchart LR
     end
     subgraph sessionS["chrome.storage.session (survives SW suspend)"]
         sessionsK["sessions<br/>MeetingSession per tab<br/>incl. caption accumulator"]
+        awsK["sagemakerCredentials<br/>temporary AWS credentials,<br/>memory only (ADR-0009)"]
     end
     subgraph audio["Offscreen origin storage"]
         opfs[("OPFS file per spanId<br/>IndexedDB 'meeting-audio' fallback")]
@@ -509,6 +524,7 @@ flowchart LR
 | Held Recording | transcription failed | its Transcript is held |
 | Held Transcript | summarization failed | its artifact is written |
 | Settings | Options page save | never (user-owned) |
+| SageMaker AWS credentials | pasted on the Options page | cleared there, or when the browser closes (`storage.session`) |
 
 ---
 
@@ -535,7 +551,7 @@ All types are in `src/messages.ts`. Every `chrome.runtime.sendMessage` is one of
 | `offscreen-start` | SW → offscreen | `start` | open streams, mix, record |
 | `offscreen-stop` | SW → offscreen | `stop` | flush and close the span |
 | `offscreen-status` | SW → offscreen | `status` | recorder health, mic, bytes |
-| `offscreen-transcribe` | SW → offscreen | `transcribe` | run the Transcription Provider over all spans |
+| `offscreen-transcribe` | SW → offscreen | `transcribe` | run the Transcription Provider over all spans; carries the AWS credentials only when SageMaker is selected |
 | `offscreen-cancel-transcribe` | SW → offscreen | abort + `provider.close()` | stop the WASM run |
 | `offscreen-discard-spans` | SW → offscreen | `deleteSpan` per id | delete audio |
 | `transcription-progress` | offscreen → SW | sets `session.transcription` | popup progress line |
@@ -574,14 +590,20 @@ The functions to read first, by job.
 | Pick engine | `createTranscriptionProviderFor` | `src/transcription/factory.ts` |
 | Engine names, and which engines upload | `TRANSCRIPTION_ENGINE_NAMES`, `uploadsAudio` | `src/transcription/engines.ts` |
 | Scribe words → timed, labelled spans | `spansFromScribe` | `src/transcription/elevenlabs.ts` |
+| One SageMaker call, its reply, its failures | `invokeInput`, `textFromResponse`, `sageMakerFailure` | `src/transcription/sagemaker.ts` |
+| The Test button's report | `testReport` | `src/transcription/sagemaker.ts` |
 | Decode, window, offset, silence check | `createTranscriptionProvider().transcribe` | `src/transcription/provider.ts` |
 | Refuse filler output | `rejectAsSilent`, `carriesNoSpeech` | `src/transcription/silence.ts` |
+| Cut windows at pauses, and find the ones with no signal | `pauseWindows`, `loudestRms` | `src/transcription/pauses.ts` |
 | Names onto words | `fuseTranscript`, `speakerTrackFrom` | `src/transcription/fusion.ts` |
 | Summarize | `summarizeTranscript` | `src/pipeline/pipeline.ts` |
 | HTML output | `renderArtifact`, `markdownToHtml` | `src/pipeline/artifact.ts` |
 | Write file | `writeArtifact` | `src/background/artifact-writer.ts` |
 | LLM client | `createProviderClient` | `src/providers/factory.ts` |
 | Settings with defaults | `loadSettings`, `saveSettings` | `src/settings.ts` |
+| SageMaker credentials, memory only | `loadAwsCredentials`, `saveAwsCredentials`, `clearAwsCredentials` | `src/settings.ts` |
+| Read pasted AWS credentials | `parseAwsCredentials` | `src/transcription/aws-credentials.ts` |
+| Credentials status, popup warning | `describeCredentials`, `credentialsWarning` | `src/transcription/aws-credentials.ts` |
 
 ### Every source file
 
@@ -591,7 +613,7 @@ The functions to read first, by job.
 | `src/platform.ts` | `ext` = the `chrome` namespace, resolved in one place |
 | `src/messages.ts` | message protocol and reply shapes |
 | `src/domain/types.ts` | domain vocabulary types |
-| `src/settings.ts` | defaults, load/save, upgrade merge |
+| `src/settings.ts` | defaults, load/save, upgrade merge; the SageMaker credentials in `storage.session` |
 | `src/content/teams-content.ts` | content-script loop: MutationObserver, diffing, Meeting End grace period |
 | `src/content/capture-prompt.ts` | in-page "start recording" card in a shadow root |
 | `src/adapters/adapter.ts` | `PlatformAdapter` interface |
@@ -620,9 +642,12 @@ The functions to read first, by job.
 | `src/transcription/whisper-protocol.ts` | worker message types, model repos, options |
 | `src/transcription/openai.ts` | OpenAI transcription engine |
 | `src/transcription/elevenlabs.ts` | ElevenLabs Scribe engine: diarized words → timed, labelled spans |
+| `src/transcription/sagemaker.ts` | SageMaker engine: the user's Qwen3-ASR endpoint, through the AWS SDK |
 | `src/transcription/engines.ts` | each engine's display name, and which engines upload audio |
 | `src/transcription/pcm.ts` | 16-bit PCM encoding that both cloud engines share |
 | `src/transcription/silence.ts` | degenerate-output rejection |
+| `src/transcription/pauses.ts` | short windows cut at pauses, for an engine whose output has no timestamps |
+| `src/transcription/aws-credentials.ts` | pasted temporary AWS credentials → key, secret, token, expiry; long-term keys refused |
 | `src/transcription/fusion.ts` | Utterances + Speaker Track → Fused Transcript |
 | `src/pipeline/pipeline.ts` | summarize: single-shot or map-reduce |
 | `src/pipeline/chunking.ts` | budget-sized chunks, chunk/reduce prompts |
@@ -639,7 +664,7 @@ The functions to read first, by job.
 | `src/popup/popup.html` | popup markup |
 | `src/popup/popup.ts` | popup: status, actions, held lists |
 | `src/options/options.html` | settings markup |
-| `src/options/options.ts` | settings: providers, transcription, templates |
+| `src/options/options.ts` | settings: providers, transcription, templates; the SageMaker credentials and its Test button |
 
 ---
 

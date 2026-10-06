@@ -1,8 +1,9 @@
 import { expectOk, type FetchFn, type ProviderClient } from "./provider";
 
-// Bedrock via API keys (bearer tokens) ONLY — SigV4 with long-lived AWS
-// credentials in browser storage is explicitly unsupported (ADR-0001 / spec).
-// Uses the Converse API for a model-agnostic request shape.
+// Bedrock via API keys (bearer tokens) only. Long-lived AWS keys stay
+// unsupported everywhere (ADR-0009), and the SageMaker engine's temporary AWS
+// credentials are not used here. Uses the Converse API for a model-agnostic
+// request shape.
 export function createBedrockClient(opts: {
   apiKey: string;
   region: string;

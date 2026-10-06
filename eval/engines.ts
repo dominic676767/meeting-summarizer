@@ -1,4 +1,4 @@
-// The three Transcription Providers, run through the extension's own code path.
+// The Transcription Providers, run through the extension's own code path.
 //
 // Every engine is the one the extension ships, wrapped by the same
 // createTranscriptionProvider, so chunking, offsets, part-labelling and the
@@ -28,6 +28,11 @@ import {
   type TranscriptionProvider,
 } from "../src/transcription/provider";
 import {
+  createSageMakerTranscriptionEngine,
+  SAGEMAKER_MAX_INPUT_MS,
+  SAGEMAKER_WINDOWING,
+} from "../src/transcription/sagemaker";
+import {
   spansFromWhisperOutput,
   WHISPER_MODEL_REPOS,
   WHISPER_SAMPLE_RATE,
@@ -38,7 +43,13 @@ import { parseWav } from "./wav";
 
 export type EngineId = TranscriptionProviderId;
 
-export const ENGINE_IDS: readonly EngineId[] = ["local-whisper", "openai", "elevenlabs"];
+export const ENGINE_IDS: readonly EngineId[] = ["local-whisper", "openai", "elevenlabs", "sagemaker"];
+
+/**
+ * The engines a run compares when it names none. SageMaker is left out: it
+ * needs an endpoint the user deployed, so a run asks for it by name.
+ */
+export const DEFAULT_ENGINE_IDS: readonly EngineId[] = ["local-whisper", "openai", "elevenlabs"];
 
 /**
  * How local Whisper here differs from local Whisper in the extension. Every
@@ -63,6 +74,36 @@ export const KEY_ENV: Partial<Record<EngineId, string>> = {
   elevenlabs: "ELEVENLABS_API_KEY",
 };
 
+/**
+ * What the SageMaker engine reads, also from the environment only: the AWS CLI's
+ * own variable names, so `aws configure export-credentials --format env` sets
+ * the credentials, plus where the endpoint is.
+ */
+export const SAGEMAKER_ENV = {
+  accessKeyId: "AWS_ACCESS_KEY_ID",
+  secretAccessKey: "AWS_SECRET_ACCESS_KEY",
+  sessionToken: "AWS_SESSION_TOKEN",
+  region: "AWS_REGION",
+  endpointName: "SAGEMAKER_ENDPOINT",
+} as const;
+
+export type SageMakerConfig = Record<keyof typeof SAGEMAKER_ENV, string>;
+
+/** The SageMaker settings from `env`, or the variables that are not set. */
+export function sageMakerFromEnv(
+  env: Record<string, string | undefined>,
+): { ok: true; config: SageMakerConfig } | { ok: false; missing: string[] } {
+  const entries = Object.entries(SAGEMAKER_ENV) as [keyof SageMakerConfig, string][];
+  const missing = entries.filter(([, variable]) => !env[variable]).map(([, variable]) => variable);
+  if (missing.length > 0) return { ok: false, missing };
+  return {
+    ok: true,
+    config: Object.fromEntries(
+      entries.map(([field, variable]) => [field, env[variable] ?? ""]),
+    ) as SageMakerConfig,
+  };
+}
+
 export interface EngineInfo {
   id: EngineId;
   /** What the product calls it, from the one Record every surface reads. */
@@ -71,6 +112,11 @@ export interface EngineInfo {
   uploads: boolean;
   diarizes: boolean;
   maxInputMs: number;
+  /**
+   * The window the engine is usually sent, where that is shorter than its input
+   * limit: SageMaker's windows are cut at pauses, about 10 s apart.
+   */
+  windowMs?: number;
 }
 
 export function engineInfo(id: EngineId, whisperModel: WhisperModelSize): EngineInfo {
@@ -98,7 +144,32 @@ export function engineInfo(id: EngineId, whisperModel: WhisperModelSize): Engine
         diarizes: true,
         maxInputMs: SCRIBE_MAX_INPUT_MS,
       };
+    case "sagemaker":
+      return {
+        ...shared,
+        model: "Qwen3-ASR",
+        diarizes: false,
+        maxInputMs: SAGEMAKER_MAX_INPUT_MS,
+        windowMs: SAGEMAKER_WINDOWING.targetMs,
+      };
   }
+}
+
+/** The extension's SageMaker engine, pointed at the endpoint the environment names. */
+export function createSageMakerEngine(
+  config: SageMakerConfig,
+  language: MeetingLanguage,
+): TranscriptionEngine {
+  return createSageMakerTranscriptionEngine({
+    region: config.region,
+    endpointName: config.endpointName,
+    credentials: {
+      accessKeyId: config.accessKeyId,
+      secretAccessKey: config.secretAccessKey,
+      sessionToken: config.sessionToken,
+    },
+    language,
+  });
 }
 
 type Asr = (samples: Float32Array, options: Record<string, unknown>) => Promise<WhisperOutput>;

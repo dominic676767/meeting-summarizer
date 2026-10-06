@@ -58,6 +58,17 @@ describe("microphone consent survives only what it was given for", () => {
     ).toBeNull();
   });
 
+  it("withdraws consent when the user picks SageMaker, which is a destination of its own", () => {
+    // The user's own AWS account is still not the vendor the consent named.
+    expect(
+      confirmedAtAfterSave({
+        ...base,
+        providerConsentGivenUnder: "elevenlabs",
+        providerNowSelected: "sagemaker",
+      }),
+    ).toBeNull();
+  });
+
   it("keeps consent when the user moves back to the local engine", () => {
     // Nothing leaves the machine any more, so no promise the consent rested on
     // has been broken.

@@ -6,7 +6,7 @@ The extension must be lightweight — no companion process, no extra install ste
 
 - **No email delivery.** Extensions can't speak SMTP; email was dropped from v1 rather than adding a service dependency. The Summary Artifact (local HTML) is the sole deliverable.
 - **Saves land under `Downloads/meeting-summaries/` only.** The downloads API is the only file-write path available; arbitrary directories are impossible without a native host.
-- **Provider API keys live in `browser.storage.local`.** There is no more secure store without a native host.
+- **Provider API keys live in `browser.storage.local`.** There is no more secure store without a native host. (The SageMaker engine's temporary AWS credentials are the one exception: they are kept in `storage.session`, in memory only. See ADR-0009.)
 
 ## Considered Options
 
