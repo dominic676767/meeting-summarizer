@@ -79,6 +79,7 @@ flowchart TB
     worker["whisper-worker.ts<br/>Web Worker, ES module<br/>transformers.js + ONNX WASM"]
     popup["popup/popup.ts<br/>toolbar popup, polls every 1s"]
     options["options/options.ts<br/>settings page"]
+    smEndpoint["your SageMaker endpoint<br/>Qwen3-ASR, opt-in"]
     llm["providers/*<br/>HTTPS fetch to the LLM"]
 
     tc -- "captions-update, meeting-status, meeting-ended" --> router
@@ -93,6 +94,8 @@ flowchart TB
     tx -- "local engine" --> worker
     finish --> llm
     options -- "storage.local settings" --> sess
+    tx -- "SageMaker engine, signed fetch" --> smEndpoint
+    options -- "Test the endpoint: 1 s of silence" --> smEndpoint
 ```
 
 Why the split:
@@ -103,7 +106,7 @@ Why the split:
 | Service worker | Owns state and decisions. Can be suspended at any time, so sessions are mirrored to `storage.session`. |
 | Offscreen document | A service worker has no `MediaRecorder`, `AudioContext` or `getUserMedia`. The offscreen page does the recording and runs transcription. |
 | Whisper worker | Keeps the WASM model off the offscreen page's main thread. The only ES-module bundle, because the ONNX runtime uses a dynamic import (ADR-0006). |
-| Popup / Options | User surfaces. The popup is the explicit invocation Chromium requires before `tabCapture` will work. |
+| Popup / Options | User surfaces. The popup is the explicit invocation Chromium requires before `tabCapture` will work. The Options page also calls the SageMaker endpoint itself, with one second of silence, to test the setup before a meeting depends on it. |
 
 ---
 
@@ -209,6 +212,8 @@ flowchart LR
     optionsTs --> settings --> templates
     settings --> awsCreds
     bg & micCapture & popupTs & optionsTs --> engines
+    optionsTs --> awsCreds & sagemaker
+    popupTs --> awsCreds
 ```
 
 `platform.ts` (the `chrome` namespace as `ext`), `messages.ts` (the protocol) and `domain/types.ts` (the vocabulary) are imported almost everywhere and are left off the arrows.
@@ -587,6 +592,7 @@ The functions to read first, by job.
 | Engine names, and which engines upload | `TRANSCRIPTION_ENGINE_NAMES`, `uploadsAudio` | `src/transcription/engines.ts` |
 | Scribe words → timed, labelled spans | `spansFromScribe` | `src/transcription/elevenlabs.ts` |
 | One SageMaker call, its reply, its failures | `invokeInput`, `textFromResponse`, `sageMakerFailure` | `src/transcription/sagemaker.ts` |
+| The Test button's report | `testReport` | `src/transcription/sagemaker.ts` |
 | Decode, window, offset, silence check | `createTranscriptionProvider().transcribe` | `src/transcription/provider.ts` |
 | Refuse filler output | `rejectAsSilent`, `carriesNoSpeech` | `src/transcription/silence.ts` |
 | Cut windows at pauses | `pauseWindows` | `src/transcription/pauses.ts` |
@@ -598,6 +604,7 @@ The functions to read first, by job.
 | Settings with defaults | `loadSettings`, `saveSettings` | `src/settings.ts` |
 | SageMaker credentials, memory only | `loadAwsCredentials`, `saveAwsCredentials`, `clearAwsCredentials` | `src/settings.ts` |
 | Read pasted AWS credentials | `parseAwsCredentials` | `src/transcription/aws-credentials.ts` |
+| Credentials status, popup warning | `describeCredentials`, `credentialsWarning` | `src/transcription/aws-credentials.ts` |
 
 ### Every source file
 
@@ -658,7 +665,7 @@ The functions to read first, by job.
 | `src/popup/popup.html` | popup markup |
 | `src/popup/popup.ts` | popup: status, actions, held lists |
 | `src/options/options.html` | settings markup |
-| `src/options/options.ts` | settings: providers, transcription, templates |
+| `src/options/options.ts` | settings: providers, transcription, templates; the SageMaker credentials and its Test button |
 
 ---
 

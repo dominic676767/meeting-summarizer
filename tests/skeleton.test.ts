@@ -50,6 +50,9 @@ describe("walking skeleton", () => {
   it("reaches every cloud transcription endpoint a user can opt into", () => {
     expect(manifest.host_permissions).toContain("https://api.openai.com/*");
     expect(manifest.host_permissions).toContain("https://api.elevenlabs.io/*");
+    // Covers runtime.sagemaker.<region>.amazonaws.com in every region, so the
+    // SageMaker engine needs no permission of its own.
+    expect(manifest.host_permissions).toContain("https://*.amazonaws.com/*");
   });
 
   it("targets Chromium Manifest V3 with a service worker", () => {

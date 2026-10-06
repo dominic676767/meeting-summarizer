@@ -280,6 +280,36 @@ export function sageMakerFailure(
   return new SageMakerFailure("other", `${name}: ${message}`, options);
 }
 
+const TEST_LEADS: Record<SageMakerFailureKind, string> = {
+  credentials: "Credentials",
+  endpoint: "Endpoint",
+  container: "Container",
+  format: "Reply format",
+  other: "Failed",
+};
+
+/**
+ * The Settings page's Test button report, from one call's outcome: which part of
+ * the setup failed, in words the user can act on.
+ */
+export function testReport(
+  outcome: { ok: true; text: string } | { ok: false; error: unknown },
+): string {
+  if (outcome.ok) {
+    return outcome.text
+      ? `The endpoint answered: “${outcome.text.slice(0, 80)}”.`
+      : "The endpoint answered. It heard no words in one second of silence, as it should.";
+  }
+  const { error } = outcome;
+  if (!(error instanceof SageMakerFailure)) {
+    return `Failed: ${error instanceof Error ? error.message : String(error)}`;
+  }
+  const detail = error.message.replace(/^sagemaker transcription: /, "");
+  return error.kind === "format"
+    ? `${TEST_LEADS.format}: the endpoint did not answer the way the JumpStart Qwen3-ASR image does. Check that it runs that model (${detail}).`
+    : `${TEST_LEADS[error.kind]}: ${detail}.`;
+}
+
 /**
  * Sends one prepared call and returns the reply's body. Throws an AwsError for a
  * failed reply. Signed fetch in the extension; a fake in tests.

@@ -5,6 +5,11 @@ import { SignatureV4 } from "@smithy/signature-v4";
 import { describe, expect, it } from "vitest";
 import type { MeetingLanguage, TranscriptionSettings } from "../src/domain/types";
 import type { AwsCredentials } from "../src/transcription/aws-credentials";
+import {
+  TRANSCRIPTION_ENGINE_NAMES,
+  uploadDestination,
+  uploadsAudio,
+} from "../src/transcription/engines";
 import { createTranscriptionProviderFor } from "../src/transcription/factory";
 import {
   createTranscriptionProvider,
@@ -21,6 +26,7 @@ import {
   SageMakerFailure,
   sageMakerFailure,
   signedInvoke,
+  testReport,
   textFromResponse,
   TRANSCRIPTION_ROUTE,
   UNLISTED_LANGUAGES,
@@ -378,6 +384,46 @@ describe("the SageMaker engine", () => {
     await expect(
       provider.transcribe({ spans: [{ data: new Blob(), startOffsetMs: 0 }] }, { signal: user.signal }),
     ).rejects.toBeInstanceOf(TranscriptionCancelled);
+  });
+});
+
+describe("what the user is told", () => {
+  it("names the engine, says it uploads, and names whose account the upload goes to", () => {
+    expect(TRANSCRIPTION_ENGINE_NAMES.sagemaker).toBe("Amazon SageMaker");
+    expect(uploadsAudio("sagemaker")).toBe(true);
+    expect(uploadDestination("sagemaker")).toBe(
+      "Amazon SageMaker, in the AWS account your credentials belong to",
+    );
+    // Every other engine's destination is the company it is named for.
+    expect(uploadDestination("elevenlabs")).toBe("ElevenLabs");
+  });
+
+  it("reports a test that got an answer", () => {
+    expect(testReport({ ok: true, text: "" })).toBe(
+      "The endpoint answered. It heard no words in one second of silence, as it should.",
+    );
+    expect(testReport({ ok: true, text: "Thank you." })).toBe("The endpoint answered: “Thank you.”.");
+  });
+
+  it("reports a failed test by the part of the setup to check", () => {
+    const failed = (err: unknown) => testReport({ ok: false, error: sageMakerFailure(err, WHERE) });
+    expect(failed({ name: "ExpiredTokenException" })).toMatch(/^Credentials: the AWS credentials have expired/);
+    expect(failed({ name: "ValidationError", message: "Endpoint qwen3-asr not found." })).toBe(
+      "Endpoint: endpoint qwen3-asr was not found in eu-west-1.",
+    );
+    expect(failed({ name: "ModelError", originalStatus: 500, originalMessage: "boom" })).toMatch(/^Container: /);
+  });
+
+  it("points a reply in the wrong format at the model the endpoint runs", () => {
+    let error: unknown;
+    try {
+      textFromResponse(reply({ choices: [] }));
+    } catch (err) {
+      error = err;
+    }
+    expect(testReport({ ok: false, error })).toMatch(
+      /^Reply format: the endpoint did not answer the way the JumpStart Qwen3-ASR image does/,
+    );
   });
 });
 

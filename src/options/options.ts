@@ -1,5 +1,7 @@
 // Options page: Provider selection + keys (browser.storage.local, ADR-0001),
-// Summary shape toggle, and editable Prompt Templates.
+// Summary shape toggle, and editable Prompt Templates. The SageMaker engine's
+// AWS credentials are the exception: pasted here, kept in storage.session only
+// (ADR-0009), and tested from here against the user's endpoint.
 import type {
   MeetingLanguage,
   Settings,
@@ -10,8 +12,24 @@ import type {
 } from "../domain/types";
 import { DEFAULT_TEMPLATES } from "../pipeline/templates";
 import { micConsentAfterSave } from "../background/mic-capture";
-import { loadSettings, saveSettings } from "../settings";
-import { TRANSCRIPTION_ENGINE_NAMES, uploadsAudio } from "../transcription/engines";
+import {
+  clearAwsCredentials,
+  loadAwsCredentials,
+  loadSettings,
+  saveAwsCredentials,
+  saveSettings,
+} from "../settings";
+import {
+  credentialsExpired,
+  describeCredentials,
+  parseAwsCredentials,
+} from "../transcription/aws-credentials";
+import { uploadDestination, uploadsAudio } from "../transcription/engines";
+import {
+  createSageMakerTranscriptionEngine,
+  SAGEMAKER_SAMPLE_RATE,
+  testReport,
+} from "../transcription/sagemaker";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const providerSelect = $<HTMLSelectElement>("provider");
@@ -19,7 +37,12 @@ const PROVIDERS: ProviderId[] = ["anthropic", "openai", "ollama", "bedrock"];
 // Kept on their own prefix: the two axes share vendor names, and the point of
 // this page is that they are not the same setting.
 const transcriptionSelect = $<HTMLSelectElement>("transcription-provider");
-const TRANSCRIPTION_PROVIDERS: TranscriptionProviderId[] = ["local-whisper", "openai", "elevenlabs"];
+const TRANSCRIPTION_PROVIDERS: TranscriptionProviderId[] = [
+  "local-whisper",
+  "openai",
+  "elevenlabs",
+  "sagemaker",
+];
 
 /**
  * The languages offered, in the order they appear in the select. A Record over
@@ -81,9 +104,83 @@ function showTranscriptionPanel(provider: string): void {
   $("mic-why-local").classList.toggle("hidden", cloud);
   $("mic-why-cloud").classList.toggle("hidden", !cloud);
   // "The cloud" is not a destination (ADR-0007): the disclosure names the one
-  // company this engine uploads to.
-  $("mic-why-cloud-engine").textContent = TRANSCRIPTION_ENGINE_NAMES[id];
+  // company this engine uploads to, or for SageMaker, whose account it is.
+  $("mic-why-cloud-engine").textContent = uploadDestination(id);
 }
+
+const sageMakerRegion = $<HTMLInputElement>("transcription-sagemaker-region");
+const sageMakerEndpoint = $<HTMLInputElement>("transcription-sagemaker-endpoint");
+const credentialsBox = $<HTMLTextAreaElement>("transcription-sagemaker-credentials");
+const credentialsStatus = $("transcription-sagemaker-credentials-status");
+
+async function showCredentials(): Promise<void> {
+  credentialsStatus.textContent = describeCredentials(await loadAwsCredentials(), Date.now());
+}
+
+// A paste is used as soon as it reads as a complete set. The credentials live in
+// session storage, apart from the settings that Save writes to disk, and the
+// secret should stay in the page no longer than it must: the box is emptied
+// once they are stored.
+credentialsBox.addEventListener("input", async () => {
+  const parsed = parseAwsCredentials(credentialsBox.value);
+  if (!parsed.ok) {
+    // Mid-paste or mistyped: say what is missing, and keep what is stored.
+    if (credentialsBox.value.trim()) credentialsStatus.textContent = parsed.reason;
+    else await showCredentials();
+    return;
+  }
+  try {
+    await saveAwsCredentials(parsed.credentials);
+    credentialsBox.value = "";
+    await showCredentials();
+  } catch (err) {
+    credentialsStatus.textContent = `Not stored: ${err instanceof Error ? err.message : String(err)}`;
+  }
+});
+
+$("transcription-sagemaker-forget").addEventListener("click", async () => {
+  await clearAwsCredentials();
+  credentialsBox.value = "";
+  await showCredentials();
+});
+
+// The test uses the region and endpoint as typed, saved or not, so a typo is
+// found before Save rather than after a meeting.
+$("transcription-sagemaker-test").addEventListener("click", async () => {
+  const button = $<HTMLButtonElement>("transcription-sagemaker-test");
+  const result = $("transcription-sagemaker-test-result");
+  const region = sageMakerRegion.value.trim();
+  const endpointName = sageMakerEndpoint.value.trim();
+  const credentials = await loadAwsCredentials();
+  if (!region || !endpointName) {
+    result.textContent = "Enter the region and the endpoint name first.";
+    return;
+  }
+  if (!credentials) {
+    result.textContent = "Paste temporary AWS credentials first.";
+    return;
+  }
+  if (credentialsExpired(credentials, Date.now())) {
+    result.textContent = describeCredentials(credentials, Date.now());
+    return;
+  }
+  button.disabled = true;
+  result.textContent = "Testing…";
+  try {
+    const engine = createSageMakerTranscriptionEngine({
+      region,
+      endpointName,
+      credentials,
+      language: languageSelect.value as MeetingLanguage,
+    });
+    const spans = await engine.transcribe(new Float32Array(SAGEMAKER_SAMPLE_RATE));
+    result.textContent = testReport({ ok: true, text: spans.map((s) => s.text).join(" ") });
+  } catch (error) {
+    result.textContent = testReport({ ok: false, error });
+  } finally {
+    button.disabled = false;
+  }
+});
 
 providerSelect.addEventListener("change", () => showPanel(providerSelect.value));
 transcriptionSelect.addEventListener("change", () =>
@@ -111,6 +208,9 @@ async function init(): Promise<void> {
   $<HTMLInputElement>("transcription-openai-model").value = s.transcription.openai.model;
   $<HTMLInputElement>("transcription-elevenlabs-key").value = s.transcription.elevenlabs.apiKey;
   $<HTMLInputElement>("transcription-elevenlabs-model").value = s.transcription.elevenlabs.model;
+  sageMakerRegion.value = s.transcription.sagemaker.region;
+  sageMakerEndpoint.value = s.transcription.sagemaker.endpointName;
+  await showCredentials();
   $<HTMLInputElement>("mic-capture").checked = s.micCapture.enabled;
   micCaptureAsLoaded = s.micCapture.enabled;
   micConsentProviderAsLoaded = s.transcription.provider;
@@ -222,7 +322,10 @@ $("save").addEventListener("click", async () => {
       apiKey: $<HTMLInputElement>("transcription-elevenlabs-key").value.trim(),
       model: $<HTMLInputElement>("transcription-elevenlabs-model").value.trim(),
     },
-    sagemaker: s.transcription.sagemaker,
+    sagemaker: {
+      region: sageMakerRegion.value.trim(),
+      endpointName: sageMakerEndpoint.value.trim(),
+    },
   };
   // Whether this Save leaves microphone consent on file is a rule of its own —
   // an untouched box confirms nothing, and a new destination asks again — kept

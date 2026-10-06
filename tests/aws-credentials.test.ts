@@ -4,6 +4,8 @@
 import { describe, expect, it } from "vitest";
 import {
   credentialsExpired,
+  credentialsWarning,
+  describeCredentials,
   maskKeyId,
   parseAwsCredentials,
   type AwsCredentials,
@@ -200,5 +202,49 @@ describe("credentialsExpired", () => {
 
   it("is never true for an expiry nobody stated", () => {
     expect(credentialsExpired(withoutExpiry, Number.MAX_SAFE_INTEGER)).toBe(false);
+  });
+});
+
+// A fixed clock, so the sentences can be pinned whatever the test machine's locale.
+const at = (ms: number) => `t${ms}`;
+
+describe("describeCredentials", () => {
+  it("asks for credentials when none are stored", () => {
+    expect(describeCredentials(null, 0, at)).toBe("No credentials. Paste them above.");
+  });
+
+  it("names the key in use, masked, and until when", () => {
+    expect(describeCredentials({ ...withoutExpiry, expiresAt: 5_000 }, 1_000, at)).toBe(
+      "Using ASIA…WXYZ, valid until t5000.",
+    );
+  });
+
+  it("says when the expiry is not known", () => {
+    expect(describeCredentials(withoutExpiry, 1_000, at)).toBe(
+      "Using ASIA…WXYZ. Their expiry time was not stated.",
+    );
+  });
+
+  it("says when they expired, and what to do", () => {
+    expect(describeCredentials({ ...withoutExpiry, expiresAt: 500 }, 1_000, at)).toBe(
+      "ASIA…WXYZ expired at t500. Paste fresh ones.",
+    );
+  });
+});
+
+describe("credentialsWarning", () => {
+  it("warns when there are no credentials at all, as after a browser restart", () => {
+    expect(credentialsWarning(null, 0, at)).toMatch(/has no AWS credentials/);
+  });
+
+  it("warns once a known expiry has passed", () => {
+    expect(credentialsWarning({ ...withoutExpiry, expiresAt: 500 }, 1_000, at)).toMatch(
+      /expired at t500\. Paste fresh ones in Settings before this meeting ends/,
+    );
+  });
+
+  it("says nothing while the credentials are still good, or of unknown expiry", () => {
+    expect(credentialsWarning({ ...withoutExpiry, expiresAt: 5_000 }, 1_000, at)).toBeNull();
+    expect(credentialsWarning(withoutExpiry, 1_000, at)).toBeNull();
   });
 });

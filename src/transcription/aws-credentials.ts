@@ -93,6 +93,43 @@ export function credentialsExpired(c: AwsCredentials, now: number): boolean {
   return c.expiresAt !== undefined && c.expiresAt <= now;
 }
 
+/** A time of day as the user's locale writes it, e.g. 14:05. */
+const timeOfDay = (ms: number) =>
+  new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+/** The stored credentials as the Settings page reports them. */
+export function describeCredentials(
+  c: AwsCredentials | null,
+  now: number,
+  clock: (ms: number) => string = timeOfDay,
+): string {
+  if (!c) return "No credentials. Paste them above.";
+  const id = maskKeyId(c.accessKeyId);
+  if (c.expiresAt === undefined) return `Using ${id}. Their expiry time was not stated.`;
+  return credentialsExpired(c, now)
+    ? `${id} expired at ${clock(c.expiresAt)}. Paste fresh ones.`
+    : `Using ${id}, valid until ${clock(c.expiresAt)}.`;
+}
+
+/**
+ * What the popup warns while a meeting records with SageMaker selected, or null
+ * when nothing is wrong yet. Missing credentials count too: session storage
+ * empties when the browser closes, so after a restart this is the usual case.
+ */
+export function credentialsWarning(
+  c: AwsCredentials | null,
+  now: number,
+  clock: (ms: number) => string = timeOfDay,
+): string | null {
+  if (!c) {
+    return "Recording — but SageMaker has no AWS credentials. Paste them in Settings before this meeting ends.";
+  }
+  if (c.expiresAt !== undefined && credentialsExpired(c, now)) {
+    return `Recording — but the SageMaker credentials expired at ${clock(c.expiresAt)}. Paste fresh ones in Settings before this meeting ends.`;
+  }
+  return null;
+}
+
 /** JSON → fields, or null when the text is not JSON at all. */
 function fromJson(text: string): Partial<Record<Field, string>> | null {
   let parsed: unknown;
