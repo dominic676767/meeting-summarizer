@@ -10,6 +10,7 @@
 // chunking, offset correction, progress, cancellation) is testable with no
 // browser, no WASM, and no real audio.
 import type { Utterance } from "../domain/types";
+import { pauseWindows, type PauseWindowing, type SampleWindow } from "./pauses";
 import { rejectAsSilent } from "./silence";
 
 /** One Capture Span's audio, as the recorder wrote it. */
@@ -118,6 +119,12 @@ export interface TranscriptionEngine {
   readonly sampleRate: number;
   /** Longest single input the engine accepts, ms. Longer recordings are chunked. */
   readonly maxInputMs: number;
+  /**
+   * Set by an engine whose output has no timestamps: its windows are then cut
+   * short and at pauses (`./pauses`), because each window becomes one Utterance
+   * with one speaker. Without it, windows are `maxInputMs` long.
+   */
+  readonly windowing?: PauseWindowing;
   /** Fetch and initialise the model. Cached by the engine; called once per run. */
   load(onProgress?: (loadedBytes: number, totalBytes: number | null) => void): Promise<void>;
   /**
@@ -164,7 +171,8 @@ async function attempt<T>(
  *
  * Every Capture Span is transcribed in order and their Utterances concatenated.
  * A span longer than the engine's input limit is transcribed in windows of that
- * length, and each engine span is shifted by its window's position *plus its own
+ * length (or, for an engine that asks, in short windows cut at pauses), and each
+ * engine span is shifted by its window's position *plus its own
  * span's Capture Start*, so Utterance timings stay absolute relative to the
  * Meeting across both chunk and span boundaries. Fusion matches on those
  * timings, so an uncorrected offset would silently misattribute every word after
@@ -195,31 +203,26 @@ export function createTranscriptionProvider(
       }
       const totalMs = decoded.reduce((ms, d) => ms + msFor(d.samples.length, d.sampleRate), 0);
 
-      // A diarizing engine's labels mean something only inside the one call that
-      // produced them: its "Speaker 1" in one window and in the next need not be
-      // the same person. So when the recording takes more than one call, every
-      // label names its part, and two people never share one.
-      const windowSamplesFor = (sampleRate: number) =>
-        Math.max(1, Math.round((engine.maxInputMs / 1000) * sampleRate));
-      const windowCount = decoded.reduce(
-        (n, d) => n + Math.ceil(d.samples.length / windowSamplesFor(d.sampleRate)),
-        0,
-      );
+      // Every window of every span is known before the first call, for the part
+      // numbers below. A diarizing engine's labels mean something only inside the
+      // one call that produced them: its "Speaker 1" in one window and in the next
+      // need not be the same person. So when the recording takes more than one
+      // call, every label names its part, and two people never share one.
+      const windows = decoded.map((d) => windowsFor(engine, d.samples, d.sampleRate));
+      const windowCount = windows.reduce((n, w) => n + w.length, 0);
       let windowIndex = 0;
 
       const utterances: Utterance[] = [];
       let doneMs = 0;
-      for (const { samples, sampleRate, startOffsetMs } of decoded) {
-        const windowSamples = windowSamplesFor(sampleRate);
-        for (let offset = 0; offset < samples.length; offset += windowSamples) {
+      for (const [i, { samples, sampleRate, startOffsetMs }] of decoded.entries()) {
+        for (const { start, end } of windows[i] ?? []) {
           abortIfCancelled(hooks?.signal);
-          const end = Math.min(offset + windowSamples, samples.length);
           // Absolute zero for this window: where the Meeting began, not where the
           // window did and not where this span's Capture Start was.
-          const baseMs = startOffsetMs + msFor(offset, sampleRate);
+          const baseMs = startOffsetMs + msFor(start, sampleRate);
           const spans = await attempt(
             "engine failed",
-            () => engine.transcribe(samples.subarray(offset, end), hooks?.signal),
+            () => engine.transcribe(samples.subarray(start, end), hooks?.signal),
             hooks?.signal,
           );
           windowIndex++;
@@ -251,6 +254,30 @@ export function createTranscriptionProvider(
 
 function msFor(sampleCount: number, sampleRate: number): number {
   return Math.round((sampleCount / sampleRate) * 1000);
+}
+
+/**
+ * One span's windows: cut at pauses for an engine that asked for that, and
+ * otherwise back to back at the engine's input limit. Either way no window is
+ * longer than `maxInputMs`.
+ */
+function windowsFor(
+  engine: TranscriptionEngine,
+  samples: Float32Array,
+  sampleRate: number,
+): SampleWindow[] {
+  if (engine.windowing) {
+    return pauseWindows(samples, sampleRate, {
+      targetMs: engine.windowing.targetMs,
+      maxMs: Math.min(engine.windowing.maxMs, engine.maxInputMs),
+    });
+  }
+  const size = Math.max(1, Math.round((engine.maxInputMs / 1000) * sampleRate));
+  const windows: SampleWindow[] = [];
+  for (let start = 0; start < samples.length; start += size) {
+    windows.push({ start, end: Math.min(start + size, samples.length) });
+  }
+  return windows;
 }
 
 /**

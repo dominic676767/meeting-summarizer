@@ -429,3 +429,53 @@ describe("Transcription Provider diarization labels", () => {
     expect(utterances.every((u) => u.diarizationLabel === undefined)).toBe(true);
   });
 });
+
+describe("Transcription Provider: windows cut at pauses", () => {
+  /** 25 s of loud audio with two half-second pauses, at 7 s and at 17 s. */
+  function withPauses(): Float32Array {
+    const samples = new Float32Array(25 * SAMPLE_RATE).fill(0.5);
+    samples.fill(0, 7 * SAMPLE_RATE, 7.5 * SAMPLE_RATE);
+    samples.fill(0, 17 * SAMPLE_RATE, 17.5 * SAMPLE_RATE);
+    return samples;
+  }
+
+  function pausedProvider(engine: TranscriptionEngine) {
+    const samples = withPauses();
+    return createTranscriptionProvider({
+      name: "fake",
+      engine,
+      decode: () => Promise.resolve({ samples, sampleRate: SAMPLE_RATE }),
+    });
+  }
+
+  it("hands an engine that asks for it windows that end in the pauses", async () => {
+    const engine = { ...fakeEngine(), windowing: { targetMs: 10_000, maxMs: 30_000 } };
+    await pausedProvider(engine).transcribe(recording());
+    const [first = 0, second = 0] = engine.windowsSec;
+    expect(first).toBeGreaterThanOrEqual(7);
+    expect(first).toBeLessThanOrEqual(7.5);
+    expect(first + second).toBeGreaterThanOrEqual(17);
+    expect(first + second).toBeLessThanOrEqual(17.5);
+  });
+
+  it("times each window's words from where that window started in the Meeting", async () => {
+    const engine = { ...fakeEngine(), windowing: { targetMs: 10_000, maxMs: 30_000 } };
+    const utterances = await pausedProvider(engine).transcribe(recording(1_000));
+    let startedSec = 0;
+    const expected = engine.windowsSec.map((length) => {
+      const startMs = 1_000 + Math.round(startedSec * 1000);
+      startedSec += length;
+      return startMs;
+    });
+    expect(utterances.map((u) => u.startMs)).toEqual(expected);
+  });
+
+  it("never hands the engine more than its input limit, whatever the windowing allows", async () => {
+    const engine = {
+      ...fakeEngine({ maxInputMs: 12_000 }),
+      windowing: { targetMs: 10_000, maxMs: 30_000 },
+    };
+    await pausedProvider(engine).transcribe(recording());
+    expect(Math.max(...engine.windowsSec)).toBeLessThanOrEqual(12);
+  });
+});

@@ -151,6 +151,7 @@ flowchart LR
         elevenlabs["elevenlabs.ts"]
         engines["engines.ts<br/>engine names"]
         pcm["pcm.ts"]
+        pauses["pauses.ts"]
         silence["silence.ts"]
         fusion["fusion.ts"]
     end
@@ -194,6 +195,7 @@ flowchart LR
     txFactory --> localWhisper & txOpenai & elevenlabs
     txOpenai & elevenlabs --> pcm
     txFactory --> txProvider --> silence
+    txProvider --> pauses
     localWhisper --> whisperProtocol
     whisperWorker --> whisperProtocol
     fusion --> silence
@@ -402,7 +404,7 @@ flowchart TD
 
     subgraph core["createTranscriptionProvider().transcribe() — provider.ts"]
         load["engine.load()<br/>model-download progress"] --> dec["decode every span<br/>decodeToMono() at engine rate"]
-        dec --> win["split each span into windows"]
+        dec --> win["split each span into windows<br/>back to back at maxInputMs, or cut at pauses<br/>for an engine that sets windowing"]
         win --> eng["engine.transcribe(window, signal)<br/>the cancel reaches a cloud upload"]
         eng --> utt["toUtterance()<br/>startMs = span offset + window offset + engine time<br/>a diarization label gets (part N) when there were several calls"]
         utt --> sil{"rejectAsSilent()<br/>silence.ts"}
@@ -576,6 +578,7 @@ The functions to read first, by job.
 | Scribe words → timed, labelled spans | `spansFromScribe` | `src/transcription/elevenlabs.ts` |
 | Decode, window, offset, silence check | `createTranscriptionProvider().transcribe` | `src/transcription/provider.ts` |
 | Refuse filler output | `rejectAsSilent`, `carriesNoSpeech` | `src/transcription/silence.ts` |
+| Cut windows at pauses | `pauseWindows` | `src/transcription/pauses.ts` |
 | Names onto words | `fuseTranscript`, `speakerTrackFrom` | `src/transcription/fusion.ts` |
 | Summarize | `summarizeTranscript` | `src/pipeline/pipeline.ts` |
 | HTML output | `renderArtifact`, `markdownToHtml` | `src/pipeline/artifact.ts` |
@@ -623,6 +626,7 @@ The functions to read first, by job.
 | `src/transcription/engines.ts` | each engine's display name, and which engines upload audio |
 | `src/transcription/pcm.ts` | 16-bit PCM encoding that both cloud engines share |
 | `src/transcription/silence.ts` | degenerate-output rejection |
+| `src/transcription/pauses.ts` | short windows cut at pauses, for an engine whose output has no timestamps |
 | `src/transcription/fusion.ts` | Utterances + Speaker Track → Fused Transcript |
 | `src/pipeline/pipeline.ts` | summarize: single-shot or map-reduce |
 | `src/pipeline/chunking.ts` | budget-sized chunks, chunk/reduce prompts |
