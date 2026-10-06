@@ -56,6 +56,9 @@ await cp("src/manifest.json", `${outdir}/manifest.json`);
 await cp("src/offscreen/offscreen.html", `${outdir}/offscreen.html`);
 await cp("src/popup/popup.html", `${outdir}/popup.html`);
 await cp("src/options/options.html", `${outdir}/options.html`);
-await cp("src/icon.svg", `${outdir}/icon.svg`);
+await mkdir(`${outdir}/icons`, { recursive: true });
+for (const size of [16, 32, 48, 128]) {
+  await cp(`src/icons/icon-${size}.png`, `${outdir}/icons/icon-${size}.png`);
+}
 
 console.log("built → dist/");

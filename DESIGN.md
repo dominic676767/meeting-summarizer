@@ -87,7 +87,7 @@ The system is flat by conviction, not by omission. There are no shadows, no grad
 
 The current implementation leans entirely on native browser controls and the system font. That is documented here as the present state and a sensible default, but it is **provisional** — future work may add light custom styling to buttons and inputs, provided it stays within the utilitarian, meaning-only-color character below. What is *not* provisional is the restraint: color earns its place by meaning something, and flatness is the resting state.
 
-Because the world is built from `system-ui` and the browser's own controls, it survives the Chromium migration (ADR-0003) unchanged: the same tokens render as native Chrome/Edge chrome rather than native Firefox chrome, which is the point of leaning on the platform in the first place. The one asset that does not travel is the toolbar mark — see Shapes.
+Because the world is built from `system-ui` and the browser's own controls, it survives the Chromium migration (ADR-0003) unchanged: the same tokens render as native Chrome/Edge chrome rather than native Firefox chrome, which is the point of leaning on the platform in the first place. The toolbar mark was redrawn for Chromium as raster PNGs — see Shapes.
 
 **Key Characteristics:**
 - Color only ever reports state (active / warning / error); nothing decorative is colored.
@@ -161,13 +161,13 @@ The form language is near-rectangular. The only radius in the entire system is `
 
 ### The Mark
 
-The toolbar icon (`src/icon.svg`) is the readout compressed to 32px: three ink bars — a short indented line, a full-width line, a short line — reading as caption lines condensing into one summary line, with a single Signal Green dot at the top-left as the live-capture signal. It is the one place a circle appears, and it earns it by being the same status dot the popup reports in words. Bars are 5 units tall on a 32-unit grid with `2.5` radius, sized so the three lines hold their weight at 16px.
+The toolbar icon (`src/icons/icon.svg`, rendered to PNG by `scripts/render-icons.mjs`) is the readout reduced to a single summary line: one white bar led by a Signal Green dot, on an Ink tile. The dot reads two ways at once — the bullet of a summary line, and the live-capture signal the popup reports in words. It is the one place a circle appears, and it earns it by being that status dot.
 
-Ink strokes use `fill="context-fill"`, so the mark inherits the toolbar's own foreground and adapts to light and dark themes; only the green signal is a fixed value.
+On a 32-unit grid: tile `rx 7`; dot `r 4.5` at (9.5, 16); bar 10 × 4 at (16, 14), squared ends. Bar edges sit on whole pixels at 16px so the line stays crisp in the toolbar. The 16/32/48 PNGs render full bleed; the 128 PNG is 96px of art centered in a transparent canvas, per the Chrome Web Store icon spec.
+
+The Ink tile is how the mark survives both toolbar themes: Chromium has no `context-fill`, so instead of adapting the ink, the mark carries its own ground. On a light toolbar the tile reads; on a dark one it recedes and the bar and dot read. The tile is the mark's only fill — the chrome's no-fill rule governs the interface, not the icon.
 
 **The One Signal Rule.** The mark carries exactly one colored element — the capture dot. If the icon ever needs a second state (paused, failed), it changes *that dot's* color and nothing else.
-
-*Migration constraint:* `context-fill` and SVG extension icons are Firefox-only. The Chromium target (ADR-0003) requires raster PNG icons, so the mark must be exported at 16/32/48/128px with the ink resolved to a literal neutral, and the light/dark adaptation re-solved (Chromium has no `context-fill` equivalent; supply a light and dark variant or pick a neutral that reads on both).
 
 ## Components
 

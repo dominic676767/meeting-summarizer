@@ -63,4 +63,4 @@ WHISPER_INTEGRATION=1 npm test   # additionally runs real Whisper on a committed
 
 The tests stop where the browser starts: loopback, tab capture, storage, and anything needing a second person in a real meeting cannot be asserted here. Those live in [docs/manual-checks.md](docs/manual-checks.md), to be run against a real browser before a release.
 
-Domain vocabulary lives in [CONTEXT.md](CONTEXT.md); architectural constraints in [docs/adr/](docs/adr/). Teams DOM fixtures and re-capture instructions: [tests/fixtures/](tests/fixtures/README.md).
+How the code fits together, in diagrams: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Domain vocabulary lives in [CONTEXT.md](CONTEXT.md); architectural constraints in [docs/adr/](docs/adr/). Teams DOM fixtures and re-capture instructions: [tests/fixtures/](tests/fixtures/README.md).
