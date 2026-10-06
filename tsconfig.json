@@ -10,5 +10,5 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["src", "tests", "build.mjs"]
+  "include": ["src", "tests", "eval", "build.mjs"]
 }

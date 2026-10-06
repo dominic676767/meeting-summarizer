@@ -1,5 +1,7 @@
 # Recording the local microphone
 
+**Status: accepted; one sentence amended by ADR-0008.** "Switching between cloud engines does not re-ask" below no longer holds: with a second cloud engine, consent is withdrawn whenever the *destination* changes, including from one cloud engine to another, because a yes to one named company is not a yes to another. Everything else stands.
+
 ADR-0004 treated "tab audio" as the meeting's audio. It is only half of it. `tabCapture` yields what comes *out* of the tab — the remote participants — and the meeting client never echoes the local user's own voice back to them, so the user's every contribution was missing from every Audio Recording. In a 1:1 meeting that is half the conversation; in a solo test it is all of it, and the recording is pure silence.
 
 So the extension now also captures the microphone via `getUserMedia` and sums both streams through one `AudioContext` into a single recording. One graph means one clock, which is what keeps Utterance offsets absolute so fusion against the Speaker Track still attributes correctly. The microphone is recorded but never connected to the speakers — the tab is, or the meeting goes silent (ADR-0004) — because looping the mic back would make the user hear themselves.

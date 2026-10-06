@@ -210,6 +210,31 @@ describe("Transcription Provider", () => {
     await expect(promise).rejects.toThrow(TranscriptionCancelled);
     expect(transcribeSpy).toHaveBeenCalledTimes(1);
   });
+
+  it("hands the cancel to the engine, and an engine that honours it has been cancelled", async () => {
+    // A cloud engine's one call can be a long upload: the cancel has to reach
+    // it mid-call, and what its fetch then throws is the user's skip, not a
+    // failure to hold the Recording for.
+    const abort = new AbortController();
+    let received: AbortSignal | undefined;
+    const engine: TranscriptionEngine = {
+      ...fakeEngine(),
+      transcribe(_samples, signal) {
+        received = signal;
+        const call = new Promise<EngineSpan[]>((_resolve, reject) => {
+          signal?.addEventListener("abort", () =>
+            reject(new DOMException("The operation was aborted.", "AbortError")),
+          );
+        });
+        // The user skips while this call is still in flight.
+        abort.abort();
+        return call;
+      },
+    };
+    const promise = provider(engine, 30).transcribe(recording(), { signal: abort.signal });
+    await expect(promise).rejects.toThrow(TranscriptionCancelled);
+    expect(received).toBe(abort.signal);
+  });
 });
 
 // --- Silence, which an engine answers with words anyway -----------------------
@@ -361,5 +386,46 @@ describe("Transcription Provider across Capture Spans", () => {
       [60_000, 90_000],
       [90_000, 90_000],
     ]);
+  });
+});
+
+// --- Diarization labels, which hold only within one engine call ---------------
+
+describe("Transcription Provider diarization labels", () => {
+  const diarized = (): EngineSpan[] => [{ text: "hello", startSec: 0, endSec: 1, speaker: "Speaker 1" }];
+
+  it("passes a label through when the recording took one engine call", async () => {
+    const utterances = await provider(fakeEngine({ spansFor: diarized }), 30).transcribe(recording());
+    expect(utterances.map((u) => u.diarizationLabel)).toEqual(["Speaker 1"]);
+  });
+
+  it("names the part a label came from once a recording takes several calls", async () => {
+    // Two windows: the engine's "Speaker 1" in each need not be the same person.
+    const engine = fakeEngine({ maxInputMs: 60_000, spansFor: diarized });
+    const utterances = await provider(engine, 90).transcribe(recording());
+    expect(utterances.map((u) => u.diarizationLabel)).toEqual([
+      "Speaker 1 (part 1)",
+      "Speaker 1 (part 2)",
+    ]);
+  });
+
+  it("numbers parts across Capture Spans, not within each", async () => {
+    const utterances = await provider(fakeEngine({ spansFor: diarized }), 30).transcribe({
+      spans: [
+        { data: new Blob(), startOffsetMs: 0 },
+        { data: new Blob(), startOffsetMs: 120_000 },
+      ],
+    });
+    expect(utterances.map((u) => u.diarizationLabel)).toEqual([
+      "Speaker 1 (part 1)",
+      "Speaker 1 (part 2)",
+    ]);
+  });
+
+  it("leaves an engine that does not diarize without labels", async () => {
+    const utterances = await provider(fakeEngine({ maxInputMs: 60_000 }), 90).transcribe(
+      recording(),
+    );
+    expect(utterances.every((u) => u.diarizationLabel === undefined)).toBe(true);
   });
 });

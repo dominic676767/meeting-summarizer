@@ -7,7 +7,8 @@
 // where the honesty lives: which Capture Starts request the microphone, what the
 // recording indicator may claim, and whether the Summary Artifact is allowed to
 // imply the local user was captured.
-import type { MicCaptureSettings } from "../domain/types";
+import type { MicCaptureSettings, TranscriptionProviderId } from "../domain/types";
+import { uploadsAudio } from "../transcription/engines";
 
 /**
  * The microphone's part in this Meeting, as the popup and the in-page prompt
@@ -131,4 +132,48 @@ export function recordingBadge(v: RecordingBadgeView): RecordingBadgeLabel | nul
  */
 export function foldLocalMicrophone(previous: boolean | null, micRecording: boolean): boolean {
   return (previous ?? true) && micRecording;
+}
+
+/**
+ * The microphone consent a Save of the options page leaves on file: the
+ * `confirmedAt` to store, or null to ask again.
+ *
+ * Two mechanisms, and both fail toward asking again (ADR-0007, ADR-0008).
+ *
+ * **Consent is only recorded when the user actually moved the checkbox.** Saving
+ * the page for an unrelated reason — changing the summary shape, pasting a key —
+ * must never be read as answering the microphone disclosure: leaving a box as
+ * you found it is the absence of a decision, not a decision. Without this, any
+ * future change back to a ticked default would silently harvest consent from
+ * every incidental Save. ADR-0007 names this the rule easiest to simplify away,
+ * which is why it lives here, once, with the test pointed at it.
+ *
+ * **Consent is withdrawn when its destination changes.** A user says yes to the
+ * microphone partly because transcription happens on their machine, or because
+ * they trust the one company the disclosure named. Selecting a cloud engine that
+ * uploads somewhere else makes that untrue, and their voice would start being
+ * uploaded under a consent that predates the change — so the confirmation is
+ * cleared and the disclosure asks again, naming the new destination. That holds
+ * from one cloud engine to another too (ADR-0008 amends ADR-0007 here); saving
+ * again under the same cloud engine does not re-ask, so someone who has answered
+ * that engine's disclosure is not nagged. The withdrawal outranks a box ticked in
+ * the same Save: ticking answers the disclosure the user was shown, which cannot
+ * be the one for a destination they had not selected yet.
+ *
+ * Takes the decision's own inputs rather than a Settings object, so the rule
+ * does not depend on the shape of the options page.
+ */
+export function micConsentAfterSave(opts: {
+  storedConfirmedAt: number | null;
+  providerConsentGivenUnder: TranscriptionProviderId;
+  providerNowSelected: TranscriptionProviderId;
+  micWasChecked: boolean;
+  micNowChecked: boolean;
+  now: number;
+}): number | null {
+  const destinationChanged =
+    uploadsAudio(opts.providerNowSelected) &&
+    opts.providerNowSelected !== opts.providerConsentGivenUnder;
+  if (destinationChanged) return null;
+  return opts.micNowChecked === opts.micWasChecked ? opts.storedConfirmedAt : opts.now;
 }

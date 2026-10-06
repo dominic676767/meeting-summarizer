@@ -5,6 +5,7 @@
 // Selection is read at transcribe time rather than remembered, which is what lets
 // a Held Recording be recovered by switching engine and retrying.
 import type { TranscriptionSettings } from "../domain/types";
+import { createElevenLabsTranscriptionEngine } from "./elevenlabs";
 import { createLocalWhisperEngine, decodeToMono } from "./local-whisper";
 import { createOpenAiTranscriptionEngine, type FetchFn } from "./openai";
 import {
@@ -45,6 +46,17 @@ function engineFor(s: TranscriptionSettings, deps: TranscriptionDeps): Transcrip
         ...s.openai,
         language: s.language,
         fetchFn: deps.fetchFn,
+      });
+    case "elevenlabs":
+      if (!s.elevenlabs.apiKey) {
+        throw new TranscriptionError(
+          "elevenlabs transcription: no API key configured — open Settings",
+        );
+      }
+      return createElevenLabsTranscriptionEngine({
+        ...s.elevenlabs,
+        language: s.language,
+        ...(deps.fetchFn ? { fetchFn: deps.fetchFn } : {}),
       });
   }
 }

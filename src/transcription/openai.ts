@@ -9,6 +9,7 @@
 // second pipeline: the same wrapper decodes, chunks, and makes offsets absolute,
 // so this module only turns one window of samples into timed spans.
 import type { MeetingLanguage } from "../domain/types";
+import { writePcm16 } from "./pcm";
 import { TranscriptionError, type EngineSpan, type TranscriptionEngine } from "./provider";
 
 export type FetchFn = typeof fetch;
@@ -59,10 +60,7 @@ function toWav(samples: Float32Array, sampleRate: number): Blob {
   view.setUint16(34, 16, true); // bits per sample
   ascii(36, "data");
   view.setUint32(40, samples.length * 2, true);
-  for (let i = 0; i < samples.length; i++) {
-    const clamped = Math.max(-1, Math.min(1, samples[i] ?? 0));
-    view.setInt16(44 + i * 2, Math.round(clamped * 32_767), true);
-  }
+  writePcm16(view, 44, samples);
   return new Blob([buffer], { type: "audio/wav" });
 }
 
@@ -100,7 +98,7 @@ export function createOpenAiTranscriptionEngine(opts: {
     load() {
       return Promise.resolve();
     },
-    async transcribe(samples) {
+    async transcribe(samples, signal) {
       const durationSec = samples.length / OPENAI_TRANSCRIPTION_SAMPLE_RATE;
       const form = new FormData();
       form.append("file", toWav(samples, OPENAI_TRANSCRIPTION_SAMPLE_RATE), "meeting.wav");
@@ -117,6 +115,9 @@ export function createOpenAiTranscriptionEngine(opts: {
         method: "POST",
         headers: { authorization: `Bearer ${opts.apiKey}` },
         body: form,
+        // A ten-minute window is a long upload to sit through after the user
+        // has asked for captions instead.
+        signal,
       });
       if (!res.ok) {
         const detail = await res.text().catch(() => "");

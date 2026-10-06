@@ -122,6 +122,15 @@ describe("OpenAI Transcription Provider", () => {
     expect(calls.length).toBe(3);
   });
 
+  it("hands the user's cancel to the upload", async () => {
+    const { fn, calls } = fakeFetch({ segments: [{ start: 0, end: 1, text: "hi" }] });
+    const abort = new AbortController();
+    await openAiProvider({ fetchFn: fn, seconds: 5 }).transcribe(recording(), {
+      signal: abort.signal,
+    });
+    expect(calls[0]!.init.signal).toBe(abort.signal);
+  });
+
   it("surfaces an HTTP failure as TranscriptionError (the Held Recording path)", async () => {
     const { fn } = fakeFetch({ error: { message: "invalid api key" } }, 401);
     const promise = openAiProvider({ fetchFn: fn, seconds: 5 }).transcribe(recording());

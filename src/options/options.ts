@@ -9,7 +9,9 @@ import type {
   WhisperModelSize,
 } from "../domain/types";
 import { DEFAULT_TEMPLATES } from "../pipeline/templates";
+import { micConsentAfterSave } from "../background/mic-capture";
 import { loadSettings, saveSettings } from "../settings";
+import { TRANSCRIPTION_ENGINE_NAMES, uploadsAudio } from "../transcription/engines";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const providerSelect = $<HTMLSelectElement>("provider");
@@ -17,7 +19,7 @@ const PROVIDERS: ProviderId[] = ["anthropic", "openai", "ollama", "bedrock"];
 // Kept on their own prefix: the two axes share vendor names, and the point of
 // this page is that they are not the same setting.
 const transcriptionSelect = $<HTMLSelectElement>("transcription-provider");
-const TRANSCRIPTION_PROVIDERS: TranscriptionProviderId[] = ["local-whisper", "openai"];
+const TRANSCRIPTION_PROVIDERS: TranscriptionProviderId[] = ["local-whisper", "openai", "elevenlabs"];
 
 /**
  * The languages offered, in the order they appear in the select. A Record over
@@ -74,9 +76,13 @@ function showTranscriptionPanel(provider: string): void {
   // The microphone disclosure has to describe the destination the audio will
   // actually reach, so it follows the engine rather than stating locality that a
   // cloud selection makes false.
-  const cloud = provider !== "local-whisper";
+  const id = provider as TranscriptionProviderId;
+  const cloud = uploadsAudio(id);
   $("mic-why-local").classList.toggle("hidden", cloud);
   $("mic-why-cloud").classList.toggle("hidden", !cloud);
+  // "The cloud" is not a destination (ADR-0007): the disclosure names the one
+  // company this engine uploads to.
+  $("mic-why-cloud-engine").textContent = TRANSCRIPTION_ENGINE_NAMES[id];
 }
 
 providerSelect.addEventListener("change", () => showPanel(providerSelect.value));
@@ -103,6 +109,8 @@ async function init(): Promise<void> {
   $<HTMLSelectElement>("whisper-model").value = s.transcription.localWhisper.model;
   $<HTMLInputElement>("transcription-openai-key").value = s.transcription.openai.apiKey;
   $<HTMLInputElement>("transcription-openai-model").value = s.transcription.openai.model;
+  $<HTMLInputElement>("transcription-elevenlabs-key").value = s.transcription.elevenlabs.apiKey;
+  $<HTMLInputElement>("transcription-elevenlabs-model").value = s.transcription.elevenlabs.model;
   $<HTMLInputElement>("mic-capture").checked = s.micCapture.enabled;
   micCaptureAsLoaded = s.micCapture.enabled;
   micConsentProviderAsLoaded = s.transcription.provider;
@@ -210,30 +218,25 @@ $("save").addEventListener("click", async () => {
       apiKey: $<HTMLInputElement>("transcription-openai-key").value.trim(),
       model: $<HTMLInputElement>("transcription-openai-model").value.trim(),
     },
+    elevenlabs: {
+      apiKey: $<HTMLInputElement>("transcription-elevenlabs-key").value.trim(),
+      model: $<HTMLInputElement>("transcription-elevenlabs-model").value.trim(),
+    },
   };
-  // Consent is only recorded when the user actually MOVED the checkbox. Saving
-  // the page for an unrelated reason — changing the summary shape, pasting a key
-  // — must never be read as answering the microphone disclosure: leaving a box
-  // as you found it is the absence of a decision, not a decision. Without this,
-  // any future change back to a ticked default would silently harvest consent
-  // from every incidental Save.
+  // Whether this Save leaves microphone consent on file is a rule of its own —
+  // an untouched box confirms nothing, and a new destination asks again — kept
+  // pure and tested where it lives (micConsentAfterSave).
   const micChecked = $<HTMLInputElement>("mic-capture").checked;
-  // Consent has to stay specific to what was promised. A user says yes to the
-  // microphone partly because transcription happens on their machine; selecting a
-  // cloud engine makes that untrue, and their voice would start being uploaded
-  // under a consent that predates the change. So the confirmation is withdrawn
-  // and the disclosure asks again, naming the destination. Failing toward one
-  // extra ask beats failing toward an upload nobody agreed to.
-  const switchedToCloud =
-    s.transcription.provider !== "local-whisper" &&
-    s.transcription.provider !== micConsentProviderAsLoaded;
   s.micCapture = {
     enabled: micChecked,
-    confirmedAt: switchedToCloud
-      ? null
-      : micChecked === micCaptureAsLoaded
-        ? s.micCapture.confirmedAt
-        : Date.now(),
+    confirmedAt: micConsentAfterSave({
+      storedConfirmedAt: s.micCapture.confirmedAt,
+      providerConsentGivenUnder: micConsentProviderAsLoaded,
+      providerNowSelected: s.transcription.provider,
+      micWasChecked: micCaptureAsLoaded,
+      micNowChecked: micChecked,
+      now: Date.now(),
+    }),
   };
   s.nameEngineInArtifact = $<HTMLInputElement>("name-engine").checked;
   s.shape = $<HTMLSelectElement>("shape").value as SummaryShape;

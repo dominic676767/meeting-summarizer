@@ -9,6 +9,7 @@ import type {
 import type { Settings } from "../domain/types";
 import type { MicCaptureState } from "../background/mic-capture";
 import { loadSettings } from "../settings";
+import { TRANSCRIPTION_ENGINE_NAMES, uploadsAudio } from "../transcription/engines";
 
 const regionEl = document.getElementById("status-region")!;
 const statusEl = document.getElementById("status")!;
@@ -79,10 +80,6 @@ function micWhy(s: Settings): string {
   return `Your voice is not recorded yet. Including it means the summary covers your side of the meeting too — and because you have chosen ${TRANSCRIPTION_ENGINE_NAMES[s.transcription.provider]} to transcribe, the recording, including your voice, is uploaded to ${TRANSCRIPTION_ENGINE_NAMES[s.transcription.provider]} to be transcribed.`;
 }
 
-const TRANSCRIPTION_ENGINE_NAMES: Record<Settings["transcription"]["provider"], string> = {
-  "local-whisper": "local Whisper",
-  openai: "OpenAI",
-};
 
 function send<T>(msg: PopupMessage): Promise<T> {
   return ext.runtime.sendMessage(msg) as Promise<T>;
@@ -214,8 +211,19 @@ function isConfigured(s: Settings): boolean {
 }
 
 async function refreshHint(): Promise<void> {
-  hintEl.hidden = isConfigured(await loadSettings());
+  const s = await loadSettings();
+  hintEl.hidden = isConfigured(s);
+  uploadingTo = uploadsAudio(s.transcription.provider)
+    ? TRANSCRIPTION_ENGINE_NAMES[s.transcription.provider]
+    : null;
 }
+
+/**
+ * The cloud engine a transcription is sent to, or null for the local one. Read
+ * with the rest of the settings; the run itself reads the same settings when it
+ * starts, so this names where the audio actually went.
+ */
+let uploadingTo: string | null = null;
 
 /** A duration as mm:ss, or h:mm:ss past an hour. */
 function clock(ms: number): string {
@@ -258,8 +266,13 @@ function renderTranscribing(p: TranscriptionProgress | null): void {
     if (!barEl.hidden) barEl.value = ((p.loadedBytes ?? 0) / (p.totalBytes ?? 1)) * 100;
     return;
   }
-  statusEl.textContent = "Transcribing audio…";
   barEl.hidden = true;
+  const measured = p !== null && p.processedMs !== null && p.totalMs !== null && p.totalMs > 0;
+  // A cloud engine reports nothing until a whole upload comes back — an hour of
+  // audio can be one. Saying where the audio went is true the whole time; a
+  // percentage would be invented.
+  statusEl.textContent =
+    uploadingTo && !measured ? `Uploading to ${uploadingTo} to transcribe…` : "Transcribing audio…";
   if (p && p.processedMs !== null && p.totalMs !== null && p.totalMs > 0) {
     detailEl.textContent = `${clock(p.processedMs)} of ${clock(p.totalMs)} processed`;
     detailEl.hidden = false;

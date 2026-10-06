@@ -120,7 +120,12 @@ export interface TranscriptionEngine {
   readonly maxInputMs: number;
   /** Fetch and initialise the model. Cached by the engine; called once per run. */
   load(onProgress?: (loadedBytes: number, totalBytes: number | null) => void): Promise<void>;
-  transcribe(samples: Float32Array): Promise<EngineSpan[]>;
+  /**
+   * `signal` is the user's cancel. An engine whose one call can run for minutes
+   * (a cloud upload) must pass it on, or "use captions" waits for the upload to
+   * finish before anything happens; an engine that answers quickly may ignore it.
+   */
+  transcribe(samples: Float32Array, signal?: AbortSignal): Promise<EngineSpan[]>;
   /** Release engine resources (a worker, a session). Optional. */
   close?(): Promise<void> | void;
 }
@@ -135,10 +140,17 @@ function abortIfCancelled(signal: AbortSignal | undefined): void {
   if (signal?.aborted) throw new TranscriptionCancelled();
 }
 
-async function attempt<T>(what: string, run: () => Promise<T>): Promise<T> {
+async function attempt<T>(
+  what: string,
+  run: () => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
   try {
     return await run();
   } catch (cause) {
+    // An engine that honoured the cancel fails with whatever its fetch threw.
+    // That is the user skipping the wait, not a failure to hold a Recording for.
+    if (signal?.aborted) throw new TranscriptionCancelled();
     if (cause instanceof TranscriptionError) throw cause;
     throw new TranscriptionError(
       `${what}: ${cause instanceof Error ? cause.message : String(cause)}`,
@@ -183,21 +195,37 @@ export function createTranscriptionProvider(
       }
       const totalMs = decoded.reduce((ms, d) => ms + msFor(d.samples.length, d.sampleRate), 0);
 
+      // A diarizing engine's labels mean something only inside the one call that
+      // produced them: its "Speaker 1" in one window and in the next need not be
+      // the same person. So when the recording takes more than one call, every
+      // label names its part, and two people never share one.
+      const windowSamplesFor = (sampleRate: number) =>
+        Math.max(1, Math.round((engine.maxInputMs / 1000) * sampleRate));
+      const windowCount = decoded.reduce(
+        (n, d) => n + Math.ceil(d.samples.length / windowSamplesFor(d.sampleRate)),
+        0,
+      );
+      let windowIndex = 0;
+
       const utterances: Utterance[] = [];
       let doneMs = 0;
       for (const { samples, sampleRate, startOffsetMs } of decoded) {
-        const windowSamples = Math.max(1, Math.round((engine.maxInputMs / 1000) * sampleRate));
+        const windowSamples = windowSamplesFor(sampleRate);
         for (let offset = 0; offset < samples.length; offset += windowSamples) {
           abortIfCancelled(hooks?.signal);
           const end = Math.min(offset + windowSamples, samples.length);
           // Absolute zero for this window: where the Meeting began, not where the
           // window did and not where this span's Capture Start was.
           const baseMs = startOffsetMs + msFor(offset, sampleRate);
-          const spans = await attempt("engine failed", () =>
-            engine.transcribe(samples.subarray(offset, end)),
+          const spans = await attempt(
+            "engine failed",
+            () => engine.transcribe(samples.subarray(offset, end), hooks?.signal),
+            hooks?.signal,
           );
+          windowIndex++;
+          const part = windowCount > 1 ? windowIndex : null;
           for (const span of spans) {
-            const utterance = toUtterance(span, baseMs);
+            const utterance = toUtterance(span, baseMs, part);
             if (utterance) utterances.push(utterance);
           }
           // Progress counts audio transcribed, not Meeting time elapsed: the gap
@@ -225,8 +253,11 @@ function msFor(sampleCount: number, sampleRate: number): number {
   return Math.round((sampleCount / sampleRate) * 1000);
 }
 
-/** Engine span → Utterance, or null for a span with no words in it. */
-function toUtterance(span: EngineSpan, baseMs: number): Utterance | null {
+/**
+ * Engine span → Utterance, or null for a span with no words in it. `part` is the
+ * 1-based engine call the span came from, or null when the recording took one.
+ */
+function toUtterance(span: EngineSpan, baseMs: number, part: number | null): Utterance | null {
   const text = span.text.trim();
   if (text === "") return null;
   const startMs = Math.round(baseMs + span.startSec * 1000);
@@ -235,6 +266,8 @@ function toUtterance(span: EngineSpan, baseMs: number): Utterance | null {
     text,
     startMs,
     endMs: Math.max(startMs, endMs),
-    ...(span.speaker ? { diarizationLabel: span.speaker } : {}),
+    ...(span.speaker
+      ? { diarizationLabel: part === null ? span.speaker : `${span.speaker} (part ${part})` }
+      : {}),
   };
 }

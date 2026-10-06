@@ -36,6 +36,9 @@ export const DEFAULT_SETTINGS: Settings = {
     // whisper-1 by default because it is the transcription model that returns
     // per-segment timestamps, and fusion attributes speakers by time overlap.
     openai: { apiKey: "", model: "whisper-1" },
+    // Scribe's current model. It returns word timings and speaker ids, which is
+    // everything fusion needs.
+    elevenlabs: { apiKey: "", model: "scribe_v2" },
   },
 };
 
@@ -68,6 +71,10 @@ export async function loadSettings(): Promise<Settings> {
       openai: {
         ...DEFAULT_SETTINGS.transcription.openai,
         ...s.transcription?.openai,
+      },
+      elevenlabs: {
+        ...DEFAULT_SETTINGS.transcription.elevenlabs,
+        ...s.transcription?.elevenlabs,
       },
     },
   };

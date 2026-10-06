@@ -4,7 +4,7 @@ A lightweight Chromium extension (Chrome/Edge) that records a Microsoft Teams we
 
 Pure WebExtension: no companion app, no backend. Transcription runs on your machine by default, so the only things that leave it are the LLM call (nothing at all, with Ollama) and the one-time Whisper model download. Cloud transcription exists but is opt-in and off until you choose it.
 
-Speaker attribution is not wired up yet: base Whisper performs no diarization, so transcript lines read as *Unknown speaker* until captions are fused with the audio. A meeting with no recording still gets a caption-only summary.
+Speaker names come from Teams' live captions, matched against the audio's timings. Whisper cannot tell voices apart, so a line the captions missed reads *Unknown speaker*; with ElevenLabs Scribe (below) it reads *Speaker 1*, *Speaker 2* instead. A meeting with no recording still gets a caption-only summary.
 
 ## Install (unpacked, for development)
 
@@ -39,6 +39,12 @@ Local Whisper is the default and needs no key. Pick a model size in Settings —
 **Meeting language** is one setting for whichever engine is selected, and it defaults to **English**. Nothing detects it: the engine transcribes as if the language you picked were the one being spoken, so a meeting held in another language comes back as wrong words until you change it.
 
 **OpenAI transcription** is the opt-in cloud alternative: faster and more accurate, at the cost of uploading the meeting's audio. It takes its own key in the Transcription section of Settings — separate from the OpenAI key used for summarizing — and a model that returns per-segment timestamps (`whisper-1`), because speaker names come from matching those timings against the captions. Switching engine changes what the next meeting uses; nothing else about the flow changes.
+
+**ElevenLabs Scribe** is the second opt-in cloud engine, chosen for the one thing the others cannot do: it tells voices apart. Where the captions give no name, a line reads *Speaker 1* or *Speaker 2* rather than *Unknown speaker*. The cost is the same as OpenAI's — the meeting's audio is uploaded, and ElevenLabs may keep it under its own terms. It takes its own key in the Transcription section of Settings and the model `scribe_v2`. Audio goes up an hour at a time, and speaker labels only hold within one upload, so a recording that needs more than one labels each speaker with its part (*Speaker 1 (part 2)*) rather than risk giving two people the same name. See [ADR-0008](docs/adr/0008-elevenlabs-scribe-the-diarizing-cloud-engine.md).
+
+Choosing a different cloud engine asks for microphone consent again, because the recording would go to a different company.
+
+How the three engines compare on the same audio — word error rate, and how often each word is credited to the right speaker — is measured with the harness in `eval/`; the method and the rules for what audio may be used are in [docs/evaluations](docs/evaluations/README.md).
 
 ## Summary shapes
 

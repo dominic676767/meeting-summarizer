@@ -145,13 +145,13 @@ export type ProviderId = "anthropic" | "openai" | "ollama" | "bedrock";
  * so the ids that appear in both lists are a coincidence of vendor, not a shared
  * setting — `openai` here is a transcription endpoint with its own key.
  */
-export type TranscriptionProviderId = "local-whisper" | "openai";
+export type TranscriptionProviderId = "local-whisper" | "openai" | "elevenlabs";
 
 /** Whisper model size — the accuracy-against-time trade the user picks. */
 export type WhisperModelSize = "tiny" | "base" | "small";
 
 /**
- * The language a Meeting is spoken in, as the ISO-639-1 code both engines take
+ * The language a Meeting is spoken in, as the ISO-639-1 code every engine takes
  * as their language hint.
  *
  * Declared by the user because nothing here detects it: transformers.js does no
@@ -212,6 +212,10 @@ export interface TranscriptionSettings {
   /** The cloud engine's own credentials. Not the `openai` Provider key: that one
    * is spent on summarization, and a user may opt into one without the other. */
   openai: { apiKey: string; model: string };
+  /** ElevenLabs Scribe's credentials. Its own key: no Provider summarizes with
+   * ElevenLabs, so there is nothing to confuse it with, but it is still one more
+   * destination the user opts into by entering it. */
+  elevenlabs: { apiKey: string; model: string };
 }
 
 /**
