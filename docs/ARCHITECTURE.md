@@ -152,6 +152,7 @@ flowchart LR
         engines["engines.ts<br/>engine names"]
         pcm["pcm.ts"]
         pauses["pauses.ts"]
+        awsCreds["aws-credentials.ts"]
         silence["silence.ts"]
         fusion["fusion.ts"]
     end
@@ -204,6 +205,7 @@ flowchart LR
     pFactory --> anthropic & openai & ollama & bedrock --> pIface
     popupTs --> settings
     optionsTs --> settings --> templates
+    settings --> awsCreds
     bg & micCapture & popupTs & optionsTs --> engines
 ```
 
@@ -494,6 +496,7 @@ flowchart LR
     end
     subgraph sessionS["chrome.storage.session (survives SW suspend)"]
         sessionsK["sessions<br/>MeetingSession per tab<br/>incl. caption accumulator"]
+        awsK["sagemakerCredentials<br/>temporary AWS credentials,<br/>memory only (ADR-0009)"]
     end
     subgraph audio["Offscreen origin storage"]
         opfs[("OPFS file per spanId<br/>IndexedDB 'meeting-audio' fallback")]
@@ -511,6 +514,7 @@ flowchart LR
 | Held Recording | transcription failed | its Transcript is held |
 | Held Transcript | summarization failed | its artifact is written |
 | Settings | Options page save | never (user-owned) |
+| SageMaker AWS credentials | pasted on the Options page | cleared there, or when the browser closes (`storage.session`) |
 
 ---
 
@@ -585,6 +589,8 @@ The functions to read first, by job.
 | Write file | `writeArtifact` | `src/background/artifact-writer.ts` |
 | LLM client | `createProviderClient` | `src/providers/factory.ts` |
 | Settings with defaults | `loadSettings`, `saveSettings` | `src/settings.ts` |
+| SageMaker credentials, memory only | `loadAwsCredentials`, `saveAwsCredentials`, `clearAwsCredentials` | `src/settings.ts` |
+| Read pasted AWS credentials | `parseAwsCredentials` | `src/transcription/aws-credentials.ts` |
 
 ### Every source file
 
@@ -594,7 +600,7 @@ The functions to read first, by job.
 | `src/platform.ts` | `ext` = the `chrome` namespace, resolved in one place |
 | `src/messages.ts` | message protocol and reply shapes |
 | `src/domain/types.ts` | domain vocabulary types |
-| `src/settings.ts` | defaults, load/save, upgrade merge |
+| `src/settings.ts` | defaults, load/save, upgrade merge; the SageMaker credentials in `storage.session` |
 | `src/content/teams-content.ts` | content-script loop: MutationObserver, diffing, Meeting End grace period |
 | `src/content/capture-prompt.ts` | in-page "start recording" card in a shadow root |
 | `src/adapters/adapter.ts` | `PlatformAdapter` interface |
@@ -627,6 +633,7 @@ The functions to read first, by job.
 | `src/transcription/pcm.ts` | 16-bit PCM encoding that both cloud engines share |
 | `src/transcription/silence.ts` | degenerate-output rejection |
 | `src/transcription/pauses.ts` | short windows cut at pauses, for an engine whose output has no timestamps |
+| `src/transcription/aws-credentials.ts` | pasted temporary AWS credentials → key, secret, token, expiry; long-term keys refused |
 | `src/transcription/fusion.ts` | Utterances + Speaker Track → Fused Transcript |
 | `src/pipeline/pipeline.ts` | summarize: single-shot or map-reduce |
 | `src/pipeline/chunking.ts` | budget-sized chunks, chunk/reduce prompts |
