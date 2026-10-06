@@ -35,7 +35,7 @@ flowchart LR
     teams["Teams web meeting tab<br/>audio + live captions"]
     ext["Meeting Summarizer<br/>Chromium extension"]
     hf[("Hugging Face<br/>Whisper model, one-time download")]
-    stt["OpenAI transcription<br/>opt-in"]
+    stt["Cloud transcription<br/>OpenAI / ElevenLabs, opt-in"]
     llm["LLM Provider<br/>Claude / OpenAI / Ollama / Bedrock"]
     out[("Downloads/meeting-summaries/<br/>YYYY-MM-DD-title.html")]
 
@@ -148,6 +148,9 @@ flowchart LR
         whisperProtocol["whisper-protocol.ts"]
         whisperWorker["whisper-worker.ts"]
         txOpenai["openai.ts"]
+        elevenlabs["elevenlabs.ts"]
+        engines["engines.ts<br/>engine names"]
+        pcm["pcm.ts"]
         silence["silence.ts"]
         fusion["fusion.ts"]
     end
@@ -188,7 +191,8 @@ flowchart LR
     bg --> pFactory
     offscreenTs --> audioMix & audioStore & signal
     offscreenTs --> txFactory
-    txFactory --> localWhisper & txOpenai
+    txFactory --> localWhisper & txOpenai & elevenlabs
+    txOpenai & elevenlabs --> pcm
     txFactory --> txProvider --> silence
     localWhisper --> whisperProtocol
     whisperWorker --> whisperProtocol
@@ -198,6 +202,7 @@ flowchart LR
     pFactory --> anthropic & openai & ollama & bedrock --> pIface
     popupTs --> settings
     optionsTs --> settings --> templates
+    bg & micCapture & popupTs & optionsTs --> engines
 ```
 
 `platform.ts` (the `chrome` namespace as `ext`), `messages.ts` (the protocol) and `domain/types.ts` (the vocabulary) are imported almost everywhere and are left off the arrows.
@@ -292,7 +297,7 @@ stateDiagram-v2
     failed --> [*]: tab closed, dropSession()
 ```
 
-Microphone state is its own axis (`micCaptureState()` in `mic-capture.ts`): `off → unconfirmed → armed → recording`, or `unavailable` if Chromium refused it. The mic is recorded only when the setting is on **and** the disclosure was answered (ADR-0007).
+Microphone state is its own axis (`micCaptureState()` in `mic-capture.ts`): `off → unconfirmed → armed → recording`, or `unavailable` if Chromium refused it. The mic is recorded only when the setting is on **and** the disclosure was answered (ADR-0007). Consent is withdrawn whenever the cloud destination changes, including from one cloud engine to another (ADR-0008).
 
 ---
 
@@ -340,8 +345,8 @@ What the artifact says about its source (`Transcript.provenance`):
 
 | Provenance | Words from | Speaker names from |
 |---|---|---|
-| `fused` | audio | caption Speaker Track |
-| `audio-unattributed` | audio | none matched, *Unknown speaker* |
+| `fused` | audio | caption Speaker Track; where none overlaps, the engine's diarization label, else *Unknown speaker* |
+| `audio-unattributed` | audio | no caption match: the engine's diarization label (Scribe only), else *Unknown speaker* |
 | `captions-only` | Teams captions (Degraded Capture) | captions |
 
 ---
@@ -391,13 +396,15 @@ flowchart TD
     which -- "local-whisper (default)" --> lw["createLocalWhisperEngine()<br/>Web Worker, model tiny/base/small<br/>max window 120 s"]
     which -- "openai (opt-in)" --> oa["createOpenAiTranscriptionEngine()<br/>whisper-1, WAV upload<br/>max window 600 s"]
     lw --> core
+    which -- "elevenlabs (opt-in)" --> el["createElevenLabsTranscriptionEngine()<br/>scribe_v2, bare PCM upload, diarized<br/>max window 60 min, timeout 60 s + window"]
     oa --> core
+    el --> core
 
     subgraph core["createTranscriptionProvider().transcribe() — provider.ts"]
         load["engine.load()<br/>model-download progress"] --> dec["decode every span<br/>decodeToMono() at engine rate"]
         dec --> win["split each span into windows"]
-        win --> eng["engine.transcribe(window)"]
-        eng --> utt["toUtterance()<br/>startMs = span offset + window offset + engine time"]
+        win --> eng["engine.transcribe(window, signal)<br/>the cancel reaches a cloud upload"]
+        eng --> utt["toUtterance()<br/>startMs = span offset + window offset + engine time<br/>a diarization label gets (part N) when there were several calls"]
         utt --> sil{"rejectAsSilent()<br/>silence.ts"}
     end
     sil -- "only filler like 'you', 'thank you'" --> silent["throw TranscriptionSilent<br/>→ reply.noSpeech"]
@@ -405,11 +412,13 @@ flowchart TD
 
     utts --> fuse["fuseTranscript() — fusion.ts"]
     track["speakerTrackFrom(caption transcript)<br/>who spoke when"] --> fuse
-    fuse --> attr["attribute(): per Utterance, sum overlap ms per speaker<br/>most overlap wins, ties to who spoke first"]
+    fuse --> attr["attribute(): per Utterance, sum overlap ms per speaker<br/>most overlap wins, ties to who spoke first<br/>no overlap: the diarization label, else Unknown speaker"]
     attr --> fused["Fused Transcript<br/>provenance fused / audio-unattributed"]
 ```
 
 The Whisper worker (`whisper-worker.ts`) loads `transformers.js` `automatic-speech-recognition` with `dtype q8`, `device wasm`, graph optimization off. It talks to `local-whisper.ts` using the message types in `whisper-protocol.ts` (`load`, `transcribe` ↔ `model-progress`, `loaded`, `spans`, `failed`).
+
+The two cloud engines encode with `pcm.ts`: OpenAI wraps the 16-bit PCM in a WAV, and Scribe uploads it bare. Both pass the user's cancel signal into `fetch`. Scribe also gives up after 60 s plus the window's length, with a `TranscriptionError`, so the Recording is held. Scribe is the only engine that diarizes. Its labels hold only inside one call, so the wrapper adds the part number when a recording takes several calls (ADR-0008). `engines.ts` gives each engine the name that the consent disclosure, the popup and the Summary Artifact show, and says which engines upload audio.
 
 ---
 
@@ -563,6 +572,8 @@ The functions to read first, by job.
 | Mix tab + mic | `mixCapture` | `src/offscreen/audio-mix.ts` |
 | Store audio | `openAudioStore`, `readSpan`, `deleteSpan` | `src/offscreen/audio-store.ts` |
 | Pick engine | `createTranscriptionProviderFor` | `src/transcription/factory.ts` |
+| Engine names, and which engines upload | `TRANSCRIPTION_ENGINE_NAMES`, `uploadsAudio` | `src/transcription/engines.ts` |
+| Scribe words → timed, labelled spans | `spansFromScribe` | `src/transcription/elevenlabs.ts` |
 | Decode, window, offset, silence check | `createTranscriptionProvider().transcribe` | `src/transcription/provider.ts` |
 | Refuse filler output | `rejectAsSilent`, `carriesNoSpeech` | `src/transcription/silence.ts` |
 | Names onto words | `fuseTranscript`, `speakerTrackFrom` | `src/transcription/fusion.ts` |
@@ -608,6 +619,9 @@ The functions to read first, by job.
 | `src/transcription/whisper-worker.ts` | Web Worker running transformers.js Whisper |
 | `src/transcription/whisper-protocol.ts` | worker message types, model repos, options |
 | `src/transcription/openai.ts` | OpenAI transcription engine |
+| `src/transcription/elevenlabs.ts` | ElevenLabs Scribe engine: diarized words → timed, labelled spans |
+| `src/transcription/engines.ts` | each engine's display name, and which engines upload audio |
+| `src/transcription/pcm.ts` | 16-bit PCM encoding that both cloud engines share |
 | `src/transcription/silence.ts` | degenerate-output rejection |
 | `src/transcription/fusion.ts` | Utterances + Speaker Track → Fused Transcript |
 | `src/pipeline/pipeline.ts` | summarize: single-shot or map-reduce |
