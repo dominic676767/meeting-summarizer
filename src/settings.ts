@@ -41,6 +41,8 @@ export const DEFAULT_SETTINGS: Settings = {
     // Scribe's current model. It returns word timings and speaker ids, which is
     // everything fusion needs.
     elevenlabs: { apiKey: "", model: "scribe_v2" },
+    // No endpoint until the user names one: the engine is theirs to deploy.
+    sagemaker: { region: "us-east-1", endpointName: "" },
   },
 };
 
@@ -77,6 +79,10 @@ export async function loadSettings(): Promise<Settings> {
       elevenlabs: {
         ...DEFAULT_SETTINGS.transcription.elevenlabs,
         ...s.transcription?.elevenlabs,
+      },
+      sagemaker: {
+        ...DEFAULT_SETTINGS.transcription.sagemaker,
+        ...s.transcription?.sagemaker,
       },
     },
   };

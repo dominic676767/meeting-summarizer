@@ -8,6 +8,7 @@ import type {
   TranscriptionSettings,
   Utterance,
 } from "./domain/types";
+import type { AwsCredentials } from "./transcription/aws-credentials";
 
 /**
  * The state vocabulary the popup and the in-page capture prompt share.
@@ -78,6 +79,13 @@ export type OffscreenMessage =
        * worker at transcribe time: the offscreen document runs the engine the
        * user has chosen now, never one remembered from a previous attempt. */
       transcription: TranscriptionSettings;
+      /**
+       * The SageMaker engine's temporary credentials, read by the service worker
+       * from session storage: the offscreen document can reach no storage of its
+       * own. Null for every other engine, so a credential is only ever sent to
+       * the document when the engine that needs it is the one selected.
+       */
+      awsCredentials: AwsCredentials | null;
       /** Echoed back on progress so the service worker can find the session
        * again after a suspension. */
       tabId: number;

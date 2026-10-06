@@ -10,9 +10,25 @@ export const TRANSCRIPTION_ENGINE_NAMES: Record<TranscriptionProviderId, string>
   "local-whisper": "local Whisper",
   openai: "OpenAI",
   elevenlabs: "ElevenLabs",
+  sagemaker: "Amazon SageMaker",
+};
+
+/**
+ * Where an engine's upload goes, as a consent names it. Usually the company. For
+ * SageMaker it is the user's own AWS account, and the extension cannot see which
+ * one, so the disclosure says whose account it is rather than guess.
+ */
+const UPLOAD_DESTINATIONS: Record<TranscriptionProviderId, string> = {
+  ...TRANSCRIPTION_ENGINE_NAMES,
+  sagemaker: "Amazon SageMaker, in the AWS account your credentials belong to",
 };
 
 /** Whether choosing this engine sends the meeting's audio off the machine. */
 export function uploadsAudio(provider: TranscriptionProviderId): boolean {
   return provider !== "local-whisper";
+}
+
+/** The destination a consent names for this engine's uploads. */
+export function uploadDestination(provider: TranscriptionProviderId): string {
+  return UPLOAD_DESTINATIONS[provider];
 }

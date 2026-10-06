@@ -24,14 +24,19 @@ import {
 import {
   createCloudEngine,
   createNodeWhisper,
+  createSageMakerEngine,
+  DEFAULT_ENGINE_IDS,
   ENGINE_IDS,
   engineInfo,
   KEY_ENV,
   LOCAL_WHISPER_DIFFERENCES,
   providerFor,
   redactKeys,
+  SAGEMAKER_ENV,
+  sageMakerFromEnv,
   type EngineId,
   type EngineInfo,
+  type SageMakerConfig,
 } from "./engines";
 import { renderMarkdown, type ClipResult, type EngineResult, type RunResult } from "./report";
 import { engineLabelCount, referenceSpeakerCount, speakerAccuracy } from "./speakers";
@@ -44,13 +49,14 @@ export const USAGE = `Compare the Transcription Providers on your own clips.
   npm run eval -- --audio <clip.wav> --reference <clip.reference.json> --language <code> [options]
 
 Options:
-  --engines <ids>        comma-separated: ${ENGINE_IDS.join(",")} (default: all three)
+  --engines <ids>        comma-separated: ${ENGINE_IDS.join(",")} (default: ${DEFAULT_ENGINE_IDS.join(",")})
   --whisper-model <size> local Whisper size: tiny, base or small (default: base)
   --out <dir>            where the JSON results go (default: .eval/results)
   --yes                  proceed with the cloud engines once their bill is printed
   --help                 this text
 
-Keys come only from OPENAI_API_KEY and ELEVENLABS_API_KEY.
+Keys come only from OPENAI_API_KEY and ELEVENLABS_API_KEY. SageMaker reads
+${Object.values(SAGEMAKER_ENV).join(", ")}.
 Method, data rules and file formats: docs/evaluations/README.md`;
 
 export class UsageError extends Error {
@@ -131,7 +137,7 @@ export function parseCliArgs(argv: string[], cwd: string, root: string): CliOpti
     };
   }
 
-  const engines = values.engines === undefined ? [...ENGINE_IDS] : list(values.engines);
+  const engines = values.engines === undefined ? [...DEFAULT_ENGINE_IDS] : list(values.engines);
   const unknown = engines.filter((e) => !(ENGINE_IDS as readonly string[]).includes(e));
   if (unknown.length) {
     throw new UsageError(`unknown engine ${unknown.join(", ")}; choose from ${ENGINE_IDS.join(", ")}`);
@@ -275,6 +281,12 @@ export async function main(argv: string[], dirs: { cwd: string; root: string }):
     if (key) keys.set(e.id, key);
     else missing.push(`${e.name} needs ${variable} set in the environment`);
   }
+  let sageMaker: SageMakerConfig | null = null;
+  if (options.engines.includes("sagemaker")) {
+    const fromEnv = sageMakerFromEnv(process.env);
+    if (fromEnv.ok) sageMaker = fromEnv.config;
+    else missing.push(`Amazon SageMaker needs ${fromEnv.missing.join(", ")} set in the environment`);
+  }
   if (missing.length) {
     log(missing.join("\n"));
     return 1;
@@ -289,7 +301,12 @@ export async function main(argv: string[], dirs: { cwd: string; root: string }):
     }
   }
 
-  const secrets = [...keys.values()];
+  // Everything an error might quote back. The key ID is not secret on its own,
+  // but it names the account's key, so it is scrubbed with the rest.
+  const secrets = [
+    ...keys.values(),
+    ...(sageMaker ? [sageMaker.accessKeyId, sageMaker.secretAccessKey, sageMaker.sessionToken] : []),
+  ];
   const startedAt = new Date().toISOString();
   const whisper = options.engines.includes("local-whisper")
     ? createNodeWhisper(options.whisperModel, join(dirs.root, ".eval", "models"))
@@ -329,7 +346,9 @@ export async function main(argv: string[], dirs: { cwd: string; root: string }):
       const engine =
         info.id === "local-whisper"
           ? whisper!.engineFor(clip.language)
-          : createCloudEngine(info.id, keys.get(info.id)!, clip.language);
+          : info.id === "sagemaker"
+            ? createSageMakerEngine(sageMaker!, clip.language)
+            : createCloudEngine(info.id, keys.get(info.id)!, clip.language);
       const loadSec = info.id === "local-whisper" ? (whisperLoad?.sec ?? null) : null;
       engineResults.push(await runOne(prepared, info, engine, loadSec, secrets));
     }

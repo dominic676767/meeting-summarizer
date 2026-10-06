@@ -222,6 +222,7 @@ $("save").addEventListener("click", async () => {
       apiKey: $<HTMLInputElement>("transcription-elevenlabs-key").value.trim(),
       model: $<HTMLInputElement>("transcription-elevenlabs-model").value.trim(),
     },
+    sagemaker: s.transcription.sagemaker,
   };
   // Whether this Save leaves microphone consent on file is a rule of its own —
   // an untouched box confirms nothing, and a new destination asks again — kept
