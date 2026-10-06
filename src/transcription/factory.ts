@@ -29,7 +29,7 @@ export interface TranscriptionDeps {
    * disk along with the settings (ADR-0009).
    */
   awsCredentials?: AwsCredentials | null;
-  /** Injected by tests in place of the AWS SDK. */
+  /** Injected by tests in place of the SageMaker engine's signed fetch. */
   invoke?: InvokeFn;
   /** The time now, for the credentials' expiry. Injected by tests. */
   now?: number;
@@ -95,6 +95,7 @@ function engineFor(s: TranscriptionSettings, deps: TranscriptionDeps): Transcrip
         ...s.sagemaker,
         credentials,
         language: s.language,
+        ...(deps.fetchFn ? { fetchFn: deps.fetchFn } : {}),
         ...(deps.invoke ? { invoke: deps.invoke } : {}),
       });
     }

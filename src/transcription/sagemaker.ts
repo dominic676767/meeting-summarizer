@@ -10,17 +10,18 @@
 // short windows cut at pauses: each window becomes one Utterance, and fusion
 // takes its speaker from the captions.
 //
+// Each call is signed by the AWS SDK's own SigV4 signer (`@smithy/signature-v4`)
+// and sent with plain `fetch`. The SDK's client would do the same job at eleven
+// times the bundle size, for the one request this engine ever makes.
+//
 // Two halves, as in the other cloud engines. The request and the reading of the
 // reply are pure and tested without a network (`invokeInput`,
-// `textFromResponse`, `sageMakerFailure`). The engine around them only sends one
-// window through the AWS SDK and hands back what came back.
-import {
-  InvokeEndpointCommand,
-  SageMakerRuntimeClient,
-  type InvokeEndpointCommandInput,
-} from "@aws-sdk/client-sagemaker-runtime";
+// `textFromResponse`, `awsErrorOf`, `sageMakerFailure`). The engine around them
+// only signs and sends one window and hands back what came back.
+import { SignatureV4 } from "@smithy/signature-v4";
 import type { MeetingLanguage } from "../domain/types";
 import type { AwsCredentials } from "./aws-credentials";
+import type { FetchFn } from "./openai";
 import type { PauseWindowing } from "./pauses";
 import { wav16 } from "./pcm";
 import { TranscriptionError, type EngineSpan, type TranscriptionEngine } from "./provider";
@@ -47,8 +48,8 @@ export const SAGEMAKER_WINDOWING: PauseWindowing = {
 
 /**
  * How long one window may take before it is given up on. SageMaker stops a
- * call after 60 s; the rest is the upload, the reply and the SDK's retries.
- * Giving up throws a TranscriptionError, which holds the Recording for a retry.
+ * call after 60 s; the rest is the upload and the reply. Giving up throws a
+ * TranscriptionError, which holds the Recording for a retry.
  */
 export const SAGEMAKER_TIMEOUT_MS = 90_000;
 
@@ -57,9 +58,6 @@ export const SAGEMAKER_TIMEOUT_MS = 90_000;
  * middleware reads this header and leaves the body as it is.
  */
 export const TRANSCRIPTION_ROUTE = "route=/v1/audio/transcriptions";
-
-/** The SDK's standard retry for short failures: throttling and 5xx answers. */
-const MAX_ATTEMPTS = 3;
 
 const BOUNDARY = "meeting-summarizer-sagemaker";
 
@@ -117,6 +115,15 @@ export class SageMakerFailure extends TranscriptionError {
   }
 }
 
+/** One `InvokeEndpoint` call, before it is signed. */
+export interface InvokeCall {
+  endpointName: string;
+  contentType: string;
+  accept: string;
+  customAttributes: string;
+  body: Uint8Array<ArrayBuffer>;
+}
+
 /**
  * One window as the `InvokeEndpoint` call that transcribes it.
  *
@@ -125,14 +132,15 @@ export class SageMakerFailure extends TranscriptionError {
  * are joined. For a Meeting Language that Qwen3-ASR does not list, neither is
  * sent, and the model guesses (ADR-0009).
  *
- * The multipart body is built here as bytes, with a fixed boundary, so that the
- * SDK signs exactly the bytes that are sent.
+ * The multipart body is built here as bytes, with a fixed boundary, because the
+ * signature covers a hash of the exact bytes that are sent: a FormData body
+ * would get its boundary from the browser after signing.
  */
 export function invokeInput(opts: {
   endpointName: string;
   samples: Float32Array;
   language: MeetingLanguage;
-}): InvokeEndpointCommandInput {
+}): InvokeCall {
   const fields: [string, string][] = LISTED_BY_QWEN3_ASR[opts.language]
     ? [
         ["to_language", opts.language],
@@ -141,11 +149,11 @@ export function invokeInput(opts: {
     : [];
   fields.push(["response_format", "json"]);
   return {
-    EndpointName: opts.endpointName,
-    ContentType: `multipart/form-data; boundary=${BOUNDARY}`,
-    Accept: "application/json",
-    CustomAttributes: TRANSCRIPTION_ROUTE,
-    Body: multipartBody(wav16(opts.samples, SAGEMAKER_SAMPLE_RATE), fields),
+    endpointName: opts.endpointName,
+    contentType: `multipart/form-data; boundary=${BOUNDARY}`,
+    accept: "application/json",
+    customAttributes: TRANSCRIPTION_ROUTE,
+    body: multipartBody(wav16(opts.samples, SAGEMAKER_SAMPLE_RATE), fields),
   };
 }
 
@@ -171,21 +179,57 @@ export function textFromResponse(body: Uint8Array | undefined): string {
   return text;
 }
 
+/** A failed reply, as AWS describes it. */
+export interface AwsError {
+  /** AWS's error type, e.g. `ValidationError` or `ExpiredTokenException`. */
+  name: string;
+  message: string;
+  status: number;
+  /** A container failure's own status and message, as SageMaker passes them on. */
+  originalStatus?: number;
+  originalMessage?: string;
+}
+
 /**
- * An error from the SDK → what it means for the user, with the part of the setup
- * to check. The SDK's messages never carry the credentials, so they can be shown.
+ * A failed reply → AWS's error type, message and status. The type comes from the
+ * `x-amzn-ErrorType` header, or else from the body's `__type`, without the
+ * namespace AWS puts around it on either.
+ */
+export function awsErrorOf(status: number, errorType: string | null, body: Uint8Array): AwsError {
+  const raw = new TextDecoder().decode(body);
+  let parsed: Record<string, unknown> = {};
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (typeof value === "object" && value !== null) parsed = value as Record<string, unknown>;
+  } catch {
+    // Not JSON: an error page from somewhere in front of SageMaker. The raw text
+    // is the message.
+  }
+  const typed = errorType ?? (typeof parsed["__type"] === "string" ? parsed["__type"] : "");
+  const name = (typed.split(":")[0] ?? "").split("#").pop() || `HTTP ${status}`;
+  const message = parsed["message"] ?? parsed["Message"] ?? raw;
+  return {
+    name,
+    message: String(message).slice(0, 300),
+    status,
+    ...(typeof parsed["OriginalStatusCode"] === "number"
+      ? { originalStatus: parsed["OriginalStatusCode"] }
+      : {}),
+    ...(typeof parsed["OriginalMessage"] === "string"
+      ? { originalMessage: parsed["OriginalMessage"] }
+      : {}),
+  };
+}
+
+/**
+ * A failed call → what it means for the user, with the part of the setup to
+ * check. AWS's messages never carry the credentials, so they can be shown.
  */
 export function sageMakerFailure(
   err: unknown,
   where: { endpointName: string; region: string },
 ): SageMakerFailure {
-  const e = (typeof err === "object" && err !== null ? err : {}) as {
-    name?: string;
-    message?: string;
-    $metadata?: { httpStatusCode?: number };
-    OriginalStatusCode?: number;
-    OriginalMessage?: string;
-  };
+  const e = (typeof err === "object" && err !== null ? err : {}) as Partial<AwsError>;
   const name = e.name ?? "Error";
   const message = (e.message ?? String(err)).slice(0, 300);
   const options = { cause: err };
@@ -218,7 +262,7 @@ export function sageMakerFailure(
     case "ModelError":
       return new SageMakerFailure(
         "container",
-        `the endpoint's container failed (${e.OriginalStatusCode ?? "no status"}): ${(e.OriginalMessage ?? message).slice(0, 300)}`,
+        `the endpoint's container failed (${e.originalStatus ?? "no status"}): ${(e.originalMessage ?? message).slice(0, 300)}`,
         options,
       );
     case "ValidationError":
@@ -230,18 +274,75 @@ export function sageMakerFailure(
           )
         : new SageMakerFailure("endpoint", `SageMaker refused the call: ${message}`, options);
   }
-  const status = e.$metadata?.httpStatusCode;
-  if (status === 403) {
+  if (e.status === 403) {
     return new SageMakerFailure("credentials", `AWS refused the call (403): ${message}`, options);
   }
   return new SageMakerFailure("other", `${name}: ${message}`, options);
 }
 
-/** Sends one prepared call. The SDK in the extension; a fake in tests. */
-export type InvokeFn = (
-  input: InvokeEndpointCommandInput,
-  abortSignal: AbortSignal,
-) => Promise<{ Body?: Uint8Array }>;
+/**
+ * Sends one prepared call and returns the reply's body. Throws an AwsError for a
+ * failed reply. Signed fetch in the extension; a fake in tests.
+ */
+export type InvokeFn = (call: InvokeCall, signal: AbortSignal) => Promise<Uint8Array>;
+
+/**
+ * `InvokeEndpoint` over `fetch`, signed with SigV4 for the `sagemaker` service in
+ * the endpoint's region.
+ */
+export function signedInvoke(opts: {
+  region: string;
+  credentials: AwsCredentials;
+  fetchFn?: FetchFn;
+}): InvokeFn {
+  const signer = new SignatureV4({
+    service: "sagemaker",
+    region: opts.region,
+    // The pasted credentials, as they are: nothing of the SDK's credential
+    // chain is reached.
+    credentials: {
+      accessKeyId: opts.credentials.accessKeyId,
+      secretAccessKey: opts.credentials.secretAccessKey,
+      sessionToken: opts.credentials.sessionToken,
+    },
+    sha256: WebCryptoSha256,
+    // No x-amz-content-sha256 header: AWS's own clients send it to S3 only.
+    applyChecksum: false,
+  });
+  const fetchFn = opts.fetchFn ?? fetch;
+  const hostname = `runtime.sagemaker.${opts.region}.amazonaws.com`;
+  return async (call, signal) => {
+    const path = `/endpoints/${encodeURIComponent(call.endpointName)}/invocations`;
+    const signed = await signer.sign({
+      method: "POST",
+      protocol: "https:",
+      hostname,
+      path,
+      query: {},
+      headers: {
+        host: hostname,
+        "content-type": call.contentType,
+        accept: call.accept,
+        "x-amzn-sagemaker-custom-attributes": call.customAttributes,
+      },
+      body: call.body,
+    });
+    // Host is signed, but the browser sets it from the URL and refuses it as a
+    // header; the two agree because both come from `hostname`.
+    const headers = Object.fromEntries(
+      Object.entries(signed.headers).filter(([name]) => name.toLowerCase() !== "host"),
+    );
+    const res = await fetchFn(`https://${hostname}${path}`, {
+      method: "POST",
+      headers,
+      body: call.body,
+      signal,
+    });
+    const body = new Uint8Array(await res.arrayBuffer());
+    if (!res.ok) throw awsErrorOf(res.status, res.headers.get("x-amzn-errortype"), body);
+    return body;
+  };
+}
 
 export function createSageMakerTranscriptionEngine(opts: {
   region: string;
@@ -249,30 +350,20 @@ export function createSageMakerTranscriptionEngine(opts: {
   credentials: AwsCredentials;
   /** The Meeting Language, sent as `to_language` when Qwen3-ASR lists it. */
   language: MeetingLanguage;
-  /** Injected by tests; defaults to the AWS SDK. */
+  fetchFn?: FetchFn;
+  /** Injected by tests in place of the signed fetch. */
   invoke?: InvokeFn;
   /** Injected by tests; defaults to SAGEMAKER_TIMEOUT_MS. */
   timeoutMs?: number;
 }): TranscriptionEngine {
   const where = { endpointName: opts.endpointName, region: opts.region };
   const timeoutMs = opts.timeoutMs ?? SAGEMAKER_TIMEOUT_MS;
-  let client: SageMakerRuntimeClient | undefined;
-  const invoke: InvokeFn =
+  const invoke =
     opts.invoke ??
-    ((input, abortSignal) => {
-      // One client for the engine, which lives for one transcription run. The
-      // pasted credentials go in directly, so none of the SDK's credential chain
-      // is reached.
-      client ??= new SageMakerRuntimeClient({
-        region: opts.region,
-        credentials: {
-          accessKeyId: opts.credentials.accessKeyId,
-          secretAccessKey: opts.credentials.secretAccessKey,
-          sessionToken: opts.credentials.sessionToken,
-        },
-        maxAttempts: MAX_ATTEMPTS,
-      });
-      return client.send(new InvokeEndpointCommand(input), { abortSignal });
+    signedInvoke({
+      region: opts.region,
+      credentials: opts.credentials,
+      ...(opts.fetchFn ? { fetchFn: opts.fetchFn } : {}),
     });
 
   return {
@@ -289,9 +380,9 @@ export function createSageMakerTranscriptionEngine(opts: {
       const durationSec = samples.length / SAGEMAKER_SAMPLE_RATE;
       const timeout = AbortSignal.timeout(timeoutMs);
       const abort = signal ? AbortSignal.any([signal, timeout]) : timeout;
-      let reply: { Body?: Uint8Array };
+      let body: Uint8Array;
       try {
-        reply = await invoke(
+        body = await invoke(
           invokeInput({ endpointName: opts.endpointName, samples, language: opts.language }),
           abort,
         );
@@ -308,19 +399,73 @@ export function createSageMakerTranscriptionEngine(opts: {
         }
         throw sageMakerFailure(cause, where);
       }
-      const text = textFromResponse(reply.Body).trim();
+      const text = textFromResponse(body).trim();
       // A window of silence has no words. Whether a whole recording was silence
       // is the wrapper's call, made once against its whole duration.
       return text === "" ? [] : [{ text, startSec: 0, endSec: durationSec }];
     },
-    close() {
-      client?.destroy();
-    },
   };
 }
 
+/**
+ * SHA-256, or HMAC-SHA256 when given a key, on the browser's Web Crypto. The
+ * signer asks for its hash by constructor; this is the one it is given, so no
+ * hashing code is bundled.
+ */
+export class WebCryptoSha256 {
+  private readonly key: Uint8Array<ArrayBuffer> | null;
+  private chunks: Uint8Array<ArrayBuffer>[] = [];
+
+  constructor(secret?: string | ArrayBuffer | ArrayBufferView) {
+    this.key = secret === undefined ? null : bytesOf(secret);
+  }
+
+  update(data: string | ArrayBuffer | ArrayBufferView): void {
+    this.chunks.push(bytesOf(data));
+  }
+
+  async digest(): Promise<Uint8Array> {
+    const data = concat(this.chunks);
+    if (this.key === null) return new Uint8Array(await crypto.subtle.digest("SHA-256", data));
+    const key = await crypto.subtle.importKey(
+      "raw",
+      this.key,
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+    return new Uint8Array(await crypto.subtle.sign("HMAC", key, data));
+  }
+
+  reset(): void {
+    this.chunks = [];
+  }
+}
+
+function bytesOf(data: string | ArrayBuffer | ArrayBufferView): Uint8Array<ArrayBuffer> {
+  if (typeof data === "string") return new TextEncoder().encode(data);
+  const view =
+    data instanceof ArrayBuffer
+      ? new Uint8Array(data)
+      : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  // A copy, so a caller reusing its buffer cannot change what gets hashed.
+  const copy = new Uint8Array(view.byteLength);
+  copy.set(view);
+  return copy;
+}
+
+function concat(parts: Uint8Array[]): Uint8Array<ArrayBuffer> {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
+
 /** Fields and a WAV as one multipart/form-data body. */
-function multipartBody(wav: Uint8Array, fields: [string, string][]): Uint8Array {
+function multipartBody(wav: Uint8Array, fields: [string, string][]): Uint8Array<ArrayBuffer> {
   const encoder = new TextEncoder();
   const parts: Uint8Array[] = [
     encoder.encode(
@@ -339,11 +484,5 @@ function multipartBody(wav: Uint8Array, fields: [string, string][]): Uint8Array 
     );
   }
   parts.push(encoder.encode(`--${BOUNDARY}--\r\n`));
-  const body = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-  let offset = 0;
-  for (const part of parts) {
-    body.set(part, offset);
-    offset += part.length;
-  }
-  return body;
+  return concat(parts);
 }
