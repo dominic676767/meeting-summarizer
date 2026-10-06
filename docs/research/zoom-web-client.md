@@ -10,7 +10,7 @@ Researched 2026-10-02 for the planned Zoom Platform Adapter (CONTEXT.md, ADR-000
 - The W3C Media Capture spec.
 - The Zoom web client's own HTML, JS and CSS, as served on 2026-10-02.
 
-The served client was version `web_client/7.2.0.1.12783`, plus the `web_client_pwa/7.2.0.3239` shell. To get a real meeting page, I requested Zoom's public test meeting through the form at `https://zoom.us/test`, then downloaded the meeting HTML and its JS chunks. I did not join a meeting. Nothing here comes from a live DOM, so every selector below is **UNVERIFIED-unstable**. Each one is a lead for a DOM capture, not a contract. Zoom ships a new client version often; the version string is in every asset URL.
+The served client was version `web_client/7.2.0.1.12783`, plus the `web_client_pwa/7.2.0.3239` shell. For the original 2026-10-02 research, I requested Zoom's public test meeting through the form at `https://zoom.us/test`, then downloaded the meeting HTML and its JS chunks without joining. Selectors from that source analysis are **UNVERIFIED-unstable** unless a later real-meeting result below confirms them. The 2026-10-03 and [2026-10-06 captures](zoom-capture/results-2026-10-06.md) add live DOM evidence. Zoom ships a new client version often; a capture confirms only the tested build and state.
 
 In citations, "JS" means the minified served code under `https://st1.zoom.us/web_client/7.2.0.1.12783/js/`:
 
@@ -265,8 +265,8 @@ All from the served CSS `styles.wc_meeting.min.css` and JS:
 
 **Breakouts.** No navigation or reload was found in the breakout code. A breakout join is a store-level "meeting reset" with a loading layer (JS). It is documented as isolated audio and video ([KB0060313]), and cloud recording "will only record the main meeting" ([KB0062540]).
 
-- Expect the caption DOM to be torn down and rebuilt, and tab audio to switch to the room.
-- Whether existing caption elements survive (so the `WeakMap` keys stay stable) is **UNVERIFIED** (U7).
+- The 2026-10-06 live tests confirmed that the caption root is removed and recreated on room entry and return. An adapter must find the new root and attach its observer again.
+- One recorder captured remote speech before room entry, inside Room 1 and after return. The test did not supply continuous speech during the transitions, so it does not prove gap-free audio. Caption observer recovery remains **UNVERIFIED** (U7).
 
 **Signals an adapter could use:**
 
@@ -301,12 +301,12 @@ All from the served CSS `styles.wc_meeting.min.css` and JS:
 - Capture can start only after the user invokes the extension, on the active tab ([chrome-tabcapture]).
 - "Capture is maintained across page navigations within the tab" and stops when the tab closes ([chrome-tabcapture]). Neither the `/wc/leave` URL swap nor a breakout reset should stop it.
 - The stream ID from `getMediaStreamId` "can only be used once and expires after a few seconds" ([chrome-tabcapture]). It can be used in an offscreen document from Chrome 116 ([chrome-capture-howto]).
-- I found no Chrome documentation of issues specific to Zoom, COOP/COEP-isolated tabs, or iframe audio. Tab capture is a whole-tab capture, so iframe audio should be included. **UNVERIFIED** (U12).
+- I found no Chrome documentation of issues specific to Zoom or COOP/COEP-isolated tabs. The 2026-10-06 research harness captured remote speech from the joined `app.zoom.us` meeting inside `iframe#webclient`. Pre-Join-Audio capture and local echo remain **UNVERIFIED** (U12); this result does not establish behavior for every isolation policy.
 
 **A second microphone stream from the offscreen document while Zoom holds the mic.**
 
 - An offscreen document with reason `USER_MEDIA` is for `getUserMedia()` streams. It "can't be focused", has no lifetime limit (unlike `AUDIO_PLAYBACK`'s 30 s rule), and only one can be open at a time ([chrome-offscreen]).
-- The Media Capture spec allows a lock to fail access: "If a hardware error such as an OS/program/webpage lock prevents access … reject p with … NotReadableError" ([w3c-mediacapture], CRD 9 Oct 2025). Whether Chrome shares one input device between the Zoom tab and the extension's offscreen document without `NotReadableError` is not documented. **UNVERIFIED** (U13); it may differ by OS, e.g. Windows exclusive mode.
+- The Media Capture spec allows a lock to fail access: "If a hardware error such as an OS/program/webpage lock prevents access … reject p with … NotReadableError" ([w3c-mediacapture], CRD 9 Oct 2025). On macOS, the 2026-10-06 harness held live tab and offscreen microphone tracks while Zoom used computer audio, after microphone permission was granted in a visible extension page. No `NotReadableError` occurred. The attempted local speech produced near-silent audio and no caption, so useful local voice capture remains **UNVERIFIED** (U13), as do Windows and Linux behavior.
 - **`audioCapture`:**
   - Chromium's `extensions/common/api/_permission_features.json` grants `audioCapture` to `platform_app`. For `extension` it is allowlisted to specific IDs only (crbug 292856, 409192, 496954, 431978) ([chromium-perm]).
   - The extensions permission list does not include it ([chrome-perms]).
@@ -316,6 +316,10 @@ All from the served CSS `styles.wc_meeting.min.css` and JS:
     - the mechanism ADR-0007 describes ("`audioCapture` grants the microphone … without prompting") would be wrong.
 
   This is outside Zoom scope but on the same audio path; verification is U14.
+  In the 2026-10-06 harness, `permissions.getAll()` did not return `audioCapture`.
+  A visible extension page changed microphone permission from `prompt` to `granted`;
+  the later offscreen microphone start succeeded. Fresh-profile behavior in the
+  complete product remains part of issue #49.
 
 ---
 
@@ -344,7 +348,7 @@ All from the served CSS `styles.wc_meeting.min.css` and JS:
 - The **"Allow users to hide feature disclaimers"** setting covers prompts for recording, Zoom AI, livestreaming and captions ([KB0077405]). Captions are therefore one of the features Zoom treats as needing a disclaimer prompt.
 - Transcripts carry an optional "Custom disclaimer for transcripts … when transcripts are enabled" ([KB0085675]).
 
-**Relevance.** An extension recording tab audio and scraping captions bypasses every one of these: Zoom's consent prompt, the host's recording permission, and the Active Apps Notifier. The other participants get no Zoom-side notice. ADR-0007's disclosure covers the *local user's* microphone, not the other participants. Product and legal owners should decide whether the Zoom adapter needs its own notice; this document makes no recommendation.
+**Relevance and #48 decision.** The extension does not notify other participants or trigger Zoom's built-in recording notices when it captures tab audio or page captions. ADR-0007's disclosure covers the local user's microphone. The chosen scope for #48 is [README guidance only](../../README.md#participant-notice-and-consent): users must notify participants and obtain any required consent before audio or caption capture. No additional notice UI is part of this decision.
 
 ---
 
@@ -373,31 +377,103 @@ These come from one 2-person meeting on `app.zoom.us` in iframe mode: the host p
 - **U9, one data point:**
   - With 2 participants in speaker view, neither tile carried a `--active` class, and no `.asntip` label was present. This fits "a 1:1 call has no usable indicator".
   - Tile names were confirmed in `.video-avatar__avatar-footer > span`, and in `img.video-avatar__avatar-img[alt]` when the person has a photo.
-- **Not captured:**
+- **Not captured in this session:**
   - the full-transcript panel: no `lt-full-transcript` markup in any capture, so U5 and U6 are open;
   - breakout rooms: the "breakout" captures only show the toolbar auto-hiding (`footer__hidden`, `meeting-header__hidden`), so U7 is open;
   - the pre-join preview, the waiting room, and 3 or more participants.
 
-## UNVERIFIED: what a DOM capture or test would settle
+## Real-meeting results, 2026-10-06 (#37, second session)
 
-Each item needs a capture in a real meeting: two accounts, one host, one participant, captions on. Save `document.documentElement.outerHTML` from **both** frames, plus `location.href` at each step.
+The host used the signed-in external Chrome app. The user had prepared Participant A/B/C
+in Chrome, Firefox and Safari. Two temporary Chrome participants, D and E, supplied
+synthetic speech through browser microphone inputs. After the meeting was recreated,
+Participant A supplied another controlled speech clip. Zoom produced the captured
+captions; the test did not insert caption text into the page. The tested meeting used
+`iframe#webclient` and assets from `web_client/7.1.0.3.12693`.
+
+- **U4, further evidence:** D and E each produced caption text with an `aria-hidden`
+  initials icon (`PD` or `PE`), without a separate full speaker name in the overlay.
+  A later overlay retained one row from each speaker. Both rows used
+  `id="live-transcription-subtitle"`. The adapter must read all matching rows, not assume
+  that this ID is unique. Later captures contain Participant A's initials (`PA`) and
+  caption text in a retained row with `style="display: none;"`. These establish three
+  speaking test participants across sessions. Three speakers retained together in
+  one overlay, and a speaking profile photo, remain untested.
+- **U9, further evidence:** `.speaker-bar-container__video-frame--active` identified
+  D and E in separate speaker-view captures. A six-person gallery showed
+  `.gallery-video-container__video-frame--active` on D. Names were present in tile
+  footers. The overlay still held E's earlier text while D was active, so the current
+  active tile must not be used to assign every retained caption row to one speaker.
+  In a later four-person gallery, F's active class remained while all four people
+  were muted. The participant panel exposed muted/video-off accessible labels and
+  `audio-muted` SVG classes. It uses React Virtualized and must not be treated as a
+  complete roster in larger meetings. Hide Non-Video left all four tiles visible
+  when all cameras were off; its menu changed to Show Non-Video Participants. Six
+  gallery-sort choices were captured. Share layout, mixed-camera hiding, actual
+  muted speech and participant-panel speaking icons remain open.
+- **U7, DOM round trip confirmed:** the top document, meeting iframe, meeting document
+  and URLs stayed the same through breakout entry and automatic return. The caption
+  root was removed and recreated. Its observed object identity changed from 4 in the
+  main session to 5 in the breakout room and 6 after return. These numbers are capture
+  identifiers, not DOM IDs. Captions needed to be shown again after both transitions;
+  breakout entry also required the displayed English-language prompt to be saved.
+  Captures include `Joining Room 1...`, `Returning to Main Session...`, and the room
+  closing dialog with 50 seconds remaining. A later independent sampler recorded
+  125 changed states during one audio recording. Its caption root identities were
+  4, 9 and 13; these are a separate identity sequence from the first capture.
+  The top document, iframe, meeting document and URL stayed the same. Remote speech
+  was present before entry, inside Room 1 and after return. Join Audio and Show
+  Captions needed to be used again after room changes. Audio during the transitions
+  and caption observer recovery remain unverified.
+- **U5/U6, blocked by the tested account:** the inspected caption and More menus did
+  not expose View Full Transcript, and no full-transcript root was captured.
+  Account settings showed Meeting transcript disabled and locked by the
+  administrator. The precise mapping to the client flag `isEnableViewFullTranscript`
+  is unverified. No account setting was changed.
+- **U11, shared language confirmed:** with translation off, Participant B selected
+  French. The confirmation said that captions would appear in that language for
+  everyone. The host stayed on English before Save; both host and participant
+  showed French after Save. English was then restored. Recognition accuracy and
+  independent translated captions remain untested.
+- **U8, timeout captured:** host and participant later displayed “Joining Meeting
+  Timeout or Browser restriction”, with Report Problem, Retry and Leave controls.
+  The cause and Retry behaviour are unverified. The user then created a new meeting;
+  the host and Participant A were observed there. This is not evidence of recovery
+  of the earlier meeting.
+
+Nineteen trimmed fixtures, source timestamps, the transition sequences, audio measurements
+and remaining tests are listed in the [session evidence report](zoom-capture/results-2026-10-06.md).
+The temporary D/E sessions were closed. A further automated anonymous join was
+refused by Zoom and was closed without bypassing the restriction. The recorder
+research harness captured remote speech in signed-in Chrome and held a live microphone
+track after a visible permission grant. These results do not verify useful local voice
+capture, caption observer recovery or the complete extension flow.
+Issue #37 remains open.
+
+## Verification checklist and remaining tests
+
+The table records the original questions. The two session reports above partly settle
+U1, U4, U7, U8, U9, U11, U12, U13 and U14; they do not complete the whole checklist. For each remaining
+state, save `document.documentElement.outerHTML` from both frames and each
+`location.href` privately, then produce a trimmed fixture. Use the participant count,
+account features and browser state required by that row.
 
 | # | Claim | What settles it |
 |---|---|---|
 | U1 | Path rule (§1); top-frame URL during an iframe-mode meeting is `/wc/<id>/join?fromPWA=1`; Chrome reports the `/wc/leave` `replaceState` through `tabs.onUpdated` | Log `tabs.onUpdated` and the top and frame URLs through join → preview → meeting → leave → feedback, for `zoom.us/j` → browser join and for `app.zoom.us/wc` Home → Join |
 | U2 | Vanity-host meetings stay top-level on `<vanity>.zoom.us/wc/...` | Join a meeting owned by a vanity account from its own link |
 | U3 | ZoomGov hosts and paths (`zoomgov.com`, `app.zoomgov.com`?) | One capture from a ZoomGov meeting |
-| U4 | Overlay lines hold no name text; avatar initials or photo only; legacy vs new overlay in current builds | Overlay DOM with 3 speakers (with and without a profile photo) |
-| U5 | View full transcript and Request transcription work in the Web App; which admin setting maps to `isEnableViewFullTranscript` | Toggle "Allow all meeting participants to view transcripts during the meeting" and check the menu and panel as a participant |
-| U6 | Full-transcript panel row markup, name-on-change rule, virtualization and auto-scroll behaviour while hidden or scrolled | Panel DOM during a 10-minute, multi-speaker stretch; scroll up and back |
-| U7 | Breakout join and return re-render in place; caption elements, frame and URL survive or are replaced; tab capture continues | Capture before, during and after a breakout round trip, including the 60 s close |
-| U8 | Selectors: `#wc-footer`, `.footer__leave-btn-container`, `.preview-root`, `.waiting-room-container`, `#wc-leave`, `.dialog-reconnect-container`, `.head-meeting-topic` | One capture per lifecycle state in §4, including host-ends and network drop |
-| U9 | `--active` tile classes, the "Talking:" label conditions, participants-panel speaking icons, behaviour of muted users, follow-host order | Gallery, speaker and share layouts with 2, 3 and 6 participants; one muted speaker; one camera-off speaker with Hide Non-video on |
+| U4 | Overlay speaker data, retained rows and repeated IDs; legacy vs new overlay | D, E and A are captured across sessions; A's retained rows are hidden. Add three speakers in one retained overlay and a speaking profile photo; check name data outside spoken caption text. |
+| U5 | View full transcript and Request transcription work in the Web App; which admin setting maps to `isEnableViewFullTranscript` | Blocked on the tested account: Meeting transcript is disabled and locked by the administrator. Use an account where it is permitted, then check the participant menu and panel. |
+| U6 | Full-transcript panel row markup, name-on-change rule, virtualization and auto-scroll behaviour while hidden or scrolled | Requires the U5 account capability. Capture panel DOM during a 10-minute, multi-speaker stretch; scroll up and back. |
+| U7 | Breakout join and return re-render in place; caption elements, frame and URL survive or are replaced; tab capture continues | One recording contains remote speech before, inside and after a room round trip. Caption roots are replaced. Test continuous speech during transitions and caption observer recovery. |
+| U8 | Selectors: `#wc-footer`, `.footer__leave-btn-container`, `.preview-root`, `.waiting-room-container`, `#wc-leave`, `.dialog-reconnect-container`, `.head-meeting-topic` | Capture each remaining lifecycle state in §4. A join-timeout/browser-restriction dialog is captured, but its cause and recovery are unverified. |
+| U9 | `--active` tile classes, the "Talking:" label conditions, participants-panel speaking icons, behaviour of muted users, follow-host order | Speaker-view and six-person-gallery active classes, four muted panel rows, all-video-off Hide Non-Video and six sort choices are captured. Complete share layout, other counts, actual muted speech, mixed-camera hiding and speaking indicators. |
 | U10 | Default of "See myself as the active speaker while speaking" in the Web App | Web App Settings → Video on a fresh profile |
-| U11 | Caption language / "speaking language" set by a participant affects accuracy for all | Two participants with mismatched languages |
-| U12 | Tab output carries remote audio only after Join Audio; no local echo; iframe audio is captured; COOP/COEP tab is capturable | Record with the existing recorder on `app.zoom.us`; speak locally with mic test off and on |
-| U13 | A concurrent offscreen `getUserMedia` mic works while Zoom holds the mic (macOS, Windows, Linux) | Run Capture Start after Zoom has joined audio; record any `NotReadableError` |
-| U14 | `audioCapture` is ignored for this extension ID, and how the offscreen mic is actually granted today | Load the built extension; check chrome://extensions warnings; call `navigator.permissions.query({name:"microphone"})` in the offscreen document on a fresh profile |
+| U11 | Caption language / "speaking language" set by a participant affects accuracy for all | With translation off, B's saved French setting propagated to the host; English was restored. Test recognition accuracy after a mismatch and independent translated captions if available. |
+| U12 | Tab output carries remote audio only after Join Audio; no local echo; iframe audio is captured; COOP/COEP tab is capturable | Joined iframe remote audio is confirmed with the existing recorder in the harness. Test pre-Join-Audio behavior, confirmed local speech and echo. |
+| U13 | A concurrent offscreen `getUserMedia` mic works while Zoom holds the mic (macOS, Windows, Linux) | Mac tab and mic tracks were live after a visible permission grant, without `NotReadableError`. Useful local speech and Windows/Linux behavior remain unverified. |
+| U14 | `audioCapture` is ignored for this extension ID, and how the offscreen mic is actually granted today | The harness did not list `audioCapture` in granted permissions. Visible-page permission changed from prompt to granted and enabled a later mic start. Test fresh-profile product behavior under #49. |
 
 ---
 

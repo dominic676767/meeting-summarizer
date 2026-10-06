@@ -46,10 +46,76 @@ served client code (`docs/research/zoom-web-client.md`), not a fact.
 - `zoom-in-meeting.html`: 2 people, speaker view, captions on.
 - `zoom-host-ended.html`: the ended-by-host dialog, with the leave button still present.
 
+The following captures are from 2026-10-06, with client assets
+`web_client/7.1.0.3.12693`:
+
+- `zoom-caption-speaker-d.html`: D's caption overlay and the visible speaker bar, with
+  D's active tile.
+- `zoom-caption-speaker-e.html`: E's caption overlay and the visible speaker bar, with
+  E's active tile.
+- `zoom-gallery-six.html`: six participant tiles, D's active tile, and retained D/E
+  caption rows. The two rows have the same `live-transcription-subtitle` ID.
+- `zoom-breakout-caption.html`: E's caption text in the breakout room after captions
+  were enabled again.
+- `zoom-breakout-closing.html`: caption text and the actual room-closing dialog, with
+  50 seconds remaining.
+- `zoom-main-caption-restored.html`: E's caption text after automatic return to the
+  main session and enabling captions again.
+- `zoom-breakout-joining.html`: the visible `Joining Room 1...` loading state.
+- `zoom-breakout-returning.html`: the visible `Returning to Main Session...` state.
+- `zoom-transcript-admin-disabled.html`: account-settings DOM showing Meeting
+  transcript disabled and locked by the administrator. This is not meeting-frame DOM.
+- `zoom-gallery-nonvideo-hidden.html`: four video-off tiles remain visible after
+  Hide Non-Video Participants was selected; the menu then offers Show Non-Video
+  Participants.
+- `zoom-participants-muted.html`: four muted participant rows, their accessible
+  labels and muted-audio SVG classes, with Participant F's active tile retained.
+- `zoom-gallery-sort-menu.html`: the six observed first-name, last-name and
+  entry-time sorting choices.
+- `zoom-caption-language-confirmation.html`: the French selection and confirmation
+  that the caption language changes for everyone.
+- `zoom-caption-language-french-host.html`: the host's French caption-language menu
+  after Participant B saved the shared change.
+- `zoom-caption-language-french-participant.html`: Participant B's French
+  caption-language menu after the same change.
+- `zoom-caption-language-english-restored.html`: the host's English caption-language
+  menu after English was saved again.
+- `zoom-join-timeout.html`: the join-timeout or browser-restriction dialog and its
+  Report Problem, Retry and Leave controls.
+
+Two later fixtures add Participant A after the meeting was recreated:
+
+- `zoom-caption-speaker-a-hidden.html` — main-meeting caption at 09:09:44.954 UTC.
+- `zoom-main-caption-a-return-hidden.html` — caption after return from Room 1 at
+  09:45:10.025 UTC.
+
+Both preserve the observed `style="display: none;"` on the retained caption row.
+They show stored caption text after speech; they are not visible speaking snapshots.
+
+Each file includes its source basename, UTC capture time and scope in a comment.
+Participant F is the anonymized host. These are DOM excerpts with a fixture wrapper;
+they do not reproduce the complete meeting page. Caption text, relevant classes and
+repeated caption IDs are preserved. Speaker bars show only a subset of the meeting.
+See the [session evidence report](../../docs/research/zoom-capture/results-2026-10-06.md)
+for the observations and test limits.
+
+The muted capture shows that an active-tile class alone does not prove current
+speech. The participant panel is virtualized and may contain only part of a larger
+roster. The Hide Non-Video capture covers an all-video-off meeting only. The language
+captures have translation off and prove a shared setting change, not recognition
+accuracy. The timeout dialog does not establish its cause or a successful recovery.
+
 ## Capturing more
 
-Join in Chrome as a participant. In the meeting tab's DevTools console (context `top`), define
-`zoomDump` from #37 and call it once per state; it saves the top document and the iframe
-separately, each headed by its URL. Raw captures contain names, emails, meeting IDs, meeting
-passwords in URLs, and photo URLs. **Never commit one raw.** Cut it down to the elements a
-test needs, replace every name with *Participant A/B/…*, and drop inline styles and image URLs.
+Follow the [#37 capture steps](../../docs/research/zoom-capture/README.md). They include
+`zoomDump`, a URL logger, and the required meeting states. Run `zoomDump` in the meeting
+tab's DevTools Console with context `top`. It saves a JSON file with the top document and
+the `#webclient` iframe, plus each URL. The guide gives a separate frame capture procedure
+if the top document cannot read the iframe.
+
+Raw captures contain names, emails, meeting IDs, meeting passwords in URLs, and photo URLs.
+**Never commit one raw.** Keep raw files outside the repository. Extract only the HTML
+elements a test needs, replace every name with *Participant A/B/…*, and remove emails,
+meeting IDs, passwords, inline styles, and image URLs before saving a fixture here.
+Keep only a narrowly selected visibility style when the test depends on it. The two
+Participant A fixtures retain only `display: none;` on the caption row.

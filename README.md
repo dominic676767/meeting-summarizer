@@ -17,6 +17,14 @@ Then in Chrome or Edge: `chrome://extensions` → enable **Developer mode** → 
 
 Unlike a Firefox temporary add-on, an unpacked Chromium extension survives browser restarts; click *Reload* on its card after each `npm run build`.
 
+## Participant notice and consent
+
+**You are responsible for notifying other participants and obtaining any required consent before the extension captures meeting audio or captions.** Follow applicable recording and privacy laws, your organisation's policies, and the meeting platform's terms.
+
+The extension does not notify other participants or trigger the meeting platform's built-in recording notices. This applies to Teams and to the planned Zoom web client support, including caption-only capture. A browser permission or your own microphone consent does not obtain consent from other participants.
+
+Tell participants how you intend to use the recording, transcript, and summary, including whether audio or transcripts will be sent to external providers you select.
+
 ## Use
 
 1. Open Settings (extension options), pick a Provider and paste its API key.
