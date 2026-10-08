@@ -214,7 +214,13 @@ async function beginCaptureSpan(tabId: number, s: MeetingSession): Promise<void>
     s.recordingId = recordingId;
     // The span joins the Meeting's Audio Recording; the earlier ones stay exactly
     // as they were recorded.
-    s.spans = orderedSpans([...s.spans, span]);
+    s.spans = orderedSpans([
+      ...s.spans,
+      {
+        ...span,
+        startOffsetMs: Math.max(0, s.recordingStartedAt - s.startedAt),
+      },
+    ]);
     // A recorder that started but reported a fault: the audio is being written,
     // some of it may be missing, and the captions carry the meeting regardless.
     s.captureWarning = reply.error

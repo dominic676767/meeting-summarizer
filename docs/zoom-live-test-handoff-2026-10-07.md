@@ -2,7 +2,63 @@
 
 The user asked to resume the four live Zoom tests. Work resumed on 7 October 2026. The pause checkpoint remains unchanged. The latest status below replaces the earlier progress and pending actions in this note.
 
-## Latest status — 8 October 2026 Zoom End completion pass
+## Latest status — 9 October 2026 agent live checks and timestamp checkpoint
+
+The agent performed two new live tests through the real Zoom web client. In each test, the agent selected **End**, then **End Meeting for All**. The extension created the report automatically, without a manual recording stop, report request, or retry.
+
+| Check | Result and evidence |
+| --- | --- |
+| First agent Zoom End | Passed. **End** was selected at **2026-10-08T16:09:22.754Z**, then **End Meeting for All** at **16:09:43.974 UTC**. Report `(2).html` was written at **16:10:32 UTC**. The later **16:12:05.948 UTC** check showed recording stopped, no offscreen recorder, and a cleared badge. |
+| Second agent Zoom End | Passed. **End** was selected at **2026-10-08T16:49:46 UTC**, then **End Meeting for All** at **16:50:22.981 UTC**. Report `(3).html` was written at **16:57:14 UTC**. The **16:57:45.054 UTC** check showed `done`, recording stopped, `inMeeting: false`, no offscreen recorder, and a cleared badge. |
+| Remote speech | Passed in the second run. Participant A's speech travelled through Zoom and appeared in report `(3).html`. **Amber Bridge 9** appears once at **08:06**. |
+| Fresh microphone denial and recovery in Settings | Passed while idle. A native Chrome refusal produced the blocked-access message and left the retry button enabled at **16:20:05.973 UTC**. A new native Allow action produced the allowed-access message at **16:20:50.575 UTC**. |
+| Physical microphone | The earlier user-reported physical test remains a separate pass. The agent's speaker playback in the first run does not establish a physical microphone pass. |
+| Long-recording transcript quality | Failed. Report `(3).html` has false repeated text, including 30 standalone **next room** segments and 27 standalone **bathroom** segments. Six repeated courtesy segments occur 120 seconds apart. |
+
+The new reports are:
+
+- `/Users/domhong/Downloads/meeting-summaries/2026-10-08-Dominic-Hong-s-Zoom-Meeting (2).html`
+- `/Users/domhong/Downloads/meeting-summaries/2026-10-08-Dominic-Hong-s-Zoom-Meeting (3).html`
+
+Report `(2).html` also contains false repeated text and does not contain its expected remote marker. Report `(3).html` shows a **27:19** session and an audio transcript. These checks establish automatic report creation and later recorder cleanup. They do not measure immediate closure of the OS microphone indicator.
+
+### Transcription checks on retained real Zoom audio
+
+The agent retained **34.98 seconds** of real Zoom audio and ran the production browser audio decode, local Whisper model **base**, English language, and transcript filtering. Three fresh decoder runs used the current configuration, `max_new_tokens: 256`, and `max_new_tokens: 445`. All three produced the same correct remote passage, including **Amber Bridge 9**, with two accepted transcript spans. Increasing the decoder token limit did not change this result.
+
+The agent also checked **13.992 seconds** of quiet audio before the remote speech. All three configurations produced the raw phrase **Thank you**. The production courtesy filter rejected it, leaving no accepted spans. This reproduces a raw quiet-audio error. It does not reproduce the accepted false repeated text from the long report. No decoder or silence threshold change is justified by these checks.
+
+Evidence is saved under:
+
+- `.eval/zoom-agent-live-2026-10-08/`
+- `.eval/whisper-ab-2026-10-09/`
+
+### Timestamp fix in this checkpoint
+
+The background previously set the capture span offset before the recorder finished starting. A delayed start could place recorded speech too early in the transcript. The offset now uses the actual recorder start time from the offscreen reply. If the reply has no start time, it uses the current time after the reply. The audio file ID and earlier spans remain unchanged.
+
+Two new tests cover the reply timestamp and its fallback. The reply test uses a later response clock, so it proves that the recorder timestamp takes precedence. Validation passed **577 tests in 36 files, 0 skipped**, including the real local Whisper model test, and TypeScript checking. This correction still needs a new live check of its timestamp accuracy.
+
+### What still prevents completion
+
+The remaining failure is false repeated text in long audio transcripts. The short real-audio tests do not establish its cause or a working fix. Successful report creation normally deletes the stored recording, so the long report alone cannot support a matching full-audio analysis. Retain the next new test recording before ending the meeting.
+
+Active microphone permission loss, recovery during recording, two-input accuracy, echo, timestamp accuracy, duration accuracy, and immediate OS microphone cleanup remain open. Do not mark the full manual checklist complete.
+
+### Next live test steps
+
+1. Build the checkpoint and reload the extension while it is idle. Use a new Zoom host meeting and Participant A in a second browser window. Keep both cameras off.
+2. Start extension recording with its local microphone enabled. Mute the host's Zoom microphone. Confirm that recording bytes increase and no capture error is present.
+3. Record at least **125 seconds**. Speak a known local passage. Send a different known passage from Participant A through Zoom before and after the 120-second boundary. Include a quiet interval, one planned repeated sentence, and a unique final marker. Record each playback time.
+4. Retain the complete test audio before automatic report cleanup. Do not use the old long recording that the user asked to stop analysing.
+5. Select Zoom **End**, then **End Meeting for All**. Observe automatic processing and the new HTML download.
+6. Check both local and remote passages, the final marker, the planned repeat, false added text, transcript times, and report duration against the recorded test times.
+7. Check the badge, recording state, offscreen recorder closure, and OS microphone indicator immediately after completion.
+8. In a separate new recording, remove microphone permission during capture. Check that remote audio continues, the warning appears, and local recording can recover after access is restored.
+
+Private audio and temporary test helpers are excluded from the checkpoint commit.
+
+## Earlier status — 8 October 2026 Zoom End completion pass
 
 The user reported that recording was on, they ended the Zoom meeting, and the following report was produced:
 

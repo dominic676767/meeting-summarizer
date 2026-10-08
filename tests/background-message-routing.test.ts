@@ -457,6 +457,57 @@ describe("background runtime message routing", () => {
     expect(browser.query).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { replyStartedAt: 7000, clockAfterReply: 9000, actualStartedAt: 7000, startOffsetMs: 5000 },
+    { replyStartedAt: null, clockAfterReply: 9000, actualStartedAt: 9000, startOffsetMs: 7000 },
+  ])(
+    "uses recorder start time for the span offset when the reply start is $replyStartedAt",
+    async ({ replyStartedAt, clockAfterReply, actualStartedAt, startOffsetMs }) => {
+      const listener = await loadListener();
+      const { ensureSession, getSession } = await import("../src/background/sessions");
+      const session = await ensureSession(42, "zoom");
+      session.startedAt = 2000;
+      session.recordingId = "recording";
+      session.spans = [{ spanId: "recording.0", startOffsetMs: 0 }];
+      const now = vi.spyOn(Date, "now").mockReturnValue(5000);
+      let currentRecorderStatus = recorderStatus();
+      browser.sendMessage.mockImplementation(async (message: OffscreenMessage) => {
+        if (message.type === "offscreen-start") {
+          now.mockReturnValue(clockAfterReply);
+          currentRecorderStatus = recorderStatus({
+            recording: true,
+            tabId: message.tabId,
+            spanId: message.spanId,
+            startedAt: replyStartedAt,
+          });
+        }
+        return currentRecorderStatus;
+      });
+
+      try {
+        await listener({ type: "start-capture", tabId: 42 }, {});
+
+        expect(browser.sendMessage).toHaveBeenCalledWith({
+          type: "offscreen-start",
+          streamId: "zoom-stream",
+          spanId: "recording.3000",
+          tabId: 42,
+          mic: false,
+        });
+        expect(await getSession(42)).toMatchObject({
+          recording: true,
+          recordingStartedAt: actualStartedAt,
+          spans: [
+            { spanId: "recording.0", startOffsetMs: 0 },
+            { spanId: "recording.3000", startOffsetMs },
+          ],
+        });
+      } finally {
+        now.mockRestore();
+      }
+    },
+  );
+
   it("coalesces two starts while stream access is pending", async () => {
     const listener = await loadListener();
     const { ensureSession, getSession } = await import("../src/background/sessions");
