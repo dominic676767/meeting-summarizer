@@ -27,7 +27,7 @@ A later read-only check from an extension page at **2026-10-08T10:40:22.687Z** r
 
 The later check also found a stale meeting flag and warning badge on the Zoom home page. The final source change clears `inMeeting` after Zoom End, tab closure, or navigation away from a meeting, including completed and empty sessions. Session recovery also clears this flag. Manual summarization keeps the meeting flag while the meeting remains open.
 
-Validation of checkpoint **`204d5f3`** passed: **564 automated tests, 1 skipped**, TypeScript checking, and the production build. The skipped test requires an opt-in model download. The final meeting-status change has automated coverage but has **not been reloaded or retested live**.
+Validation of checkpoint **`204d5f3`** passed: **564 automated tests, 1 skipped**, TypeScript checking, and the production build. The skipped test requires an opt-in model download. The later committed-build check below verifies session recovery and the cleared badge after reload. A new live Zoom End run on this exact revision remains untested.
 
 The file hash, extracted evidence, later runtime check, and result are saved in [the Zoom End completion evidence report](/Users/domhong/Projects/meeting-summarizer/.eval/zoom-end-completion-2026-10-08/report.md). The original HTML and earlier evidence are unchanged. Private audio and runtime evidence remain outside the commit. The user requested this working-version commit on 8 October 2026. It is saved on branch **`zoom-36-web-client`** and has not been pushed.
 
@@ -35,7 +35,17 @@ The file hash, extracted evidence, later runtime check, and result are saved in 
 
 This follow-up change is separate from checkpoint `204d5f3`. The recorder checks microphone track state during its existing signal poll and retries a microphone-loss notification every 2 seconds until the background accepts it. An event ignored before recording starts is no longer reported as accepted. Tab audio recording continues after microphone loss, and the warning remains in recorder status.
 
-Validation passed: **574 automated tests, 1 skipped**, TypeScript checking, the production build, and `git diff --check`. The focused recorder and message-routing tests passed **73 tests**. This change has **not been reloaded or tested live**. The physical microphone revocation check remains open.
+This change is committed as **`aee9fd2`**. Initial validation passed **574 automated tests, 1 skipped**. The focused recorder and message-routing tests passed **73 tests**. The later full run enabled the real Whisper model check and passed **575 tests in 36 files, 0 skipped**. TypeScript checking, the production build, and `git diff --check` also passed.
+
+## Committed-build check — 8 October 2026
+
+Chrome was reloaded while the recorder was idle with `dist/` built from **`aee9fd2`**. Settings opened in its own tab through Chrome's **Extension options** link. At **2026-10-08T12:25:43.677Z**, the extension-page check showed manifest version **0.1.1**, microphone permission **granted**, no recorder, a recovered Zoom session with `inMeeting: false`, and a cleared badge with **Meeting Summarizer — no meeting detected**.
+
+The agent selected **Allow microphone access** in that Settings tab. At **2026-10-08T12:27:40.803Z**, the button was enabled again and displayed **Microphone access is allowed. Return to the meeting and start recording.** This passes the button request with permission already granted. A new permission prompt, denial recovery, and the OS microphone indicator were not checked.
+
+The committed build is loaded and its Settings access and session recovery checks passed. No new meeting recording was made during this check. Physical microphone revocation or removal during recording, two-person mixing, and echo remain open. The earlier four live functional passes still apply to their separate recorded runs.
+
+The safe runtime output and button result are saved in [the committed-build evidence report](/Users/domhong/Projects/meeting-summarizer/.eval/zoom-checkpoint-validation-2026-10-08/report.md). Private evidence remains outside the commit.
 
 ## Earlier status — 8 October 2026 manual physical microphone pass
 
