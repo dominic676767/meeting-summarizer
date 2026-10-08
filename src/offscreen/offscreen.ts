@@ -21,6 +21,7 @@ import { mixCapture, type MixGraph } from "./audio-mix";
 import { FRESH_WATCH, noSignalDetail, observeSamples, type SignalWatch } from "./signal";
 import { microphonePermission } from "./microphone-permission";
 import { observeCaptureHealth, startCaptureHealth } from "./capture-health";
+import { MIC_REVOKED_WARNING } from "../background/capture-signal";
 
 let recorder: MediaRecorder | undefined;
 let context: AudioContext | undefined;
@@ -112,6 +113,50 @@ function webAudioGraph(ctx: AudioContext): MixGraph<AudioNode> & { readonly mix:
  */
 const SIGNAL_POLL_MS = 500;
 const RECORDER_STOP_TIMEOUT_MS = 10_000;
+const MIC_NOTIFICATION_RETRY_MS = 2_000;
+
+/** Keep microphone loss visible even if the first event or reply is lost. */
+function watchMicrophone(
+  owner: { tabId: number; spanId: string },
+  microphone: MediaStream | undefined,
+): () => void {
+  const tracks = microphone?.getAudioTracks() ?? [];
+  let acknowledged = false;
+  let nextAttemptAt = 0;
+
+  const check = () => {
+    if (
+      tracks.length === 0 ||
+      captureOwner !== owner ||
+      recorder?.state !== "recording" ||
+      tracks.some((track) => track.readyState === "live")
+    ) return;
+
+    micError ??= MIC_REVOKED_WARNING.detail ?? "The microphone stopped.";
+    if (acknowledged) return;
+    const now = Date.now();
+    if (now < nextAttemptAt) return;
+
+    nextAttemptAt = now + MIC_NOTIFICATION_RETRY_MS;
+    void ext.runtime
+      .sendMessage({
+        type: "mic-track-ended",
+        tabId: owner.tabId,
+        spanId: owner.spanId,
+      } satisfies OffscreenEventMessage)
+      .then((reply) => {
+        if (captureOwner === owner && recorder?.state === "recording" && reply?.ok === true) {
+          acknowledged = true;
+        }
+      })
+      .catch(() => {
+        // The existing signal poll retries while this capture is active.
+      });
+  };
+
+  for (const track of tracks) track.addEventListener("ended", check);
+  return check;
+}
 
 function failCapture(
   detail: string,
@@ -146,6 +191,7 @@ function watchSignal(
   ctx: AudioContext,
   mix: AudioNode,
   owner: { tabId: number; spanId: string },
+  checkMicrophone: () => void,
 ): void {
   const analyser = ctx.createAnalyser();
   // The largest window the analyser offers — about 0.7s at 48 kHz — so each read
@@ -163,6 +209,7 @@ function watchSignal(
   let health = startCaptureHealth(Date.now(), ctx.currentTime, encodedBytes);
   signalTimer = setInterval(() => {
     if (captureOwner !== owner) return;
+    checkMicrophone();
     const observation = observeCaptureHealth(
       health,
       Date.now(),
@@ -262,14 +309,7 @@ async function start(
   // The recording survives — the remote participants are still captured — so this
   // must NOT end the Meeting. What it must do is stop the span claiming to hold
   // the local user, because from here on it does not.
-  for (const track of micStream?.getTracks() ?? []) {
-    track.addEventListener("ended", () => {
-      if (captureOwner !== owner || recorder?.state !== "recording") return;
-      void ext.runtime
-        .sendMessage({ type: "mic-track-ended", tabId, spanId } satisfies OffscreenEventMessage)
-        .catch(() => {});
-    });
-  }
+  const checkMicrophone = watchMicrophone(owner, micStream);
 
   // One AudioContext sums the tab and the microphone into one destination, and
   // keeps the tab playing to the speakers on the way past — tabCapture stops the
@@ -316,7 +356,7 @@ async function start(
   currentRecorder.start(5_000);
   startedAt = Date.now();
   // Start the watcher only after storage and the encoder are ready.
-  watchSignal(context, graph.mix, owner);
+  watchSignal(context, graph.mix, owner, checkMicrophone);
 }
 
 async function stop(): Promise<void> {

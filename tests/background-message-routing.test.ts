@@ -550,6 +550,58 @@ describe("background runtime message routing", () => {
     expect((await getSession(42))?.captureWarning).toEqual(MIC_REVOKED_WARNING);
   });
 
+  it("shows microphone loss on the badge without opening the popup or stopping tab capture", async () => {
+    const listener = await loadListener();
+    const { ensureSession, getSession } = await import("../src/background/sessions");
+    const session = await ensureSession(42, "zoom");
+    session.recording = true;
+    session.micRecording = true;
+    session.localMicrophone = true;
+    session.spans = [{ spanId: "recording.1000", startOffsetMs: 1000 }];
+    browser.sessionSet.mockClear();
+    browser.sendMessage.mockClear();
+
+    expect(await listener(
+      { type: "mic-track-ended", tabId: 42, spanId: "recording.1000" },
+      {},
+    )).toEqual({ ok: true });
+
+    expect(await getSession(42)).toMatchObject({
+      recording: true,
+      micRecording: false,
+      localMicrophone: false,
+      micError: MIC_REVOKED_WARNING.detail,
+      captureWarning: MIC_REVOKED_WARNING,
+    });
+    expect(browser.setBadgeText).toHaveBeenCalledWith({ text: "REC!", tabId: 42 });
+    expect(browser.setTitle).toHaveBeenCalledWith({
+      title: expect.stringContaining(MIC_REVOKED_WARNING.message),
+      tabId: 42,
+    });
+    expect(browser.sessionSet).toHaveBeenCalled();
+    expect(browser.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("accepts a retried microphone-loss event once capture startup is recorded", async () => {
+    const listener = await loadListener();
+    const { ensureSession, getSession } = await import("../src/background/sessions");
+    const session = await ensureSession(42, "zoom");
+    const event = { type: "mic-track-ended", tabId: 42, spanId: "recording.1000" };
+    browser.sessionSet.mockClear();
+
+    expect(await listener(event, {})).toEqual({ ok: false });
+    expect(browser.sessionSet).not.toHaveBeenCalled();
+
+    session.recording = true;
+    session.micRecording = true;
+    session.localMicrophone = true;
+    session.spans = [{ spanId: "recording.1000", startOffsetMs: 1000 }];
+
+    expect(await listener(event, {})).toEqual({ ok: true });
+    expect((await getSession(42))?.captureWarning).toEqual(MIC_REVOKED_WARNING);
+    expect(browser.setBadgeText).toHaveBeenCalledWith({ text: "REC!", tabId: 42 });
+  });
+
   it("ignores a sound event after recording has stopped", async () => {
     const listener = await loadListener();
     const { ensureSession, getSession } = await import("../src/background/sessions");
@@ -603,10 +655,10 @@ describe("background runtime message routing", () => {
     browser.sessionSet.mockClear();
     browser.sendMessage.mockClear();
 
-    await listener(
+    expect(await listener(
       { ...event, tabId: 42, spanId: "recording.old" },
       { tab: { id: 99 } },
-    );
+    )).toEqual({ ok: event.type !== "mic-track-ended" });
 
     const updated = await getSession(42);
     expect(updated?.captureFailure).toBeNull();

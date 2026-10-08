@@ -851,7 +851,7 @@ ext.runtime.onMessage.addListener((raw: unknown, sender) => {
   if (msg.type === "mic-track-ended") {
     return (async () => {
       const s = await getSession(msg.tabId);
-      if (!s?.recording || !ownsCaptureEvent(msg.spanId, s)) return { ok: true };
+      if (!s?.recording || !ownsCaptureEvent(msg.spanId, s)) return { ok: false };
       // The recording continues on the remote participants alone. Two things have
       // to change or the artifact lies: this Meeting no longer holds the whole of
       // the local user, and the user deserves to know while they can still act.

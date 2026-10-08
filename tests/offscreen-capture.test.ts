@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OffscreenMessage, OffscreenStatusReply } from "../src/messages";
+import { MIC_REVOKED_WARNING } from "../src/background/capture-signal";
 
 type OffscreenListener = (message: unknown) => unknown;
 
@@ -159,6 +160,15 @@ async function send(message: OffscreenMessage): Promise<OffscreenStatusReply> {
   const listener = capture.onMessage.mock.calls[0]?.[0];
   if (!listener) throw new Error("Offscreen listener was not registered.");
   return (await listener(message)) as OffscreenStatusReply;
+}
+
+function microphoneNotifications(spanId?: string) {
+  return capture.sendMessage.mock.calls
+    .map(([message]) => message)
+    .filter((message) =>
+      message.type === "mic-track-ended" &&
+      (spanId === undefined || message.spanId === spanId),
+    );
 }
 
 beforeEach(async () => {
@@ -617,11 +627,190 @@ describe("offscreen audio capture", () => {
     expect(await send({ type: "offscreen-status" })).toMatchObject({
       recording: true,
       micRecording: false,
+      micError: MIC_REVOKED_WARNING.detail,
     });
     expect(capture.sendMessage).toHaveBeenCalledWith({
       type: "mic-track-ended",
       tabId: 42,
       spanId: "zoom-span",
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(await send({ type: "offscreen-status" })).toMatchObject({
+      recording: true,
+      micRecording: false,
+      encodedBytes: expect.any(Number),
+    });
+    expect((await send({ type: "offscreen-status" })).encodedBytes).toBeGreaterThan(0);
+    expect(microphoneNotifications()).toHaveLength(1);
+    expect(capture.stopRecorder).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { outcome: "rejected", reply: undefined },
+    { outcome: "unaccepted", reply: { ok: false } },
+    { outcome: "missing", reply: undefined },
+  ])("retries a $outcome microphone-loss reply until accepted", async ({ outcome, reply }) => {
+    if (outcome === "rejected") {
+      capture.sendMessage.mockRejectedValueOnce(new Error("Background is unavailable."));
+    } else {
+      capture.sendMessage.mockResolvedValueOnce(reply);
+    }
+    await send({
+      type: "offscreen-start",
+      streamId: "zoom-stream",
+      spanId: "zoom-span",
+      tabId: 42,
+      mic: true,
+    });
+    capture.micTrack?.end();
+
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(microphoneNotifications()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(microphoneNotifications()).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(microphoneNotifications()).toHaveLength(2);
+    expect(await send({ type: "offscreen-status" })).toMatchObject({
+      recording: true,
+      micRecording: false,
+      micError: MIC_REVOKED_WARNING.detail,
+    });
+    expect(capture.stopRecorder).not.toHaveBeenCalled();
+  });
+
+  it("retries a microphone-loss message whose reply never arrives", async () => {
+    capture.sendMessage.mockReturnValueOnce(new Promise(() => {}));
+    await send({
+      type: "offscreen-start",
+      streamId: "zoom-stream",
+      spanId: "zoom-span",
+      tabId: 42,
+      mic: true,
+    });
+    capture.micTrack?.end();
+
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(microphoneNotifications()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(microphoneNotifications()).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(microphoneNotifications()).toHaveLength(2);
+    expect(capture.stopRecorder).not.toHaveBeenCalled();
+  });
+
+  it("detects microphone loss when Chrome omits the ended event", async () => {
+    await send({
+      type: "offscreen-start",
+      streamId: "zoom-stream",
+      spanId: "zoom-span",
+      tabId: 42,
+      mic: true,
+    });
+    capture.micTrack!.readyState = "ended";
+    expect(microphoneNotifications()).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(microphoneNotifications()).toEqual([
+      { type: "mic-track-ended", tabId: 42, spanId: "zoom-span" },
+    ]);
+    expect(await send({ type: "offscreen-status" })).toMatchObject({
+      recording: true,
+      micRecording: false,
+      micError: MIC_REVOKED_WARNING.detail,
+    });
+  });
+
+  it("detects microphone loss during AudioContext startup after the recorder starts", async () => {
+    let releaseResume!: () => void;
+    capture.resume.mockImplementation(() =>
+      new Promise<void>((resolve) => { releaseResume = resolve; }),
+    );
+    const started = send({
+      type: "offscreen-start",
+      streamId: "zoom-stream",
+      spanId: "zoom-span",
+      tabId: 42,
+      mic: true,
+    });
+    try {
+      await vi.waitFor(() => expect(capture.resume).toHaveBeenCalledOnce());
+      capture.micTrack?.end();
+      expect(microphoneNotifications()).toHaveLength(0);
+    } finally {
+      releaseResume();
+    }
+    await started;
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(microphoneNotifications()).toHaveLength(1);
+    expect(await send({ type: "offscreen-status" })).toMatchObject({
+      recording: true,
+      micRecording: false,
+      micError: MIC_REVOKED_WARNING.detail,
+    });
+  });
+
+  it("cancels microphone-loss retries when recording stops", async () => {
+    capture.sendMessage.mockResolvedValue({ ok: false });
+    await send({
+      type: "offscreen-start",
+      streamId: "zoom-stream",
+      spanId: "zoom-span",
+      tabId: 42,
+      mic: true,
+    });
+    capture.micTrack?.end();
+    await send({ type: "offscreen-stop" });
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(microphoneNotifications()).toHaveLength(1);
+    expect(await send({ type: "offscreen-status" })).toMatchObject({
+      recording: false,
+      micError: MIC_REVOKED_WARNING.detail,
+    });
+  });
+
+  it("does not let a late microphone-loss reply suppress a new capture's retries", async () => {
+    let acceptOld!: (reply: { ok: boolean }) => void;
+    capture.sendMessage.mockImplementation((message) => {
+      if (message.type !== "mic-track-ended") return Promise.resolve({ ok: true });
+      if (message.spanId === "zoom-span") {
+        return new Promise((resolve) => { acceptOld = resolve; });
+      }
+      return Promise.resolve({ ok: false });
+    });
+    await send({
+      type: "offscreen-start",
+      streamId: "zoom-stream",
+      spanId: "zoom-span",
+      tabId: 42,
+      mic: true,
+    });
+    capture.micTrack?.end();
+    await send({ type: "offscreen-stop" });
+    capture.getUserMedia
+      .mockResolvedValueOnce(testStream(capture.stopTabTrack))
+      .mockResolvedValueOnce(testStream(capture.stopMicTrack));
+    await send({
+      type: "offscreen-start",
+      streamId: "new-stream",
+      spanId: "new-span",
+      tabId: 42,
+      mic: true,
+    });
+    capture.micTrack?.end();
+    acceptOld({ ok: true });
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(microphoneNotifications("zoom-span")).toHaveLength(1);
+    expect(microphoneNotifications("new-span")).toHaveLength(2);
+    expect(await send({ type: "offscreen-status" })).toMatchObject({
+      recording: true,
+      spanId: "new-span",
+      micRecording: false,
+      micError: MIC_REVOKED_WARNING.detail,
     });
   });
 

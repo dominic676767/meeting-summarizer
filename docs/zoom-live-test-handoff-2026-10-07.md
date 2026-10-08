@@ -27,9 +27,15 @@ A later read-only check from an extension page at **2026-10-08T10:40:22.687Z** r
 
 The later check also found a stale meeting flag and warning badge on the Zoom home page. The final source change clears `inMeeting` after Zoom End, tab closure, or navigation away from a meeting, including completed and empty sessions. Session recovery also clears this flag. Manual summarization keeps the meeting flag while the meeting remains open.
 
-Validation of this checkpoint passed: **564 automated tests, 1 skipped**, TypeScript checking, and the production build. The skipped test requires an opt-in model download. The final meeting-status change has automated coverage but has **not been reloaded or retested live**.
+Validation of checkpoint **`204d5f3`** passed: **564 automated tests, 1 skipped**, TypeScript checking, and the production build. The skipped test requires an opt-in model download. The final meeting-status change has automated coverage but has **not been reloaded or retested live**.
 
-The file hash, extracted evidence, later runtime check, and result are saved in [the Zoom End completion evidence report](/Users/domhong/Projects/meeting-summarizer/.eval/zoom-end-completion-2026-10-08/report.md). The original HTML and earlier evidence are unchanged. Private audio and runtime evidence remain outside the commit. The user requested this working-version commit on 8 October 2026.
+The file hash, extracted evidence, later runtime check, and result are saved in [the Zoom End completion evidence report](/Users/domhong/Projects/meeting-summarizer/.eval/zoom-end-completion-2026-10-08/report.md). The original HTML and earlier evidence are unchanged. Private audio and runtime evidence remain outside the commit. The user requested this working-version commit on 8 October 2026. It is saved on branch **`zoom-36-web-client`** and has not been pushed.
+
+## Follow-up change after the checkpoint — microphone notification recovery
+
+This follow-up change is separate from checkpoint `204d5f3`. The recorder checks microphone track state during its existing signal poll and retries a microphone-loss notification every 2 seconds until the background accepts it. An event ignored before recording starts is no longer reported as accepted. Tab audio recording continues after microphone loss, and the warning remains in recorder status.
+
+Validation passed: **574 automated tests, 1 skipped**, TypeScript checking, the production build, and `git diff --check`. The focused recorder and message-routing tests passed **73 tests**. This change has **not been reloaded or tested live**. The physical microphone revocation check remains open.
 
 ## Earlier status — 8 October 2026 manual physical microphone pass
 
