@@ -40,6 +40,7 @@ Where an answer changes a decision, it belongs in the ADR as well. #24's Chrome-
 - [ ] **The user does not hear themselves.** `tests/mic-capture.test.ts` asserts the absence of the `mic → speakers` wire, which is the only way to catch a loopback outside a real call — but an echo is inaudible in the Audio Recording and audible only to the person wearing the headphones, so somebody has to wear them.
 - [ ] **A microphone denied at the OS level degrades to tab-only capture** rather than failing the recording, and the popup says which of the three causes happened (switched off, disclosure unanswered, refused). The states are pure and tested; that Chromium's actual refusal lands in the "refused" one is not.
 - [ ] **Chrome microphone access is requested from Settings in its own tab.** Open Settings from the popup and from Chrome's extension manager. Both must open a separate extension tab. With the microphone enabled and the disclosure answered, starting capture without Chrome access must pause capture and open that Settings tab. Select **Allow microphone access**, allow the Chrome prompt, return to the meeting, and start again. The temporary permission stream must close after access is granted. If an old embedded Settings view is still open, its button must open a separate tab; select the button in that tab to request access. An unsupported view must not be reported as blocked access.
+  - **Partial pass — 8 October 2026, Chrome 154.0.0.0, extension 0.1.1, build from `aee9fd2`.** Chrome's Extension options link opened Settings in a separate tab. With permission already granted, the Settings button opened a real audio stream, stopped its track, and showed the success message. At the 5-second check, no track was live and no test cleanup was needed. The fresh permission prompt, refusal recovery, capture restart, popup link, and old embedded view remain open.
 
 ## The recording badge (#24)
 
@@ -57,7 +58,8 @@ What the badge says for a given session is a pure function — `badgeFor` in `sr
 Both of these decide how much this extension's own indicator has to carry. An offscreen document has no UI. Chrome microphone access must be requested from the visible Settings page before offscreen capture starts (ADR-0007).
 
 - [ ] **Does Chrome show any microphone-in-use indicator for a `getUserMedia` call made in an offscreen document** rather than in the meeting tab? The meeting tab's microphone pip is not expected to light, since the call is not in that tab.
-- [ ] **Does `chrome://settings/content/microphone` list the extension after consent**, giving the user a findable way to revoke it?
+- [x] **Does `chrome://settings/content/microphone` list the extension after consent**, giving the user a findable way to revoke it?
+  - **Passed — 8 October 2026, Chrome 154.0.0.0, extension 0.1.1, build from `aee9fd2`.** Meeting Summarizer appeared under **Allowed to use your microphone**. Chrome supplied a **Remove Meeting Summarizer from the Allowed to use your microphone list** control. No permission was changed. Revocation during recording remains open.
 
 ### Microphone loss recovery
 

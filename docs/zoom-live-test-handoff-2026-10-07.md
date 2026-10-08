@@ -43,9 +43,13 @@ Chrome was reloaded while the recorder was idle with `dist/` built from **`aee9f
 
 The agent selected **Allow microphone access** in that Settings tab. At **2026-10-08T12:27:40.803Z**, the button was enabled again and displayed **Microphone access is allowed. Return to the meeting and start recording.** This passes the button request with permission already granted. A new permission prompt, denial recovery, and the OS microphone indicator were not checked.
 
+At **2026-10-08T12:33:42.177Z**, a temporary probe observed the button's native `getUserMedia` call open a real audio track in the `live` state. At **12:33:42.278Z**, that track was `ended`. At the 5-second check, no track was live and no probe cleanup was needed. The probe delegated the real request and returned its stream without changing it; it then restored the original method. The temporary build helper was removed. This passes temporary permission-stream closure with permission already granted. It does not test a fresh permission prompt.
+
+At **2026-10-08T12:35:41.808Z**, Chrome's microphone Settings page listed **Meeting Summarizer** under **Allowed to use your microphone** and supplied a Remove control. This passes the permission-listing check in the manual checklist. No permission was changed, so revocation during capture remains untested.
+
 The committed build is loaded and its Settings access and session recovery checks passed. No new meeting recording was made during this check. Physical microphone revocation or removal during recording, two-person mixing, and echo remain open. The earlier four live functional passes still apply to their separate recorded runs.
 
-The safe runtime output and button result are saved in [the committed-build evidence report](/Users/domhong/Projects/meeting-summarizer/.eval/zoom-checkpoint-validation-2026-10-08/report.md). Private evidence remains outside the commit.
+The safe runtime output, button result, temporary-stream result, and Chrome permission listing are saved in [the committed-build evidence report](/Users/domhong/Projects/meeting-summarizer/.eval/zoom-checkpoint-validation-2026-10-08/report.md). Private evidence remains outside the commit.
 
 ## Earlier status — 8 October 2026 manual physical microphone pass
 
