@@ -77,7 +77,7 @@
       <input type="text" id="bedrock-model" />
     </fieldset>
 
-    <h2>Recording</h2>
+    <h2 id="microphone">Recording</h2>
 
     <label style="font-weight: 400">
       <input type="checkbox" id="mic-capture" style="width: auto" />
@@ -100,6 +100,8 @@
       switch transcription to the local engine below.
     </p>
     <p class="note">Takes effect the next time you start recording.</p>
+    <button type="button" id="mic-access">Allow microphone access</button>
+    <p class="note" id="mic-access-status" role="status" aria-live="polite"></p>
 
     <h2>Transcription</h2>
     <label for="transcription-provider">Engine that turns the meeting's audio into words</label>

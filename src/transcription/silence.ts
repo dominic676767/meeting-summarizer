@@ -77,6 +77,11 @@ const WORDS_PER_MINUTE = 1;
  */
 const MAX_REQUIRED_WORDS = 8;
 
+/** Whether one engine segment contains only empty text or known silence artifacts. */
+export function isSilenceArtifact(text: string): boolean {
+  return fragmentsOf(text).every(isArtifact);
+}
+
 /**
  * Whether these Utterances carry no speech at all: nothing but empty text and
  * known engine silence artifacts.

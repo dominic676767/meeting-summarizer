@@ -121,6 +121,9 @@ export interface TranscriptionEngine {
   /** Fetch and initialise the model. Cached by the engine; called once per run. */
   load(onProgress?: (loadedBytes: number, totalBytes: number | null) => void): Promise<void>;
   transcribe(samples: Float32Array): Promise<EngineSpan[]>;
+  /** Duration submitted to the model after quiet audio is skipped. Engines that
+   * infer the whole input can omit this and use the decoded input duration. */
+  inferenceDurationMs?(samples: Float32Array): number;
   /** Release engine resources (a worker, a session). Optional. */
   close?(): Promise<void> | void;
 }
@@ -185,6 +188,7 @@ export function createTranscriptionProvider(
 
       const utterances: Utterance[] = [];
       let doneMs = 0;
+      let inferenceMs = 0;
       for (const { samples, sampleRate, startOffsetMs } of decoded) {
         const windowSamples = Math.max(1, Math.round((engine.maxInputMs / 1000) * sampleRate));
         for (let offset = 0; offset < samples.length; offset += windowSamples) {
@@ -193,9 +197,11 @@ export function createTranscriptionProvider(
           // Absolute zero for this window: where the Meeting began, not where the
           // window did and not where this span's Capture Start was.
           const baseMs = startOffsetMs + msFor(offset, sampleRate);
-          const spans = await attempt("engine failed", () =>
-            engine.transcribe(samples.subarray(offset, end)),
-          );
+          const input = samples.subarray(offset, end);
+          const spans = await attempt("engine failed", () => {
+            inferenceMs += engine.inferenceDurationMs?.(input) ?? msFor(input.length, sampleRate);
+            return engine.transcribe(input);
+          });
           for (const span of spans) {
             const utterance = toUtterance(span, baseMs);
             if (utterance) utterances.push(utterance);
@@ -207,14 +213,10 @@ export function createTranscriptionProvider(
         doneMs += msFor(samples.length, sampleRate);
       }
 
-      // The last thing the provider does is refuse to pass off silence as speech.
-      // Fed a silent recording an engine returns its filler — Whisper's is the
-      // single word "you" — and downstream nothing can tell that from a real
-      // word: it is stamped as recorded audio and replaces the caption words
-      // wholesale. Judged here because this is where the recording's own duration
-      // is known, and against that duration rather than a bare word count, so a
-      // genuinely short exchange still counts as audio.
-      const silent = rejectAsSilent(utterances, totalMs);
+      // Refuse filler output against the duration sent to the model. Local Whisper
+      // skips quiet sections, so a short sentence in a long recording must be
+      // judged against the retained audio. Progress still uses the full recording.
+      const silent = rejectAsSilent(utterances, inferenceMs);
       if (silent) throw new TranscriptionSilent(silent);
       return utterances;
     },

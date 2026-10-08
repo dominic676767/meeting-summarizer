@@ -17,6 +17,7 @@ await build({
   entryPoints: {
     background: "src/background/background.ts",
     "teams-content": "src/content/teams-content.ts",
+    "zoom-content": "src/content/zoom-content.ts",
     "capture-prompt": "src/content/capture-prompt.ts",
     offscreen: "src/offscreen/offscreen.ts",
     popup: "src/popup/popup.ts",

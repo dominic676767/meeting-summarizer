@@ -11,14 +11,21 @@
 import { ext } from "../platform";
 import type { CaptureStateReply, ContentMessage } from "../messages";
 
+const mounted = globalThis as typeof globalThis & {
+  meetingSummarizerPrompt?: () => void;
+};
+
 // One card per tab, in the top frame only — the content script also runs in
 // meeting iframes, and a card per frame would stack duplicates.
 if (window === window.top) {
   mountPrompt();
 }
 
-function mountPrompt(): void {
+export function mountPrompt(): () => void {
+  mounted.meetingSummarizerPrompt?.();
+  document.getElementById("meeting-summarizer-capture-prompt")?.remove();
   const host = document.createElement("div");
+  host.id = "meeting-summarizer-capture-prompt";
   host.style.cssText = "position:fixed;bottom:16px;left:16px;z-index:2147483647;";
   const root = host.attachShadow({ mode: "open" });
   root.innerHTML = `
@@ -71,6 +78,24 @@ function mountPrompt(): void {
   const mic = root.querySelector(".mic") as HTMLElement;
   const hint = root.querySelector(".hint") as HTMLElement;
   const dismiss = root.querySelector(".dismiss") as HTMLButtonElement;
+  let stopped = false;
+  let timer: ReturnType<typeof setInterval> | undefined;
+
+  function stop(): void {
+    stopped = true;
+    if (timer !== undefined) clearInterval(timer);
+    host.remove();
+    if (mounted.meetingSummarizerPrompt === stop) delete mounted.meetingSummarizerPrompt;
+  }
+  mounted.meetingSummarizerPrompt = stop;
+
+  function orphaned(): boolean {
+    try {
+      return !ext.runtime.id;
+    } catch {
+      return true;
+    }
+  }
 
   /**
    * What the microphone will do once capture starts, stated before it does.
@@ -82,7 +107,7 @@ function mountPrompt(): void {
   function micLine(state: CaptureStateReply["mic"]): string {
     switch (state) {
       case "armed":
-        return "Your microphone will be recorded too.";
+      return "Microphone enabled. Chrome access is required before recording.";
       case "off":
         return "Your microphone will not be recorded.";
       case "unconfirmed":
@@ -96,7 +121,15 @@ function mountPrompt(): void {
 
   dismiss.addEventListener("click", () => {
     card.hidden = true;
-    void ext.runtime.sendMessage({ type: "dismiss-prompt" } satisfies ContentMessage);
+    try {
+      void Promise.resolve(ext.runtime.sendMessage({
+        type: "dismiss-prompt",
+      } satisfies ContentMessage)).catch(() => {
+        if (orphaned()) stop();
+      });
+    } catch {
+      if (orphaned()) stop();
+    }
   });
 
   function shortcutHint(shortcut: string | null): string {
@@ -147,16 +180,23 @@ function mountPrompt(): void {
   }
 
   async function poll(): Promise<void> {
+    if (stopped) return;
+    if (orphaned()) {
+      stop();
+      return;
+    }
     try {
       const reply = (await ext.runtime.sendMessage({
         type: "get-capture-state",
       } satisfies ContentMessage)) as CaptureStateReply;
-      if (reply) apply(reply);
+      if (!stopped && reply) apply(reply);
     } catch {
-      // Background waking up — keep the last render and try next tick.
+      if (orphaned()) stop();
+      // A worker can also be waking up. Retry while this context is valid.
     }
   }
 
   void poll();
-  setInterval(() => void poll(), 1000);
+  if (!stopped) timer = setInterval(() => void poll(), 1000);
+  return stop;
 }

@@ -10,6 +10,8 @@ import type {
 } from "../domain/types";
 import { DEFAULT_TEMPLATES } from "../pipeline/templates";
 import { loadSettings, saveSettings } from "../settings";
+import { microphonePermission } from "../offscreen/microphone-permission";
+import { allowMicrophoneAccess, microphoneAccessFailure } from "./microphone-access";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const providerSelect = $<HTMLSelectElement>("provider");
@@ -84,6 +86,31 @@ transcriptionSelect.addEventListener("change", () =>
   showTranscriptionPanel(transcriptionSelect.value),
 );
 
+const microphoneAccessButton = $<HTMLButtonElement>("mic-access");
+const microphoneAccessStatus = $("mic-access-status");
+
+async function refreshMicrophoneAccess(): Promise<void> {
+  const permission = await microphonePermission();
+  microphoneAccessStatus.textContent =
+    permission === "granted"
+      ? "Microphone access is allowed. Return to the meeting and start recording."
+      : permission === "denied"
+        ? "Chrome has blocked microphone access. Change the microphone setting for this extension, then try again."
+        : "Allow microphone access before recording your voice.";
+}
+
+microphoneAccessButton.addEventListener("click", async () => {
+  microphoneAccessButton.disabled = true;
+  microphoneAccessStatus.textContent = "Select Allow in Chrome's microphone prompt.";
+  try {
+    microphoneAccessStatus.textContent = await allowMicrophoneAccess();
+  } catch (err) {
+    microphoneAccessStatus.textContent = microphoneAccessFailure(err);
+  } finally {
+    microphoneAccessButton.disabled = false;
+  }
+});
+
 async function init(): Promise<void> {
   const s = await loadSettings();
   providerSelect.value = s.provider;
@@ -111,6 +138,7 @@ async function init(): Promise<void> {
   $<HTMLTextAreaElement>("template-structured").value = s.templates.structured;
   $<HTMLTextAreaElement>("template-narrative").value = s.templates.narrative;
   for (const refresh of editorRefreshers) refresh();
+  await refreshMicrophoneAccess();
 }
 
 const editorRefreshers: Array<() => void> = [];

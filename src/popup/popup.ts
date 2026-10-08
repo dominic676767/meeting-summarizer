@@ -56,7 +56,7 @@ const DEGRADED_NO_SPEECH = "Captions only — the recording carried no speech.";
  * and "recording the meeting and you" are different facts.
  */
 const MIC_LINE: Partial<Record<MicCaptureState, string>> = {
-  armed: "Your microphone will be included.",
+  armed: "Microphone enabled. Chrome access is required before recording.",
   recording: "Microphone on — your side of the meeting is being recorded too.",
   unavailable: "Your microphone could not be used — recording the meeting audio only.",
 };
@@ -84,8 +84,28 @@ const TRANSCRIPTION_ENGINE_NAMES: Record<Settings["transcription"]["provider"], 
   openai: "OpenAI",
 };
 
-function send<T>(msg: PopupMessage): Promise<T> {
-  return ext.runtime.sendMessage(msg) as Promise<T>;
+// Bind controls to the tab in the window that opened this popup. A service-worker
+// active-tab query can resolve to a different Zoom window.
+const popupTabId = ext.tabs
+  .query({ active: true, currentWindow: true })
+  .then(([tab]) => tab?.id ?? null)
+  .catch(() => null);
+
+async function send<T>(msg: PopupMessage): Promise<T> {
+  switch (msg.type) {
+    case "get-status":
+    case "start-capture":
+    case "stop-capture":
+    case "summarize-now":
+    case "skip-transcription":
+    case "set-mic-capture": {
+      const tabId = await popupTabId;
+      if (tabId === null) throw new Error("Open the extension from the meeting tab.");
+      return ext.runtime.sendMessage({ ...msg, tabId }) as Promise<T>;
+    }
+    default:
+      return ext.runtime.sendMessage(msg) as Promise<T>;
+  }
 }
 
 /** A retry is in flight; suppress list rebuilds so focus and button state survive. */
@@ -426,13 +446,8 @@ onAction(skipBtn, { type: "skip-transcription" }, "Skipping…");
 // Either answer settles the disclosure, so the notice stops asking. Declining is
 // a real answer and is offered as plainly as accepting: a choice presented with
 // only one button is not a choice.
-micOnBtn.addEventListener("click", async () => {
-  render(await send<StatusReply>({ type: "set-mic-capture", enabled: true }));
-});
-
-micOffBtn.addEventListener("click", async () => {
-  render(await send<StatusReply>({ type: "set-mic-capture", enabled: false }));
-});
+onAction(micOnBtn, { type: "set-mic-capture", enabled: true }, "Saving…");
+onAction(micOffBtn, { type: "set-mic-capture", enabled: false }, "Saving…");
 
 settingsBtn.addEventListener("click", () => void ext.runtime.openOptionsPage());
 

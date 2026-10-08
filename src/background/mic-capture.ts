@@ -17,8 +17,8 @@ import type { MicCaptureSettings } from "../domain/types";
  * - `unconfirmed` — on in settings but the disclosure has never been confirmed,
  *   so nothing has been recorded from it yet. Actionable: the user's own voice is
  *   missing until they say yes once.
- * - `armed` — will be recorded at the next Capture Start.
- * - `recording` — live in the mix right now.
+ * - `armed` — enabled for the next Capture Start, subject to microphone access.
+ * - `recording` — microphone input connected to the recorder.
  * - `unavailable` — requested and refused: permission denied, or no input device.
  *   Tab-only capture continues, which is the point — a missing microphone costs
  *   half the words, never the meeting.
@@ -29,10 +29,9 @@ export type MicCaptureState = "off" | "unconfirmed" | "armed" | "recording" | "u
  * Whether this Capture Start should ask for the microphone at all.
  *
  * Off until the user has BOTH enabled it and answered the disclosure, and both
- * halves fail closed on their own (ADR-0007). Chromium cannot show its own prompt
- * from an offscreen document, and `audioCapture` grants the microphone without
- * one, so this extension's disclosure is not an extra courtesy — it is the only
- * disclosure that exists.
+ * halves fail closed on their own (ADR-0007). Chrome also requires microphone
+ * permission. The visible options page requests it because an offscreen document
+ * cannot show Chrome's permission prompt.
  */
 export function shouldCaptureMic(s: MicCaptureSettings): boolean {
   return s.enabled && s.confirmedAt !== null;
@@ -42,7 +41,7 @@ export interface MicCaptureView {
   settings: MicCaptureSettings;
   /** Audio is being recorded right now. */
   recording: boolean;
-  /** The microphone is live in the mix right now, as the recorder reports it. */
+  /** The microphone input is connected, as the recorder reports it. */
   micRecording: boolean;
 }
 
@@ -63,7 +62,7 @@ export function micCaptureState(v: MicCaptureView): MicCaptureState {
 export interface RecordingBadgeView {
   /** Audio is being recorded right now. */
   recording: boolean;
-  /** The microphone is live in the mix right now, as the recorder reports it. */
+  /** The microphone input is connected, as the recorder reports it. */
   micRecording: boolean;
 }
 
@@ -81,12 +80,9 @@ export interface RecordingBadgeLabel {
  * The badge has to carry this claim because the other two surfaces can be absent
  * exactly when it matters: the in-page card is dismissible for the rest of the
  * Meeting, and the popup has to be opened, which makes it something the user goes
- * looking for rather than an indicator. ADR-0007 then loads the badge with more
- * than convenience — an offscreen document raises no Chromium prompt and
- * `audioCapture` grants the microphone without one, so after a single consent this
- * extension's own surfaces are all that can say whose voice is being recorded in
- * *this* Meeting. Three letters spent equally on both facts said nothing about the
- * one that matters.
+ * looking for rather than an indicator. The badge therefore reports whether the
+ * microphone input is connected after permission has been granted. This does
+ * not confirm that the saved audio contains the user's voice.
  *
  * Deliberately blind to `micCapture.enabled`, unlike `micCaptureState`: the badge
  * reports what the recorder has open, never what the settings page asked for. So
@@ -104,13 +100,13 @@ export function recordingBadge(v: RecordingBadgeView): RecordingBadgeLabel | nul
   if (v.recording && v.micRecording) {
     return {
       text: "MIC",
-      title: "Recording, microphone on — your own voice is in the recording.",
+      title: "Recording — microphone input connected.",
     };
   }
   if (v.recording) {
     return {
       text: "REC",
-      title: "Recording, microphone off — only the other participants are being recorded.",
+      title: "Recording — meeting tab audio only.",
     };
   }
   // Null rather than a blank label: what an idle badge shows is the caption count's

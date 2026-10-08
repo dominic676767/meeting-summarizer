@@ -23,11 +23,11 @@ function view(over: Partial<BadgeView> = {}): BadgeView {
 }
 
 describe("the badge while audio is being recorded", () => {
-  it("names the microphone when it is live in the mix", () => {
+  it("names the microphone when its input is connected", () => {
     expect(badgeFor(view({ recording: true, micRecording: true, inMeeting: true }))).toEqual({
       text: "MIC",
       color: ALERT_RED,
-      title: "Recording, microphone on — your own voice is in the recording.",
+      title: "Recording — microphone input connected.",
     });
   });
 
@@ -35,7 +35,7 @@ describe("the badge while audio is being recorded", () => {
     expect(badgeFor(view({ recording: true, micRecording: false, inMeeting: true }))).toEqual({
       text: "REC",
       color: ALERT_RED,
-      title: "Recording, microphone off — only the other participants are being recorded.",
+      title: "Recording — meeting tab audio only.",
     });
   });
 
@@ -60,15 +60,13 @@ describe("the badge while a recording has a fault", () => {
   const SILENT = "No sound has reached the recording yet.";
   const MIC_LOST = "Your microphone stopped being recorded.";
 
-  it("marks a fault with the microphone live as MIC!, keeping the microphone", () => {
-    // The fault must not cost the user the fact the badge exists for: their own
-    // voice is still in the recording, and the letters still say so.
+  it("marks a warning with the microphone input connected as MIC!", () => {
     expect(
       badgeFor(view({ recording: true, micRecording: true, inMeeting: true, warning: SILENT })),
     ).toEqual({
       text: "MIC!",
       color: ALERT_RED,
-      title: `${SILENT} Recording, microphone on — your own voice is in the recording.`,
+      title: `${SILENT} Recording — microphone input connected.`,
     });
   });
 
@@ -78,19 +76,17 @@ describe("the badge while a recording has a fault", () => {
     ).toEqual({
       text: "REC!",
       color: ALERT_RED,
-      title:
-        `${MIC_LOST} ` +
-        "Recording, microphone off — only the other participants are being recorded.",
+      title: `${MIC_LOST} Recording — meeting tab audio only.`,
     });
   });
 
-  it("leads the tooltip with the fault, then says whether the microphone is live", () => {
+  it("leads the tooltip with the fault, then says whether the microphone is connected", () => {
     const withMic = badgeFor(view({ recording: true, micRecording: true, warning: SILENT }));
     const tabOnly = badgeFor(view({ recording: true, micRecording: false, warning: SILENT }));
     expect(withMic.title.startsWith(SILENT)).toBe(true);
     expect(tabOnly.title.startsWith(SILENT)).toBe(true);
-    expect(withMic.title).toContain("microphone on");
-    expect(tabOnly.title).toContain("microphone off");
+    expect(withMic.title).toContain("microphone input connected");
+    expect(tabOnly.title).toContain("meeting tab audio only");
   });
 
   it("stays Alert Red and differs from healthy recording in the text alone", () => {
@@ -196,14 +192,14 @@ describe("every state the badge can be in describes itself", () => {
   });
 
   it.each(states.filter(([, v]) => !(v.recording && v.micRecording)))(
-    "%s never claims the microphone is live",
+    "%s never claims the microphone is connected",
     (_name, v) => {
-      expect(badgeFor(v).title).not.toContain("microphone on");
+      expect(badgeFor(v).title).not.toContain("microphone input connected");
     },
   );
 
   it.each(states.filter(([, v]) => !v.recording))("%s never claims to be recording", (_name, v) => {
-    // The live states open with "Recording, …". No idle state may borrow that
+    // The live states open with "Recording — …". No idle state may borrow that
     // opening, whatever else its sentence goes on to say.
     expect(badgeFor(v).title).not.toMatch(/^Recording/);
   });

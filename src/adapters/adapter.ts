@@ -11,6 +11,8 @@ export interface CaptionSnapshot {
 
 export interface PlatformAdapter {
   readonly platform: string;
+  /** How long missing call controls may be transient before Meeting End (default 10 seconds). */
+  readonly leaveGraceMs?: number;
   /** Snapshot of all caption entries currently in the DOM. */
   readCaptions(root: ParentNode): CaptionSnapshot[];
   /** True while an active call surface is present. */

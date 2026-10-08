@@ -1,6 +1,7 @@
 // Message protocol between content scripts, background, offscreen, and popup.
 import type { CaptionSnapshot } from "./adapters/adapter";
 import type { MicCaptureState } from "./background/mic-capture";
+import type { MicrophonePermissionState } from "./offscreen/microphone-permission";
 import type {
   CaptureSpan,
   HeldRecording,
@@ -32,11 +33,11 @@ export type ContentMessage =
   | { type: "dismiss-prompt" };
 
 export type PopupMessage =
-  | { type: "get-status" }
-  | { type: "start-capture" }
-  | { type: "stop-capture" }
-  | { type: "summarize-now" }
-  | { type: "skip-transcription" }
+  | { type: "get-status"; tabId?: number }
+  | { type: "start-capture"; tabId?: number }
+  | { type: "stop-capture"; tabId?: number }
+  | { type: "summarize-now"; tabId?: number }
+  | { type: "skip-transcription"; tabId?: number }
   | { type: "list-held" }
   | { type: "retry-held"; id: string }
   | { type: "retry-held-recording"; recordingId: string }
@@ -45,7 +46,7 @@ export type PopupMessage =
    * confirms it, so the notice stops asking; `enabled: false` leaves today's
    * tab-only capture in place.
    */
-  | { type: "set-mic-capture"; enabled: boolean };
+  | { type: "set-mic-capture"; enabled: boolean; tabId?: number };
 
 export type OffscreenMessage =
   /** One Capture Span per start: the span id is the audio file it writes, and a
@@ -64,8 +65,9 @@ export type OffscreenMessage =
        */
       mic: boolean;
     }
-  | { type: "offscreen-stop" }
+  | { type: "offscreen-stop"; tabId?: number; spanId?: string }
   | { type: "offscreen-status" }
+  | { type: "offscreen-mic-permission" }
   | {
       type: "offscreen-transcribe";
       /**
@@ -82,7 +84,7 @@ export type OffscreenMessage =
        * again after a suspension. */
       tabId: number;
     }
-  | { type: "offscreen-cancel-transcribe" }
+  | { type: "offscreen-cancel-transcribe"; tabId?: number }
   /** Discards all of a Meeting's audio: a Meeting that recorded three spans must
    * leave no orphan once its Summary Artifact is written. */
   | { type: "offscreen-discard-spans"; spanIds: string[] };
@@ -95,7 +97,7 @@ export type OffscreenEventMessage =
    * crashed. Reported so no session goes on claiming `recording: true` for a
    * recording that is not happening.
    */
-  | { type: "capture-track-ended"; tabId: number }
+  | { type: "capture-track-ended"; tabId: number; spanId?: string }
   /**
    * The MICROPHONE track ended on its own, mid-recording — Chrome's site
    * controls revoked it, or the device was unplugged. Distinct from
@@ -104,11 +106,12 @@ export type OffscreenEventMessage =
    * Audio Recording contains the local user, and a span that goes on claiming
    * otherwise is the same overclaim as calling captions a transcript.
    */
-  | { type: "mic-track-ended"; tabId: number }
+  | { type: "mic-track-ended"; tabId: number; spanId?: string }
+  /** The mixed recording stream received sound for the first time in this span. */
+  | { type: "capture-signal"; tabId: number; spanId?: string }
   /**
-   * The mixed stream has been silent for a sustained window — long enough that it
-   * is not conversational turn-taking but something wrong the user can still fix
-   * (muted at the OS level, the wrong output device, a permission lost).
+   * The mixed stream has received no sound since recording started, for a
+   * sustained window. The user may still be able to fix the audio input.
    *
    * Pushed rather than waited to be polled, because the whole value of this warning
    * is that it arrives while the meeting is still happening and the popup may never
@@ -119,7 +122,9 @@ export type OffscreenEventMessage =
    * different measurement with a different rule — see `OffscreenStatusReply.
    * anySignal`.
    */
-  | { type: "capture-silent"; tabId: number; detail: string };
+  | { type: "capture-silent"; tabId: number; spanId?: string; detail: string }
+  /** The audio clock or encoder stopped. This is not evidence of silence. */
+  | { type: "capture-failed"; tabId: number; spanId: string; detail: string };
 
 export type Message =
   | ContentMessage
@@ -226,8 +231,17 @@ export interface CaptureStateReply {
   mic: MicCaptureState;
 }
 
+export interface OffscreenMicPermissionReply {
+  permission: MicrophonePermissionState;
+}
+
 export interface OffscreenStatusReply {
   recording: boolean;
+  /** The meeting and span that own the current or most recently stopped capture. */
+  tabId: number | null;
+  spanId: string | null;
+  /** A transcription keeps the offscreen document alive after capture stops. */
+  transcribingTabId: number | null;
   startedAt: number | null;
   encodedBytes: number;
   /**
@@ -251,6 +265,8 @@ export interface OffscreenStatusReply {
    * meeting is, and the two have different copy and different urgency.
    */
   micError: string | null;
+  /** Latched capture failure. Retained after stop so failed audio can be held. */
+  captureFailure?: string | null;
 }
 
 export interface OffscreenTranscribeReply {

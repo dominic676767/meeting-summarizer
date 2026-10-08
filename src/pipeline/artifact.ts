@@ -48,6 +48,7 @@ const STYLE = `
   body { font: 15px/1.5 system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
   h1 { font-size: 1.4rem; } h2 { font-size: 1.15rem; margin-top: 1.5rem; }
   .meta { color: #666; font-size: 0.85rem; }
+  .capture-warning { color: #9b2c1d; overflow-wrap: anywhere; }
   details { margin-top: 2rem; border-top: 1px solid #ddd; padding-top: 1rem; }
   summary { cursor: pointer; font-weight: 600; }
   /* Titles and transcript lines can carry an unbroken URL; prose still wraps
@@ -105,6 +106,7 @@ const NO_LOCAL_MIC_CLAUSE = "local microphone not recorded";
  * other is "check your microphone and the meeting's output device".
  */
 const NO_SPEECH_CLAUSE = "from live captions only — the recording contained no speech";
+const CAPTURE_FAILED_CLAUSE = "from live captions only — audio capture failed";
 
 /**
  * The Meta line is not enough where owners are anonymous: action items are what
@@ -166,7 +168,13 @@ function metaLine(
   // reader's, and the artifact is the one thing forwarded to people who never
   // used the extension. Duration answers what the count stood in for, in a unit
   // everyone reads, and the transcript itself is one click away.
-  parts.push(transcript.noSpeech === true ? NO_SPEECH_CLAUSE : provenanceClause);
+  if (transcript.captureError) {
+    parts.push(provenance === "captions-only"
+      ? CAPTURE_FAILED_CLAUSE
+      : `${provenanceClause} · audio capture failed`);
+  } else {
+    parts.push(transcript.noSpeech === true ? NO_SPEECH_CLAUSE : provenanceClause);
+  }
   // Only where audio was actually recorded: on a caption-only artifact the
   // microphone is beside the point, and naming it would read as a second fault
   // where there is one plain fact already stated.
@@ -210,6 +218,7 @@ export function renderArtifact(
 <body>
 <h1>${escapeHtml(transcript.title)}</h1>
 <p class="meta">${metaLine(transcript, provenanceKey, provenance.clause, opts.nameEngine === true)}</p>
+${transcript.captureError ? `<p class="capture-warning">Audio capture failed: ${escapeHtml(transcript.captureError)} The transcript can be incomplete.</p>` : ""}
 ${transcript.provenance === "audio-unattributed" ? noteUnverifiedOwners(summary) : summary}
 <details>
 <summary>${provenance.sectionLabel}</summary>

@@ -70,6 +70,8 @@ export interface Transcript {
    * must never be read as a claim that the local user was captured.
    */
   localMicrophone?: boolean;
+  /** Capture failed. The audio can be incomplete, even when captions exist. */
+  captureError?: string;
   /**
    * Which engine produced the words, recorded when the Transcript is built.
    * Whether it reaches the Summary Artifact is the reader's choice, not ours:
@@ -220,9 +222,8 @@ export interface TranscriptionSettings {
  * The meeting tab carries only the remote participants, so without the microphone
  * the user's own contributions are absent from every summary (ADR-0007). Off by
  * default all the same: recording somebody's microphone is a privacy escalation,
- * so it is disclosed and confirmed once before it ever runs — an offscreen
- * document cannot show Chromium's own permission prompt, which makes this
- * extension's disclosure the only one there is.
+ * so it is disclosed and confirmed once before it ever runs. Chrome's separate
+ * microphone permission is requested from the visible options page.
  */
 export interface MicCaptureSettings {
   enabled: boolean;
