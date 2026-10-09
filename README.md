@@ -2,7 +2,7 @@
 
 A lightweight Chromium extension (Chrome/Edge) that records a Microsoft Teams or Zoom web meeting's **tab audio**, transcribes it with **local WASM Whisper**, summarizes the meeting with **your LLM of choice** (Claude, OpenAI, Ollama, AWS Bedrock), and saves a single self-contained HTML summary — with the full transcript collapsible inside — to `Downloads/meeting-summaries/`.
 
-Zoom web client support is implemented on this branch. The four requested live functional tests passed across separate runs by 8 October 2026. See [the live test handover](docs/zoom-live-test-handoff-2026-10-07.md) for the evidence and limits. The full manual release checks remain open.
+Zoom web client support is implemented on this branch. The four requested live functional tests passed across separate runs by 8 October 2026. See [the live test handover](docs/zoom-live-test-handoff-2026-10-07.md) for the evidence and limits. The remaining transcript-quality and live-validation work is tracked in [future improvements](docs/future-improvements.md). The full manual release checks remain open.
 
 Pure WebExtension: no companion app, no backend. Transcription runs on your machine by default, so the only things that leave it are the LLM call (nothing at all, with Ollama) and the one-time Whisper model download. Cloud transcription exists but is opt-in and off until you choose it.
 
@@ -64,12 +64,12 @@ Structured (TL;DR / decisions / action items with owners / open questions — de
 ## Development
 
 ```sh
-npm test          # vitest — transcription, pipeline, Teams, Zoom, and capture
+npm test -- --exclude '**/.claude/**' --exclude '**/.eval/**'
 npm run typecheck
 npm run build     # esbuild → dist/
 
-WHISPER_INTEGRATION=1 npm test   # additionally runs real Whisper on a committed
-                                 # audio fixture (downloads the tiny model)
+WHISPER_INTEGRATION=1 npm test -- --exclude '**/.claude/**' --exclude '**/.eval/**'
+# Also runs real Whisper on a committed audio fixture (downloads the tiny model).
 ```
 
 The tests stop where the browser starts: loopback, tab capture, storage, and anything needing a second person in a real meeting cannot be asserted here. Those live in [docs/manual-checks.md](docs/manual-checks.md), to be run against a real browser before a release.

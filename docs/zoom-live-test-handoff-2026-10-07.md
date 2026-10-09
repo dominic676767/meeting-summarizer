@@ -2,6 +2,10 @@
 
 The user asked to resume the four live Zoom tests. Work resumed on 7 October 2026. The pause checkpoint remains unchanged. The latest status below replaces the earlier progress and pending actions in this note.
 
+## Follow-up scope — 9 October 2026
+
+The project owner moved the pending items to [future improvements](future-improvements.md) on 9 October 2026. That list is the current record of deferred work. The results below remain the evidence record; failed and unverified checks remain open. Merge compatibility and the original Zoom specification are reviewed separately.
+
 ## Latest status — 9 October 2026 agent live checks and timestamp checkpoint
 
 The agent performed two new live tests through the real Zoom web client. In each test, the agent selected **End**, then **End Meeting for All**. The extension created the report automatically, without a manual recording stop, report request, or retry.
@@ -39,13 +43,13 @@ The background previously set the capture span offset before the recorder finish
 
 Two new tests cover the reply timestamp and its fallback. The reply test uses a later response clock, so it proves that the recorder timestamp takes precedence. Validation passed **577 tests in 36 files, 0 skipped**, including the real local Whisper model test, and TypeScript checking. This correction still needs a new live check of its timestamp accuracy.
 
-### What still prevents completion
+### Deferred improvements and open verification
 
 The remaining failure is false repeated text in long audio transcripts. The short real-audio tests do not establish its cause or a working fix. Successful report creation normally deletes the stored recording, so the long report alone cannot support a matching full-audio analysis. Retain the next new test recording before ending the meeting.
 
 Active microphone permission loss, recovery during recording, two-input accuracy, echo, timestamp accuracy, duration accuracy, and immediate OS microphone cleanup remain open. Do not mark the full manual checklist complete.
 
-### Next live test steps
+### Future live test steps
 
 1. Build the checkpoint and reload the extension while it is idle. Use a new Zoom host meeting and Participant A in a second browser window. Keep both cameras off.
 2. Start extension recording with its local microphone enabled. Mute the host's Zoom microphone. Confirm that recording bytes increase and no capture error is present.
