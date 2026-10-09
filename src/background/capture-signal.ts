@@ -43,6 +43,10 @@ export function silenceWarning(current: CaptureWarning | null, detail: string): 
   return { message: NO_SOUND_MESSAGE, detail };
 }
 
+export function clearSilenceWarning(current: CaptureWarning | null): CaptureWarning | null {
+  return current?.message === NO_SOUND_MESSAGE ? null : current;
+}
+
 /**
  * Nothing at all reached us: no sound in the recording and no Caption Segments
  * either. Reported rather than left as a meeting that quietly produced no file,

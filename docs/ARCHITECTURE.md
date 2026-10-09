@@ -27,12 +27,12 @@ Domain words (Capture Span, Speaker Track, Held Recording…) are defined in [CO
 
 ## 1. What it does, in one picture
 
-The extension records a Teams web meeting's audio, transcribes it, uses the live captions to work out who said what, asks an LLM for a summary, and saves one HTML file. Nothing else is kept.
+The extension records a Teams or Zoom web meeting's audio, transcribes it, combines it with live captions, asks an LLM for a summary, and saves one HTML file. Teams captions can supply speaker names. Zoom captions use `Unknown` because the subtitle DOM does not supply a reliable speaker name.
 
 ```mermaid
 flowchart LR
     user(["User"])
-    teams["Teams web meeting tab<br/>audio + live captions"]
+    teams["Teams or Zoom web meeting tab<br/>audio + live captions"]
     ext["Meeting Summarizer<br/>Chromium extension"]
     hf[("Hugging Face<br/>Whisper model, one-time download")]
     stt["Cloud transcription, opt-in<br/>OpenAI / ElevenLabs /<br/>your own SageMaker endpoint"]
@@ -58,8 +58,8 @@ A Manifest V3 extension runs as several isolated contexts that only talk by mess
 
 ```mermaid
 flowchart TB
-    subgraph page["Teams tab (content scripts, every frame)"]
-        tc["teams-content.ts + adapters/teams.ts<br/>scrapes captions, detects Meeting End"]
+    subgraph page["Teams or Zoom tab (content scripts, every frame)"]
+        tc["teams-content.ts / zoom-content.ts → mount.ts → runner.ts<br/>+ adapters/teams.ts / adapters/zoom.ts<br/>scrapes captions, detects Meeting End"]
         cp["capture-prompt.ts<br/>in-page card, top frame only"]
     end
 
@@ -89,7 +89,7 @@ flowchart TB
     router --> finish
     finish --> held
     finish -- "offscreen-start / stop / transcribe / discard" --> off
-    off -- "transcription-progress, capture-silent,<br/>capture-track-ended, mic-track-ended" --> router
+    off -- "transcription-progress, capture-signal, capture-silent,<br/>capture-failed, capture-track-ended, mic-track-ended" --> router
     rec --> store
     tx -- "local engine" --> worker
     finish --> llm
@@ -118,11 +118,16 @@ Every source file, grouped by folder. Arrows mean "imports / calls into".
 flowchart LR
     subgraph content["src/content"]
         teamsContent["teams-content.ts"]
+        zoomContent["zoom-content.ts"]
+        mount["mount.ts<br/>one runner per platform and frame"]
+        runner["runner.ts<br/>shared content loop"]
         capturePrompt["capture-prompt.ts"]
+        promptPosition["prompt-position.ts<br/>drag, keyboard movement, saved position"]
     end
     subgraph adapters["src/adapters"]
         adapter["adapter.ts<br/>PlatformAdapter interface"]
         teams["teams.ts"]
+        zoom["zoom.ts"]
         accumulator["accumulator.ts<br/>TranscriptAccumulator"]
     end
     subgraph background["src/background"]
@@ -132,8 +137,10 @@ flowchart LR
         captureSignal["capture-signal.ts"]
         captureSpans["capture-spans.ts"]
         micCapture["mic-capture.ts"]
+        micAccess["microphone-access.ts"]
         badge["badge.ts"]
         meetingUrl["meeting-url.ts"]
+        restoreContent["restore-content.ts"]
         heldT["held.ts"]
         heldR["held-recordings.ts"]
         writer["artifact-writer.ts"]
@@ -141,6 +148,8 @@ flowchart LR
     subgraph offscreen["src/offscreen"]
         offscreenTs["offscreen.ts"]
         audioMix["audio-mix.ts"]
+        captureHealth["capture-health.ts"]
+        micPermission["microphone-permission.ts"]
         audioStore["audio-store.ts"]
         signal["signal.ts"]
     end
@@ -148,6 +157,7 @@ flowchart LR
         txFactory["factory.ts"]
         txProvider["provider.ts"]
         localWhisper["local-whisper.ts"]
+        whisperAudio["whisper-audio.ts"]
         whisperProtocol["whisper-protocol.ts"]
         whisperWorker["whisper-worker.ts"]
         txOpenai["openai.ts"]
@@ -181,21 +191,28 @@ flowchart LR
         types["domain/types.ts"]
         settings["settings.ts"]
         platform["platform.ts"]
+        manifestJson["manifest.json"]
     end
     subgraph ui["src/popup + src/options"]
         popupTs["popup/popup.ts"]
         optionsTs["options/options.ts"]
+        optionsMicAccess["options/microphone-access.ts"]
     end
 
     teamsContent --> teams
-    teams --> adapter
+    zoomContent --> zoom
+    teamsContent & zoomContent --> mount --> runner
+    runner --> adapter
+    teams & zoom --> adapter
     bg --> sessions --> accumulator
-    bg --> captureState & captureSignal & captureSpans & micCapture & badge & meetingUrl
+    bg --> captureState & captureSignal & captureSpans & micCapture & micAccess & badge & meetingUrl
+    meetingUrl --> manifestJson
+    bg --> restoreContent --> meetingUrl
     bg --> heldT & heldR & writer
     bg --> fusion
     bg --> pipe
     bg --> pFactory
-    offscreenTs --> audioMix & audioStore & signal
+    offscreenTs --> audioMix & captureHealth & audioStore & signal & micPermission
     offscreenTs --> txFactory
     txFactory --> localWhisper & txOpenai & elevenlabs & sagemaker
     txOpenai & elevenlabs & sagemaker --> pcm
@@ -204,6 +221,8 @@ flowchart LR
     txProvider --> pauses
     localWhisper --> whisperProtocol
     whisperWorker --> whisperProtocol
+    localWhisper --> whisperAudio
+    whisperWorker --> whisperAudio --> whisperProtocol
     fusion --> silence
     pipe --> chunking & serialize & templates & artifact
     bg --> filename
@@ -214,11 +233,14 @@ flowchart LR
     bg & micCapture & popupTs & optionsTs --> engines
     optionsTs --> awsCreds & sagemaker
     popupTs --> awsCreds
+    optionsTs --> micPermission
+    optionsTs --> optionsMicAccess --> micPermission
+    capturePrompt --> promptPosition
 ```
 
 `platform.ts` (the `chrome` namespace as `ext`), `messages.ts` (the protocol) and `domain/types.ts` (the vocabulary) are imported almost everywhere and are left off the arrows.
 
-**Pure vs browser-bound.** Most logic is pure and unit-tested: `capture-state`, `capture-signal`, `capture-spans`, `mic-capture`, `badge`, `meeting-url`, `fusion`, `silence`, `provider` (transcription), `pauses`, `aws-credentials`, `sagemaker` (its fetch is injected), `pipeline/*`, `providers/*`, `audio-mix`, `signal`. The browser-bound shells (`background.ts`, `offscreen.ts`, `audio-store.ts`, `whisper-worker.ts`, popup, options) are kept thin and checked by hand via [manual-checks.md](manual-checks.md).
+**Pure vs browser-bound.** Most logic is pure and unit-tested: `capture-state`, `capture-signal`, `capture-spans`, `capture-health`, `mic-capture`, `badge`, `meeting-url`, `fusion`, `silence`, `whisper-audio`, `provider` (transcription), `pauses`, `aws-credentials`, `sagemaker` (its fetch is injected), `pipeline/*`, `providers/*`, `audio-mix`, `signal`. The browser-bound shells (`background.ts`, `offscreen.ts`, `microphone-access.ts`, `microphone-permission.ts`, `audio-store.ts`, `whisper-worker.ts`, popup, options) are kept thin and checked by hand via [manual-checks.md](manual-checks.md). Tests cover the microphone permission check and Settings navigation with browser API substitutes. `content/runner.ts` is browser-bound too (DOM, `MutationObserver`, `ext`), but `tests/content-runner.test.ts` drives it under jsdom with a fake adapter.
 
 ---
 
@@ -230,7 +252,7 @@ The happy path: captions on, recording started, meeting ends, summary saved.
 sequenceDiagram
     autonumber
     actor U as User
-    participant CS as Content script<br/>teams-content + Teams adapter
+    participant CS as Content script<br/>runner.ts + Teams or Zoom adapter
     participant SW as Service worker<br/>background.ts
     participant OD as Offscreen doc<br/>offscreen.ts
     participant WW as Whisper worker
@@ -245,6 +267,11 @@ sequenceDiagram
     end
 
     U->>SW: Start recording (popup button or shortcut)
+    opt Local microphone enabled and disclosure answered
+        SW->>OD: offscreen-mic-permission
+        OD-->>SW: Chrome microphone permission state
+        Note over U,SW: If access is required, open Settings and pause.<br/>The user allows access, returns to the meeting, and starts again.
+    end
     SW->>SW: startCapture() → beginCaptureSpan()<br/>tabCapture.getMediaStreamId()
     SW->>OD: offscreen-start {streamId, spanId, mic}
     OD->>OD: getUserMedia(tab) + optional mic<br/>AudioContext mix → MediaRecorder, 5 s chunks
@@ -253,6 +280,7 @@ sequenceDiagram
 
     loop while recording
         OD->>OD: append chunk to OPFS / IndexedDB
+        OD->>OD: check audio clock and encoded bytes
         OD--)SW: capture-silent (only after 45 s of no signal)
     end
 
@@ -297,7 +325,7 @@ stateDiagram-v2
         detected --> idle: inMeeting = false
     }
 
-    capturing --> transcribing: finishMeeting(), audio has signal
+    capturing --> transcribing: finishMeeting(), healthy audio has signal
     capturing --> summarizing: finishMeeting(), captions only or silent audio
     capturing --> capturing: finishMeeting() found nothing to summarize
     transcribing --> summarizing: utterances, silence, cancel or failure
@@ -308,7 +336,7 @@ stateDiagram-v2
     failed --> [*]: tab closed, dropSession()
 ```
 
-Microphone state is its own axis (`micCaptureState()` in `mic-capture.ts`): `off → unconfirmed → armed → recording`, or `unavailable` if Chromium refused it. The mic is recorded only when the setting is on **and** the disclosure was answered (ADR-0007). Consent is withdrawn whenever the cloud destination changes, including from one cloud engine to another (ADR-0008).
+Microphone state is its own axis (`micCaptureState()` in `mic-capture.ts`): `off → unconfirmed → armed → recording`, or `unavailable` if Chromium refused it. The mic is recorded only when the setting is on **and** the disclosure was answered (ADR-0007). Consent is withdrawn whenever the cloud destination changes, including from one cloud engine to another (ADR-0008). Chrome must also grant microphone access. When that access is required, capture pauses and Settings opens. The visible Settings page requests access, closes the temporary stream, and tells the user to return to the meeting and start recording. A connected microphone track does not prove that speech reached the file. A capture failure clears the microphone recording flag and shows a warning.
 
 ---
 
@@ -329,7 +357,9 @@ flowchart TD
 
     cap --> hasAudio{"has a recording?"}
     hasAudio -- no --> seg
-    hasAudio -- yes --> sig{"refuseAudioAsSilent(hadAnySignal)?<br/>no signal in any span"}
+    hasAudio -- yes --> health{"capture failed?"}
+    health -- yes --> holdR
+    health -- no --> sig{"refuseAudioAsSilent(hadAnySignal)?<br/>no signal in any healthy span"}
     sig -- yes --> silentCap["noSpeech = true<br/>keep caption words"]
     sig -- no --> tx["state = transcribing<br/>transcribeRecording()"]
 
@@ -346,11 +376,11 @@ flowchart TD
     seg -- no --> nothing["state back to capturing<br/>warn if silence was the reason"]
     seg -- yes --> sum["state = summarizing<br/>summarizeAndWrite()"]
     sum --> ok{"artifact written?"}
-    ok -- yes --> done["state = done<br/>discardRecording(all spans)"]
+    ok -- yes --> done["state = done<br/>discardRecording(unless held for retry)"]
     ok -- no --> holdT["holdTranscript()<br/>state = failed"]
 ```
 
-Three outcomes of transcription are kept apart on purpose: **words** (fuse them), **silence** (not an error, nothing to retry), **failure** (hold the audio, fall back to captions now).
+Three outcomes of transcription are kept apart on purpose: **words** (fuse them), **silence** (not an error, nothing to retry), **failure** (hold the audio, fall back to captions now). Silence requires a healthy capture. If the audio clock or encoder stops, the recording is held and `noSpeech` stays false. A later retry that returns no speech cannot clear that capture failure.
 
 What the artifact says about its source (`Transcript.provenance`):
 
@@ -358,13 +388,17 @@ What the artifact says about its source (`Transcript.provenance`):
 |---|---|---|
 | `fused` | audio | caption Speaker Track; where none overlaps, the engine's diarization label, else *Unknown speaker* |
 | `audio-unattributed` | audio | no caption match: the engine's diarization label (Scribe only), else *Unknown speaker* |
-| `captions-only` | Teams captions (Degraded Capture) | captions |
+| `captions-only` | Teams or Zoom captions (Degraded Capture) | captions |
 
 ---
 
 ## 7. Recording audio
 
 One Capture Span per Capture Start, each its own file (ADR-0005). Tab and microphone are summed into one stream on one clock (ADR-0007).
+
+Before capture starts with the local microphone enabled, `microphone-access.ts` asks the offscreen document to check Chrome's permission state. A `prompt` or `denied` state opens Settings and pauses capture. The user can request access from that visible page. A granted state permits capture to start. If an OS or device error then prevents the microphone stream from opening, tab audio continues with a warning.
+
+The graph keeps references to its streams, source nodes, and monitor nodes until capture stops. `capture-health.ts` checks that the audio clock advances and that the recorder produces bytes. A clock that does not advance for 10 seconds, or an encoder that does not produce new bytes for 20 seconds, causes `capture-failed`. RMS samples count as signal only while the clock advances. The stop operation has a 10-second limit and keeps incomplete audio for recovery. Events carry the owning tab and span so an old recorder cannot change the current session.
 
 ```mermaid
 flowchart LR
@@ -375,7 +409,7 @@ flowchart LR
         speakers["destination<br/>tab plays to speakers"]
         dest["MediaStreamDestination"]
     end
-    watch["watchSignal()<br/>signal.ts RMS level"]
+    watch["watchSignal()<br/>fresh RMS and capture-health.ts"]
     mr["MediaRecorder<br/>audio/webm, 5 s timeslice"]
     store[("audio-store.ts<br/>OPFS file per spanId<br/>IndexedDB fallback")]
 
@@ -385,7 +419,8 @@ flowchart LR
     mix --> dest --> mr -- "ondataavailable chunk" --> store
     mix --> watch
     watch -- "45 s quiet" --> warn["capture-silent → SW warning"]
-    watch -- "any signal at all" --> any["anySignal in stop reply"]
+    watch -- "fresh signal" --> any["anySignal in stop reply"]
+    watch -- "clock or encoder stalled" --> failed["capture-failed → SW warning<br/>hold audio for retry"]
 ```
 
 Span bookkeeping (`capture-spans.ts`): `beginSpan()` names a span `recordingId` + offset from the Meeting start, `orderedSpans()` keeps them in Capture Start order, `spanIdsOf()` lists files to delete. The gap between two spans is audio the user chose not to record, and nothing fills it.
@@ -393,6 +428,7 @@ Span bookkeeping (`capture-spans.ts`): `beginSpan()` names a span `recordingId` 
 Tracks that end on their own are reported, not ignored:
 - tab track ended → `capture-track-ended` → `finishMeeting("capture-lost")`
 - mic track ended → `mic-track-ended` → recording continues tab-only, `localMicrophone = false`, warning shown
+- audio clock, encoder, or storage failed → `capture-failed` → capture stops, audio is held, and the artifact shows that its transcript can be incomplete
 
 ---
 
@@ -434,6 +470,8 @@ The cloud engines encode with `pcm.ts`: OpenAI and SageMaker wrap the 16-bit PCM
 
 The SageMaker engine calls the user's own endpoint with `fetch`, and signs each call with the AWS SDK's own SigV4 signer, `@smithy/signature-v4`, hashing on Web Crypto (ADR-0009). It signs with temporary AWS credentials that the service worker reads from `storage.session` and sends in `offscreen-transcribe`, only when SageMaker is the selected engine. The header `route=/v1/audio/transcriptions` sends the call to vLLM's transcription route, and `to_language` forces the Meeting Language; for the three Meeting Languages that Qwen3-ASR does not list (`he`, `no`, `uk`) no language is sent. Qwen3-ASR returns text only, so the engine sets `windowing` and the wrapper cuts its windows at pauses: each window becomes one Utterance, and fusion names it from the captions. Every failure is a `SageMakerFailure` with a kind (credentials, endpoint, container, format or other), and expired credentials are refused before any upload. Each call gives up after 90 s; there is no automatic retry. Each call caps the reply at `max_completion_tokens` (16 per second of audio + 32), and four windows are in flight at once (`concurrency`). Windows with no signal are skipped by the wrapper: Qwen3-ASR invents words for silence.
 
+`whisper-audio.ts` skips audio below an RMS floor of `0.00003`. It checks 20 ms frames, adds 0.5 seconds of context on each side, and merges overlapping ranges. The worker transcribes each retained range separately and restores its position in the recording. The local engine reports the retained duration through `inferenceDurationMs`, so the final speech check accepts a short sentence in a long, mostly quiet recording. Engines that omit this method use the decoded duration. Progress counts the full recording in both cases.
+
 ---
 
 ## 9. Summarization pipeline
@@ -468,20 +506,22 @@ Providers (`providers/factory.ts` → `createProviderClient()`): `anthropic`, `o
 
 ## 10. Failure, hold and retry
 
-A Meeting is never lost to an outage. Audio waits as a **Held Recording** if transcription failed. The Transcript waits as a **Held Transcript** if summarization failed. Each is released only once the next stage is safely stored.
+Audio waits as a **Held Recording** if capture or transcription failed. The Transcript waits as a **Held Transcript** if summarization failed. Each is released only once the next stage is safely stored. A capture failure can leave incomplete audio; the artifact reports this limit.
 
 ```mermaid
 flowchart LR
     subgraph first["First attempt — finishMeeting()"]
         txFail["transcription error"] --> hr[("Held Recording<br/>storage.local heldRecordings<br/>+ caption transcript + all spans")]
+        capFail["capture failed"] --> hr
         sumFail["summary error"] --> ht[("Held Transcript<br/>storage.local held<br/>+ recordingId, spans")]
     end
 
     popup["Popup: Retry"] -- "retry-held-recording" --> rhr["retryHeldRecording()<br/>reads CURRENT transcription settings<br/>and SageMaker credentials"]
     hr --> rhr
-    rhr -- "success or silence" --> fuse2["fuseTranscript()"] --> ht2["holdTranscript()<br/>then releaseHeldRecording()"]
+    rhr -- "words or healthy silence" --> fuse2["fuseTranscript()"] --> ht2["holdTranscript()<br/>then releaseHeldRecording()"]
     ht2 --> rh
     rhr -- "fails again" --> hr
+    rhr -- "no speech after capture failure" --> hr
 
     popup -- "retry-held" --> rh["retryHeld()<br/>reads CURRENT provider settings"]
     ht --> rh
@@ -491,7 +531,7 @@ flowchart LR
 
 Order matters: the new Held Transcript is stored **before** the Held Recording is released, so there is no moment where the audio is gone and nothing durable replaced it. `retriesInFlight` / `recordingRetriesInFlight` stop a double-click from writing two artifacts.
 
-**Waking after a crash.** `reconcileSessions()` runs on `onStartup` and `onInstalled`. A session whose tab is gone or off the meeting URL is finished (`capture-lost`). A session still in a meeting whose recorder died has `recording` set to false and gets a warning. Spans on disk are never orphaned.
+**Waking after a crash or reload.** Session writes also store a versioned checkpoint in `storage.local`. The session store is authoritative, including an empty session map; the checkpoint is used only when the session store is absent or unreadable. `reconcileSessions()` runs on `onStartup` and `onInstalled`. A recovered session whose tab is gone or off the meeting URL becomes a Held Recording or Held Transcript for manual retry. It is removed from the checkpoint only after the held item is stored. A session still in a meeting whose recorder died has `recording` set to false and gets a warning. Interrupted processing returns to `capturing` with a retry warning. Recovery does not start transcription or summarization automatically.
 
 ---
 
@@ -503,6 +543,7 @@ flowchart LR
         settingsK["settings<br/>provider, keys, templates,<br/>transcription, micCapture"]
         heldK["held<br/>Held Transcripts"]
         heldRK["heldRecordings<br/>Held Recordings"]
+        checkpointK["meetingSessionsCheckpoint<br/>versioned session fallback<br/>caption and audio span links"]
     end
     subgraph sessionS["chrome.storage.session (survives SW suspend)"]
         sessionsK["sessions<br/>MeetingSession per tab<br/>incl. caption accumulator"]
@@ -520,9 +561,10 @@ flowchart LR
 | Data | Created | Deleted |
 |---|---|---|
 | Caption accumulator | first `captions-update` | artifact written (reset), tab closed (`dropSession`) |
+| Session checkpoint | each session write | corresponding session dropped; recovered data is held first when the meeting tab is unavailable |
 | Audio span files | each Capture Start | artifact written (`offscreen-discard-spans`), unless a Held Recording still needs them |
-| Held Recording | transcription failed | its Transcript is held |
-| Held Transcript | summarization failed | its artifact is written |
+| Held Recording | capture or transcription failed, or audio session recovered without a meeting tab | its Transcript is held |
+| Held Transcript | summarization failed, or caption session recovered without a meeting tab | its artifact is written |
 | Settings | Options page save | never (user-owned) |
 | SageMaker AWS credentials | pasted on the Options page | cleared there, or when the browser closes (`storage.session`) |
 
@@ -549,6 +591,7 @@ All types are in `src/messages.ts`. Every `chrome.runtime.sendMessage` is one of
 | `retry-held` | popup → SW | `retryHeld` | re-summarize a Held Transcript |
 | `retry-held-recording` | popup → SW | `retryHeldRecording` | re-transcribe a Held Recording |
 | `offscreen-start` | SW → offscreen | `start` | open streams, mix, record |
+| `offscreen-mic-permission` | SW → offscreen | `microphonePermission` | check Chrome microphone access without opening a stream |
 | `offscreen-stop` | SW → offscreen | `stop` | flush and close the span |
 | `offscreen-status` | SW → offscreen | `status` | recorder health, mic, bytes |
 | `offscreen-transcribe` | SW → offscreen | `transcribe` | run the Transcription Provider over all spans; carries the AWS credentials only when SageMaker is selected |
@@ -557,9 +600,11 @@ All types are in `src/messages.ts`. Every `chrome.runtime.sendMessage` is one of
 | `transcription-progress` | offscreen → SW | sets `session.transcription` | popup progress line |
 | `capture-track-ended` | offscreen → SW | `finishMeeting("capture-lost")` | tab audio died |
 | `mic-track-ended` | offscreen → SW | clears mic flags, sets warning | mic revoked mid-meeting |
+| `capture-signal` | offscreen → SW | updates the owning session's signal state | fresh audio reached the capture graph |
 | `capture-silent` | offscreen → SW | `silenceWarning` | 45 s of silence, warn while still fixable |
+| `capture-failed` | offscreen → SW | records failure, stops capture, holds audio | audio clock, encoder, or storage failed |
 
-Chrome events the service worker also listens to: `commands.onCommand` (shortcut → `startCapture`), `tabs.onUpdated` (left meeting URL → `finishMeeting("navigated")`), `tabs.onRemoved` (→ `finishMeeting("tab-closed")`, `dropSession`), `runtime.onStartup` / `onInstalled` (→ `reconcileSessions`).
+Chrome events the service worker also listens to: `commands.onCommand` (shortcut → `startCapture`), `tabs.onUpdated` (left meeting URL → `finishMeeting("navigated")`), `tabs.onRemoved` (→ `finishMeeting("tab-closed")`, `dropSession`), `runtime.onStartup` / `onInstalled` (→ `reconcileSessions`, then restore content scripts in open meeting tabs). Restoring content scripts after an extension reload does not refresh the meeting page. `mountContentScript` stops the old runner before replacing it. The capture prompt also replaces its old card and stops polling when its extension context is no longer valid.
 
 ---
 
@@ -569,8 +614,10 @@ The functions to read first, by job.
 
 | Job | Function | File |
 |---|---|---|
-| Content loop: observe DOM, debounce, send diffs, detect end | `tick()` | `src/content/teams-content.ts` |
+| Content loop: observe DOM, debounce 400 ms, send diffs, detect end after the leave grace period | `startContentScript(adapter)` | `src/content/runner.ts` |
+| Replace a content runner after reinjection | `mountContentScript(adapter)` | `src/content/mount.ts` |
 | Teams DOM knowledge | `createTeamsAdapter()` | `src/adapters/teams.ts` |
+| Zoom subtitle, footer and host-end DOM knowledge | `createZoomAdapter()` | `src/adapters/zoom.ts` |
 | Caption dedupe by stable key | `TranscriptAccumulator.upsertAll()` | `src/adapters/accumulator.ts` |
 | Session load / persist | `ensureSession`, `getSession`, `persistSessions`, `sessionToTranscript` | `src/background/sessions.ts` |
 | Start a Capture Span | `startCapture` → `beginCaptureSpan` | `src/background/background.ts` |
@@ -579,13 +626,18 @@ The functions to read first, by job.
 | Summarize and save | `summarizeAndWrite` | `src/background/background.ts` |
 | Retries | `retryHeld`, `retryHeldRecording` | `src/background/background.ts` |
 | Crash recovery | `reconcileSessions` | `src/background/background.ts` |
+| Restore capture in open meeting tabs after extension install or reload | `restoreMeetingContentScripts` | `src/background/restore-content.ts` |
 | Is this URL a meeting? | `isMeetingUrl` | `src/background/meeting-url.ts` |
 | Badge text / colour | `badgeFor` | `src/background/badge.ts` |
 | Popup state | `deriveCaptureState`, `isDegraded` | `src/background/capture-state.ts` |
 | Mic gating | `shouldCaptureMic`, `micCaptureState` | `src/background/mic-capture.ts` |
+| Chrome microphone access | `prepareMicrophoneAccess` | `src/background/microphone-access.ts` |
+| Settings microphone access and unsupported-view recovery | `allowMicrophoneAccess`, `microphoneAccessFailure` | `src/options/microphone-access.ts` |
+| Microphone permission check and request | `microphonePermission`, `requestMicrophonePermission` | `src/offscreen/microphone-permission.ts` |
 | Silence rules (service worker side) | `refuseAudioAsSilent`, `silenceWarning` | `src/background/capture-signal.ts` |
 | Record | `start`, `stop`, `watchSignal` | `src/offscreen/offscreen.ts` |
 | Mix tab + mic | `mixCapture` | `src/offscreen/audio-mix.ts` |
+| Check capture progress | `startCaptureHealth`, `observeCaptureHealth` | `src/offscreen/capture-health.ts` |
 | Store audio | `openAudioStore`, `readSpan`, `deleteSpan` | `src/offscreen/audio-store.ts` |
 | Pick engine | `createTranscriptionProviderFor` | `src/transcription/factory.ts` |
 | Engine names, and which engines upload | `TRANSCRIPTION_ENGINE_NAMES`, `uploadsAudio` | `src/transcription/engines.ts` |
@@ -593,6 +645,7 @@ The functions to read first, by job.
 | One SageMaker call, its reply, its failures | `invokeInput`, `textFromResponse`, `sageMakerFailure` | `src/transcription/sagemaker.ts` |
 | The Test button's report | `testReport` | `src/transcription/sagemaker.ts` |
 | Decode, window, offset, silence check | `createTranscriptionProvider().transcribe` | `src/transcription/provider.ts` |
+| Skip quiet audio and restore timestamps | `nonSilentAudioRanges`, `whisperInferenceDurationMs`, `transcribeWhisperAudio` | `src/transcription/whisper-audio.ts` |
 | Refuse filler output | `rejectAsSilent`, `carriesNoSpeech` | `src/transcription/silence.ts` |
 | Cut windows at pauses, and find the ones with no signal | `pauseWindows`, `loudestRms` | `src/transcription/pauses.ts` |
 | Names onto words | `fuseTranscript`, `speakerTrackFrom` | `src/transcription/fusion.ts` |
@@ -614,30 +667,40 @@ The functions to read first, by job.
 | `src/messages.ts` | message protocol and reply shapes |
 | `src/domain/types.ts` | domain vocabulary types |
 | `src/settings.ts` | defaults, load/save, upgrade merge; the SageMaker credentials in `storage.session` |
-| `src/content/teams-content.ts` | content-script loop: MutationObserver, diffing, Meeting End grace period |
+| `src/content/teams-content.ts` | Teams entry point: `mountContentScript(createTeamsAdapter())` |
+| `src/content/zoom-content.ts` | Zoom entry point: `mountContentScript(createZoomAdapter())` |
+| `src/content/mount.ts` | replaces the previous runner for the same platform and frame |
+| `src/content/runner.ts` | shared content-script loop for any adapter: MutationObserver, 400 ms debounce, diffing, Meeting End grace period |
 | `src/content/capture-prompt.ts` | in-page "start recording" card in a shadow root |
-| `src/adapters/adapter.ts` | `PlatformAdapter` interface |
+| `src/content/prompt-position.ts` | moves the in-page card by pointer, buttons or keyboard; saves its relative position in `storage.local` and keeps it inside the viewport |
+| `src/adapters/adapter.ts` | `PlatformAdapter` interface, incl. optional `leaveGraceMs` (default 10 s) |
 | `src/adapters/teams.ts` | Teams caption and call-state selectors |
+| `src/adapters/zoom.ts` | Zoom subtitle capture, sliding subtitle overlap, visibility, breakout grace period and host-end detection |
 | `src/adapters/accumulator.ts` | dedupes Caption Snapshots into Caption Segments |
 | `src/background/background.ts` | service worker: router, lifecycle, retries |
-| `src/background/sessions.ts` | per-tab `MeetingSession`, mirrored to `storage.session` |
+| `src/background/sessions.ts` | per-tab `MeetingSession`, stored in `storage.session` with a versioned `storage.local` checkpoint |
 | `src/background/capture-state.ts` | session → `CaptureState`, degraded check |
 | `src/background/capture-signal.ts` | silence/no-signal warnings and decisions |
 | `src/background/capture-spans.ts` | Capture Span naming and ordering |
 | `src/background/mic-capture.ts` | microphone gate and state |
+| `src/background/microphone-access.ts` | check Chrome microphone access and open Settings when required |
 | `src/background/badge.ts` | toolbar badge decision |
-| `src/background/meeting-url.ts` | meeting-URL test (Teams hosts) |
+| `src/background/meeting-url.ts` | meeting-URL test: Teams hosts from the manifest, Zoom web-client `/wc/...` routes |
+| `src/background/restore-content.ts` | injects the correct platform entry point and prompt into open meeting tabs on install or reload |
 | `src/background/held.ts` | Held Transcript store |
 | `src/background/held-recordings.ts` | Held Recording store |
 | `src/background/artifact-writer.ts` | downloads API write, waits for completion |
 | `src/offscreen/offscreen.html` | offscreen document shell |
 | `src/offscreen/offscreen.ts` | recorder and transcription host |
+| `src/offscreen/microphone-permission.ts` | check microphone permission and request it from a visible page |
 | `src/offscreen/audio-mix.ts` | tab + mic Web Audio graph |
+| `src/offscreen/capture-health.ts` | audio clock and encoder progress checks |
 | `src/offscreen/audio-store.ts` | OPFS / IndexedDB span storage |
 | `src/offscreen/signal.ts` | RMS signal and sustained-silence measure |
 | `src/transcription/provider.ts` | engine-agnostic transcription core and errors |
 | `src/transcription/factory.ts` | engine selection |
 | `src/transcription/local-whisper.ts` | local engine: decode + worker client |
+| `src/transcription/whisper-audio.ts` | quiet audio ranges, retained duration, and timestamp offsets |
 | `src/transcription/whisper-worker.ts` | Web Worker running transformers.js Whisper |
 | `src/transcription/whisper-protocol.ts` | worker message types, model repos, options |
 | `src/transcription/openai.ts` | OpenAI transcription engine |
@@ -665,6 +728,9 @@ The functions to read first, by job.
 | `src/popup/popup.ts` | popup: status, actions, held lists |
 | `src/options/options.html` | settings markup |
 | `src/options/options.ts` | settings: providers, transcription, templates; the SageMaker credentials and its Test button |
+| `src/options/microphone-access.ts` | request microphone access from a separate Settings tab and explain failures |
+
+**Zoom web client.** The manifest loads `zoom-content.js` and `capture-prompt.js` on `zoom.us` web-client routes, including the meeting iframe. The Zoom adapter captures visible subtitles, joins overlapping sliding text, and uses the meeting footer, breakout transition and explicit host-end message to detect meeting state. Its leave grace period is 30 seconds. A native Zoom desktop meeting does not expose a browser DOM and is outside this capture path.
 
 ---
 
@@ -682,6 +748,6 @@ This file is part of the code. Update it **in the same commit** as any change th
 | A transcription engine or fusion rule | §8 |
 | Pipeline, templates, a Provider | §9 |
 | Anything stored or deleted | §11 |
-| A new platform adapter | §1, §2, §3 |
+| A new platform adapter | §1, §2, §3, §4, and its platform note in §13 |
 
 `tests/architecture-doc.test.ts` checks the mechanical part: every `src/` file path and every message `type` must appear here. It cannot check that the diagrams are still *true*. That part is on the author and the reviewer.

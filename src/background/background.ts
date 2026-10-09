@@ -20,6 +20,7 @@ import { fuseTranscript } from "../transcription/fusion";
 import { writeArtifact } from "./artifact-writer";
 import { deriveCaptureState, isDegraded } from "./capture-state";
 import {
+  clearSilenceWarning,
   foldAnySignal,
   MIC_REVOKED_WARNING,
   NOTHING_CAPTURED_WARNING,
@@ -27,10 +28,12 @@ import {
   silenceWarning,
 } from "./capture-signal";
 import { foldLocalMicrophone, micCaptureState, shouldCaptureMic } from "./mic-capture";
+import { prepareMicrophoneAccess } from "./microphone-access";
 import { badgeFor } from "./badge";
 import { beginSpan, orderedSpans, spanIdsOf } from "./capture-spans";
 import { isMeetingUrl } from "./meeting-url";
 import { TRANSCRIPTION_ENGINE_NAMES } from "../transcription/engines";
+import { restoreMeetingContentScripts } from "./restore-content";
 import { getHeld, holdTranscript, listHeld, releaseHeld, updateHeldReason } from "./held";
 import {
   getHeldRecording,
@@ -45,6 +48,7 @@ import {
   ensureSession,
   getSession,
   hasRecording,
+  isRecoveredSession,
   persistSessions,
   sessionToTranscript,
   type MeetingSession,
@@ -64,38 +68,48 @@ const action = ext.action;
 /** Only one offscreen document may exist; create it lazily with USER_MEDIA
  * (not AUDIO_PLAYBACK, which self-closes after 30s and would kill a long call)
  * plus WORKERS, because the same document later runs the local Whisper worker. */
-async function ensureOffscreenDocument(): Promise<void> {
-  if (await ext.offscreen.hasDocument()) return;
-  await ext.offscreen.createDocument({
-    url: "offscreen.html",
-    reasons: ["USER_MEDIA", "WORKERS"],
-    justification:
-      "Record the meeting's audio and the user's microphone, and transcribe what was actually said.",
-  });
+let offscreenOperations: Promise<void> = Promise.resolve();
+
+function queueOffscreen<T>(operation: () => Promise<T>): Promise<T> {
+  const next = offscreenOperations.then(operation, operation);
+  offscreenOperations = next.then(() => undefined, () => undefined);
+  return next;
 }
 
-async function closeOffscreenDocument(): Promise<void> {
-  try {
-    if (await ext.offscreen.hasDocument()) await ext.offscreen.closeDocument();
-  } catch {
-    // Already gone; nothing to release.
-  }
+async function ensureOffscreenDocument(): Promise<void> {
+  await queueOffscreen(async () => {
+    if (await ext.offscreen.hasDocument()) return;
+    await ext.offscreen.createDocument({
+      url: "offscreen.html",
+      reasons: ["USER_MEDIA", "WORKERS"],
+      justification:
+        "Record the meeting's audio and the user's microphone, and transcribe what was actually said.",
+    });
+  });
 }
 
 async function sendToOffscreen(msg: OffscreenMessage): Promise<OffscreenStatusReply> {
   return (await ext.runtime.sendMessage(msg)) as OffscreenStatusReply;
 }
 
-/** One offscreen document serves every tab, so a retry that finishes while
- * another Meeting is recording must leave it standing or it destroys that
- * Meeting's Audio Recording. */
+/** The offscreen document serves all meeting tabs. Close it only when no
+ * capture is starting and no recording or transcription is in progress. */
 async function closeOffscreenUnlessRecording(): Promise<void> {
-  try {
-    if ((await sendToOffscreen({ type: "offscreen-status" })).recording) return;
-  } catch {
-    // Unreachable — closing is what we wanted anyway.
-  }
-  await closeOffscreenDocument();
+  await queueOffscreen(async () => {
+    if (capturesStarting.size > 0) return;
+    try {
+      const status = await sendToOffscreen({ type: "offscreen-status" });
+      if (status.recording || status.transcribingTabId !== null) return;
+    } catch {
+      // The document can be absent or unreachable.
+    }
+    if (capturesStarting.size > 0) return;
+    try {
+      if (await ext.offscreen.hasDocument()) await ext.offscreen.closeDocument();
+    } catch {
+      // The document has already closed.
+    }
+  });
 }
 
 /** Promisified stream-id request; must run on the user's invocation for the
@@ -108,7 +122,27 @@ function getMediaStreamId(targetTabId: number): Promise<string> {
 // keyboard shortcut can fire again inside that window. Without this the second
 // invocation would record a Capture Span the offscreen recorder ignored (start is
 // idempotent there), leaving a span in the session with no audio behind it.
-const capturesStarting = new Set<number>();
+const capturesStarting = new Map<number, Promise<void>>();
+const capturesStopping = new Map<number, Promise<void>>();
+
+function ownsCapture(status: OffscreenStatusReply, tabId: number, s: MeetingSession): boolean {
+  const span = s.spans.at(-1);
+  return span !== undefined && status.tabId === tabId && status.spanId === span.spanId;
+}
+
+function ownsCaptureEvent(spanId: string | undefined, s: MeetingSession): boolean {
+  return spanId === undefined || s.spans.at(-1)?.spanId === spanId;
+}
+
+function recordCaptureFailure(s: MeetingSession, detail: string): void {
+  s.captureFailure ??= detail;
+  s.noSpeech = false;
+  s.localMicrophone = false;
+  s.captureWarning = {
+    message: "Audio capture failed. Saved audio is kept for recovery.",
+    detail: s.captureFailure,
+  };
+}
 
 /**
  * Begins a Capture Span. Every Capture Start writes its own audio file, so
@@ -116,13 +150,19 @@ const capturesStarting = new Set<number>();
  * an earlier span recorded (ADR-0005).
  */
 async function startCapture(tabId: number): Promise<void> {
-  const s = await getSession(tabId);
-  if (!s || s.recording || capturesStarting.has(tabId)) return; // idempotent: one recording per tab
-  capturesStarting.add(tabId);
-  try {
+  const pending = capturesStarting.get(tabId);
+  if (pending) return pending;
+  const operation = (async () => {
+    await capturesStopping.get(tabId);
+    const s = await getSession(tabId);
+    if (!s || s.recording) return;
     await beginCaptureSpan(tabId, s);
+  })();
+  capturesStarting.set(tabId, operation);
+  try {
+    await operation;
   } finally {
-    capturesStarting.delete(tabId);
+    if (capturesStarting.get(tabId) === operation) capturesStarting.delete(tabId);
   }
 }
 
@@ -132,8 +172,25 @@ async function beginCaptureSpan(tabId: number, s: MeetingSession): Promise<void>
   // whether their own voice is in this span.
   const settings = await loadSettings();
   const mic = shouldCaptureMic(settings.micCapture);
-  const streamId = await getMediaStreamId(tabId);
   await ensureOffscreenDocument();
+  if (mic) {
+    const permission = await prepareMicrophoneAccess();
+    if (permission === "prompt" || permission === "denied") {
+      s.captureWarning = {
+        message:
+          "Microphone access is required. Allow access in Settings, then return to the meeting and start recording.",
+        detail:
+          permission === "denied"
+            ? "Chrome has blocked microphone access for this extension."
+            : "Chrome must request microphone access from a visible extension page.",
+      };
+      s.micError = s.captureWarning.detail ?? null;
+      await persistSessions();
+      await updateBadge(tabId);
+      return;
+    }
+  }
+  const streamId = await getMediaStreamId(tabId);
   const recordingId = s.recordingId ?? `${tabId}-${s.startedAt}`;
   const span = beginSpan(recordingId, s.startedAt, Date.now());
   const reply = await sendToOffscreen({
@@ -143,11 +200,15 @@ async function beginCaptureSpan(tabId: number, s: MeetingSession): Promise<void>
     tabId,
     mic,
   });
-  if (!reply.recording) {
-    // getUserMedia/redeem failed — surface it rather than pretend we started.
+  if (!reply.recording || reply.tabId !== tabId || reply.spanId !== span.spanId) {
+    const anotherTabIsRecording = reply.recording
+      && reply.tabId !== null
+      && reply.tabId !== tabId;
     s.captureWarning = {
-      message: "Recording could not start. Try the toolbar icon or the shortcut again.",
-      detail: reply.error ?? "capture failed to start",
+      message: anotherTabIsRecording
+        ? "Another meeting tab is recording. Return to that tab, or stop its recording before you start this one."
+        : "Recording could not start. Try the toolbar icon or the shortcut again.",
+      detail: reply.error ?? "the recorder did not start for this meeting tab",
     };
   } else {
     s.recording = true;
@@ -155,7 +216,13 @@ async function beginCaptureSpan(tabId: number, s: MeetingSession): Promise<void>
     s.recordingId = recordingId;
     // The span joins the Meeting's Audio Recording; the earlier ones stay exactly
     // as they were recorded.
-    s.spans = orderedSpans([...s.spans, span]);
+    s.spans = orderedSpans([
+      ...s.spans,
+      {
+        ...span,
+        startOffsetMs: Math.max(0, s.recordingStartedAt - s.startedAt),
+      },
+    ]);
     // A recorder that started but reported a fault: the audio is being written,
     // some of it may be missing, and the captions carry the meeting regardless.
     s.captureWarning = reply.error
@@ -171,6 +238,8 @@ async function beginCaptureSpan(tabId: number, s: MeetingSession): Promise<void>
     // so rather than rounding up.
     s.localMicrophone = foldLocalMicrophone(s.localMicrophone, reply.micRecording);
     s.micError = reply.micError;
+    if (reply.captureFailure) recordCaptureFailure(s, reply.captureFailure);
+    else if (s.captureFailure) recordCaptureFailure(s, s.captureFailure);
   }
   await persistSessions();
   await updateBadge(tabId);
@@ -180,25 +249,42 @@ async function beginCaptureSpan(tabId: number, s: MeetingSession): Promise<void>
  * owns the Whisper worker, and tearing it down only to recreate it would throw
  * away the audio decode context for nothing. */
 async function stopRecording(tabId: number, keepOffscreen = false): Promise<void> {
-  const s = await getSession(tabId);
-  if (!s) return;
+  await capturesStarting.get(tabId);
+  const pending = capturesStopping.get(tabId);
+  if (pending) return pending;
+  const operation = stopCaptureSpan(tabId, keepOffscreen);
+  capturesStopping.set(tabId, operation);
   try {
-    const reply = await sendToOffscreen({ type: "offscreen-stop" });
+    await operation;
+  } finally {
+    if (capturesStopping.get(tabId) === operation) capturesStopping.delete(tabId);
+  }
+}
+
+async function stopCaptureSpan(tabId: number, keepOffscreen: boolean): Promise<void> {
+  const s = await getSession(tabId);
+  if (!s?.recording) return;
+  try {
+    const span = s.spans.at(-1);
+    const reply = await sendToOffscreen(span
+      ? { type: "offscreen-stop", tabId, spanId: span.spanId }
+      : { type: "offscreen-status" });
     // This span's measure of whether any sound reached the mix, OR'd into the
     // Meeting's. The stop reply is the only place it is complete, and it is a
     // different fact from the sustained-silence warning: a Meeting whose first span
     // was silent and whose second carried the whole conversation still has audio.
-    s.hadAnySignal = foldAnySignal(s.hadAnySignal, reply.anySignal);
-    if (!keepOffscreen) await closeOffscreenDocument();
+    if (ownsCapture(reply, tabId, s)) {
+      s.hadAnySignal = foldAnySignal(s.hadAnySignal, reply.anySignal);
+      if (reply.captureFailure || reply.error) {
+        recordCaptureFailure(s, reply.captureFailure ?? reply.error!);
+      } else if (reply.anySignal && !s.captureFailure) {
+        s.captureWarning = clearSilenceWarning(s.captureWarning);
+      }
+    } else {
+      recordCaptureFailure(s, "The recorder could not verify this recording.");
+    }
   } catch {
-    // Offscreen already gone (service-worker restart) — the recorder is stopped
-    // regardless; the Audio Recording written so far is preserved.
-    //
-    // And with it went any measure of this span, so it counts as having held sound.
-    // Refusing to transcribe audio nobody managed to look at would throw away a
-    // real meeting; transcribing a silent one costs a wait and is caught anyway by
-    // the check that refuses degenerate output.
-    s.hadAnySignal = true;
+    recordCaptureFailure(s, "The recorder stopped before its audio could be verified.");
   }
   s.recording = false;
   s.recordingStartedAt = null;
@@ -207,6 +293,7 @@ async function stopRecording(tabId: number, keepOffscreen = false): Promise<void
   s.micRecording = false;
   await persistSessions();
   await updateBadge(tabId);
+  if (!keepOffscreen) await closeOffscreenUnlessRecording();
 }
 
 /** The bound Capture Start shortcut, as the user's platform renders it. */
@@ -268,21 +355,38 @@ async function handleContentMessage(msg: Message, tabId: number): Promise<void> 
  * the state test-and-set below is the guard).
  */
 export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | "tab-closed" | "capture-lost" | "navigated") {
+  await capturesStarting.get(tabId);
   const s = await getSession(tabId);
   if (!s) return;
+  const meetingEnded = trigger === "auto" || trigger === "tab-closed" || trigger === "navigated";
+  if (meetingEnded) s.inMeeting = false;
   // Meeting End stops the recorder before the transcribe → summarize sequence
   // runs, and regardless of whether audio was captured, so the Audio Recording
   // is always closed cleanly.
   if (s.recording) await stopRecording(tabId, hasRecording(s));
-  if (s.state !== "capturing") return;
   // Audio alone can carry the Meeting: captions that were never turned on cost
   // speaker names, not the meeting.
-  if (s.accumulator.size === 0 && !hasRecording(s)) return;
+  if (s.state !== "capturing" || (s.accumulator.size === 0 && !hasRecording(s))) {
+    // End and navigation can arrive after processing has started or completed.
+    // Update the meeting status even when there is no more data to process.
+    if (meetingEnded) {
+      await persistSessions();
+      await updateBadge(tabId);
+    }
+    return;
+  }
 
   const captionTranscript = sessionToTranscript(s);
   let transcript = captionTranscript;
 
-  if (hasRecording(s) && s.recordingId && refuseAudioAsSilent(s.hadAnySignal)) {
+  if (hasRecording(s) && s.recordingId && s.captureFailure) {
+    s.audioWords = false;
+    s.noSpeech = false;
+    await holdRecording(
+      { recordingId: s.recordingId, transcript: captionTranscript, spans: s.spans },
+      s.captureFailure,
+    );
+  } else if (hasRecording(s) && s.recordingId && refuseAudioAsSilent(s.hadAnySignal)) {
     // No sound reached the mix for any span of this Meeting, so there is nothing in
     // the audio for a Transcription Provider to hear — and asking one anyway is
     // exactly how two Summary Artifacts came to hold Whisper's "you" under an LLM
@@ -339,20 +443,14 @@ export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | 
   }
 
   if (transcript.segments.length === 0) {
-    // Nothing was said, or nothing reached us. Not a failure and nothing to
-    // hold — leave the session as it was so a later trigger can still act.
-    //
-    // No Provider is asked either way. An LLM handed an empty transcript answers
-    // with an apology, and that apology was the summary body of both artifacts this
-    // ticket exists to remove: the guard is that this returns before summarizing.
-    //
-    // Where the silence is why, say so. A recording that carried nothing and no
-    // captions to fall back on is a Meeting that produced no file, and a user left
-    // to work that out from the absence of one has been told nothing at all.
+    // Do not send an empty transcript to the summary provider. Capture or
+    // transcription failures have already held the recording for retry.
+    // Keep the session available for a later capture and show any silence warning.
     if (s.noSpeech) s.captureWarning = NOTHING_CAPTURED_WARNING;
     s.state = "capturing";
     await persistSessions();
     await updateBadge(tabId);
+    await closeOffscreenUnlessRecording();
     return;
   }
 
@@ -362,13 +460,12 @@ export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | 
 
   try {
     await summarizeAndWrite(transcript);
-    // Nothing is retained after the artifact is written (spec: single artifact),
-    // and that includes the audio — recordings must not accumulate on disk.
+    // Remove completed audio after writing the artifact. discardRecording keeps
+    // recordings held for retry, including audio from a failed capture.
     s.state = "done";
     s.accumulator = new TranscriptAccumulator();
     await persistSessions();
-    // Every span of this Meeting, not just the last one: three spans recorded
-    // means three files to delete, or the ones left behind are orphans.
+    // Check every span so completed audio files do not remain as orphans.
     if (s.recordingId) await discardRecording(s.recordingId, s.spans);
   } catch (err) {
     console.error(`meeting-summarizer: summarization failed (${trigger})`, err);
@@ -383,7 +480,7 @@ export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | 
     s.state = "failed";
     await persistSessions();
   }
-  await closeOffscreenDocument();
+  await closeOffscreenUnlessRecording();
   await updateBadge(tabId);
 }
 
@@ -533,6 +630,11 @@ async function retryHeldRecording(recordingId: string): Promise<void> {
     let noSpeech: string | null;
     try {
       ({ utterances, noSpeech } = await transcribeHeldRecording(entry));
+      if (entry.transcript.captureError && noSpeech) {
+        throw new Error(
+          "The saved recording is incomplete. A result with no speech cannot verify the failed audio capture.",
+        );
+      }
     } catch (err) {
       await updateHeldRecordingReason(recordingId, reasonOf(err));
       throw err;
@@ -592,12 +694,21 @@ async function transcribeHeldRecording(
   }
 }
 
+function interruptCapture(s: MeetingSession, detail: string): void {
+  recordCaptureFailure(s, detail);
+  s.recording = false;
+  s.recordingStartedAt = null;
+  s.micRecording = false;
+  s.micError = null;
+  s.captureWarning = {
+    message: "Recording stopped unexpectedly — restart it to keep recording.",
+    detail,
+  };
+}
+
 async function statusFor(tabId: number): Promise<StatusReply> {
   const s = await getSession(tabId);
   const settings = await loadSettings();
-  let captureWarning = s?.captureWarning ?? null;
-  let micRecording = s?.micRecording ?? false;
-  let micError = s?.micError ?? null;
   // Poll the offscreen recorder while live so a quota failure that develops
   // mid-recording surfaces as a warning rather than a silent stop. The microphone
   // is read from the same reply for the same reason: the indicator must report the
@@ -606,45 +717,51 @@ async function statusFor(tabId: number): Promise<StatusReply> {
     try {
       const os = await sendToOffscreen({ type: "offscreen-status" });
       let changed = false;
-      if (os.error) {
-        captureWarning = {
-          message:
-            "Recording — some audio could not be saved. Captions are still being captured, so a summary will still land.",
-          detail: os.error,
-        };
-        // Written back for the same reason as the microphone below: the badge is
-        // drawn from the session, and a storage fault only this reply knew about
-        // would otherwise reach the popup and never the badge.
-        if (s.captureWarning?.detail !== os.error) {
-          s.captureWarning = captureWarning;
+      if (ownsCapture(os, tabId, s) && (os.captureFailure || os.error)) {
+        recordCaptureFailure(s, os.captureFailure ?? os.error!);
+        await stopRecording(tabId);
+        changed = true;
+      } else if (!os.recording || !ownsCapture(os, tabId, s)) {
+        interruptCapture(s, "the recorder is not recording this meeting");
+        changed = true;
+      } else {
+        if (os.anySignal && !s.captureFailure) {
+          if (s.hadAnySignal !== true) {
+            s.hadAnySignal = true;
+            changed = true;
+          }
+          const warning = clearSilenceWarning(s.captureWarning);
+          if (warning !== s.captureWarning) {
+            s.captureWarning = warning;
+            changed = true;
+          }
+        }
+        if (s.micRecording !== os.micRecording) {
+          // Written back to the session, not merely answered with: the badge is drawn
+          // from the session, so a stale `true` left here would survive this poll and
+          // keep three letters claiming a microphone the recorder has already lost.
+          s.micRecording = os.micRecording;
+          // A span that stopped holding the local user cannot be talked back into
+          // holding them, so the Summary Artifact's claim drops the same way it does
+          // when the revocation did arrive.
+          if (!os.micRecording) s.localMicrophone = false;
+          changed = true;
+        }
+        if (s.micError !== os.micError) {
+          s.micError = os.micError;
           changed = true;
         }
       }
-      micRecording = os.micRecording;
-      micError = os.micError;
-      if (s.micRecording !== os.micRecording) {
-        // Written back to the session, not merely answered with: the badge is drawn
-        // from the session, so a stale `true` left here would survive this poll and
-        // keep three letters claiming a microphone the recorder has already lost.
-        s.micRecording = os.micRecording;
-        // A span that stopped holding the local user cannot be talked back into
-        // holding them, so the Summary Artifact's claim drops the same way it does
-        // when the revocation did arrive.
-        if (!os.micRecording) s.localMicrophone = false;
-        changed = true;
-      }
-      // It corrects the badge; it does not notice in time. This function runs only
-      // when the popup asks, so a storage fault, or a microphone lost without
-      // `mic-track-ended` arriving, leaves the badge on its last claim until somebody
-      // opens the popup — the surface the badge exists to spare them. Nothing else
-      // polls the recorder, so closing that gap means giving it a trigger that does
-      // not depend on the popup.
+      // Recorder events update the badge while the popup is closed. Status also
+      // repairs the session if an event was missed.
       if (changed) {
         await persistSessions();
         await updateBadge(tabId);
       }
     } catch {
-      // Offscreen not reachable — leave the last known warning in place.
+      interruptCapture(s, "the recorder could not be reached");
+      await persistSessions();
+      await updateBadge(tabId);
     }
   }
   return {
@@ -665,40 +782,37 @@ async function statusFor(tabId: number): Promise<StatusReply> {
       audioWords: s?.audioWords ?? null,
     }),
     noSpeech: s?.noSpeech ?? false,
-    captureWarning,
+    captureWarning: s?.captureWarning ?? null,
     mic: micCaptureState({
       settings: settings.micCapture,
       recording: s?.recording ?? false,
-      micRecording,
+      micRecording: s?.micRecording ?? false,
     }),
-    micDetail: micError,
+    micDetail: s?.micError ?? null,
     transcription: s?.transcription ?? null,
   };
 }
 
-function captureStateFor(tabId: number): Promise<CaptureStateReply> {
-  return (async () => {
-    const s = await getSession(tabId);
-    const settings = await loadSettings();
-    return {
-      state: deriveCaptureState({
-        sessionState: s?.state,
-        inMeeting: s?.inMeeting ?? false,
-        recording: s?.recording ?? false,
-        recorded: s ? hasRecording(s) : false,
-      }),
-      title: s?.title ?? null,
-      recording: s?.recording ?? false,
-      recordingStartedAt: s?.recordingStartedAt ?? null,
-      dismissed: s?.promptDismissed ?? false,
-      shortcut: await startShortcut(),
-      mic: micCaptureState({
-        settings: settings.micCapture,
-        recording: s?.recording ?? false,
-        micRecording: s?.micRecording ?? false,
-      }),
-    };
-  })();
+async function captureStateFor(tabId: number): Promise<CaptureStateReply> {
+  const status = await statusFor(tabId);
+  const s = await getSession(tabId);
+  return {
+    state: status.state,
+    title: status.title,
+    recording: status.recording,
+    recordingStartedAt: status.recordingStartedAt,
+    dismissed: s?.promptDismissed ?? false,
+    shortcut: await startShortcut(),
+    mic: status.mic,
+  };
+}
+
+async function resolvePopupTabId(tabId?: number): Promise<number> {
+  if (tabId !== undefined) {
+    return Number.isSafeInteger(tabId) && tabId >= 0 ? tabId : -1;
+  }
+  const [tab] = await ext.tabs.query({ active: true, currentWindow: true });
+  return tab?.id ?? -1;
 }
 
 /**
@@ -734,7 +848,16 @@ ext.runtime.onMessage.addListener((raw: unknown, sender) => {
         return { ok: true };
       })();
     }
-    return handleContentMessage(msg, senderTabId);
+    // Extension pages can also have a tab id. Only meeting-content messages
+    // belong to this handler; returning its promise for an offscreen request
+    // would claim the response before the recorder can answer.
+    if (
+      msg.type === "captions-update" ||
+      msg.type === "meeting-status" ||
+      msg.type === "meeting-ended"
+    ) {
+      return handleContentMessage(msg, senderTabId);
+    }
   }
   // The offscreen document pushes progress while it transcribes; it carries the
   // tab id because a service-worker restart forgets which Meeting is waiting.
@@ -745,13 +868,20 @@ ext.runtime.onMessage.addListener((raw: unknown, sender) => {
       return { ok: true };
     })();
   }
-  // The capture track died on its own — navigation or a tab crash. Whatever was
-  // recorded is real and must reach a summary or a Held Recording, so this is
-  // treated as a Meeting End rather than just a flag to clear.
+  if (msg.type === "capture-failed") {
+    return (async () => {
+      const s = await getSession(msg.tabId);
+      if (!s?.recording || !ownsCaptureEvent(msg.spanId, s)) return { ok: true };
+      recordCaptureFailure(s, msg.detail);
+      await persistSessions();
+      await stopRecording(msg.tabId);
+      return { ok: true };
+    })();
+  }
   if (msg.type === "mic-track-ended") {
     return (async () => {
       const s = await getSession(msg.tabId);
-      if (!s?.recording) return { ok: true };
+      if (!s?.recording || !ownsCaptureEvent(msg.spanId, s)) return { ok: false };
       // The recording continues on the remote participants alone. Two things have
       // to change or the artifact lies: this Meeting no longer holds the whole of
       // the local user, and the user deserves to know while they can still act.
@@ -761,19 +891,30 @@ ext.runtime.onMessage.addListener((raw: unknown, sender) => {
       // Assigned outright, unlike the silence warning below: a microphone that has
       // just died is newer and more actionable than a silent window that has
       // already passed, and it names the cause where silence only names the symptom.
-      s.captureWarning = MIC_REVOKED_WARNING;
+      if (!s.captureFailure) s.captureWarning = MIC_REVOKED_WARNING;
       await persistSessions();
       await updateBadge(msg.tabId);
       return { ok: true };
     })();
   }
-  // The mixed stream has been silent long enough for something to be wrong with it.
-  // Surfaced during the meeting, which is the whole point: the two artifacts this
-  // guards against were discovered after the audio had already been discarded.
+  // Clear an initial silence warning as soon as the mixed stream carries sound.
+  if (msg.type === "capture-signal") {
+    return (async () => {
+      const s = await getSession(msg.tabId);
+      if (!s?.recording || !ownsCaptureEvent(msg.spanId, s)) return { ok: true };
+      s.hadAnySignal = true;
+      if (!s.captureFailure) s.captureWarning = clearSilenceWarning(s.captureWarning);
+      await persistSessions();
+      await updateBadge(msg.tabId);
+      return { ok: true };
+    })();
+  }
+  // Warn while there is still time to restore sound during the meeting.
   if (msg.type === "capture-silent") {
     return (async () => {
       const s = await getSession(msg.tabId);
-      if (!s?.recording) return { ok: true };
+      if (!s?.recording || !ownsCaptureEvent(msg.spanId, s) ||
+        s.captureFailure || s.hadAnySignal === true) return { ok: true };
       // Asks rather than assigns, so a microphone revocation survives it — losing
       // the microphone is a *cause* of silence, and the vaguer message would land a
       // moment later and bury the specific one.
@@ -790,7 +931,7 @@ ext.runtime.onMessage.addListener((raw: unknown, sender) => {
   if (msg.type === "capture-track-ended") {
     return (async () => {
       const s = await getSession(msg.tabId);
-      if (!s?.recording) return { ok: true };
+      if (!s?.recording || !ownsCaptureEvent(msg.spanId, s)) return { ok: true };
       console.warn("meeting-summarizer: capture track ended on its own; finishing the meeting");
       await finishMeeting(msg.tabId, "capture-lost");
       return { ok: true };
@@ -799,47 +940,47 @@ ext.runtime.onMessage.addListener((raw: unknown, sender) => {
   // Popup messages
   if (msg.type === "get-status") {
     return (async () => {
-      const [tab] = await ext.tabs.query({ active: true, currentWindow: true });
-      return statusFor(tab?.id ?? -1);
+      return statusFor(await resolvePopupTabId(msg.tabId));
     })();
   }
   if (msg.type === "start-capture") {
     return (async () => {
-      const [tab] = await ext.tabs.query({ active: true, currentWindow: true });
-      if (tab?.id !== undefined) await startCapture(tab.id);
-      return statusFor(tab?.id ?? -1);
+      const tabId = await resolvePopupTabId(msg.tabId);
+      if (tabId >= 0) await startCapture(tabId);
+      return statusFor(tabId);
     })();
   }
   if (msg.type === "stop-capture") {
     return (async () => {
-      const [tab] = await ext.tabs.query({ active: true, currentWindow: true });
-      if (tab?.id !== undefined) await stopRecording(tab.id);
-      return statusFor(tab?.id ?? -1);
+      const tabId = await resolvePopupTabId(msg.tabId);
+      if (tabId >= 0) await stopRecording(tabId);
+      return statusFor(tabId);
     })();
   }
   if (msg.type === "summarize-now") {
     return (async () => {
-      const [tab] = await ext.tabs.query({ active: true, currentWindow: true });
-      if (tab?.id !== undefined) await finishMeeting(tab.id, "manual");
-      return statusFor(tab?.id ?? -1);
+      const tabId = await resolvePopupTabId(msg.tabId);
+      if (tabId >= 0) await finishMeeting(tabId, "manual");
+      return statusFor(tabId);
     })();
   }
   if (msg.type === "skip-transcription") {
     return (async () => {
-      const [tab] = await ext.tabs.query({ active: true, currentWindow: true });
+      const tabId = await resolvePopupTabId(msg.tabId);
       try {
-        await ext.runtime.sendMessage({ type: "offscreen-cancel-transcribe" });
+        if (tabId >= 0) {
+          await ext.runtime.sendMessage({ type: "offscreen-cancel-transcribe", tabId });
+        }
       } catch {
         // Offscreen already gone — the wait is over either way.
       }
-      return statusFor(tab?.id ?? -1);
+      return statusFor(tabId);
     })();
   }
   if (msg.type === "set-mic-capture") {
     return (async () => {
       await setMicCapture(msg.enabled);
-      const [tab] = await ext.tabs.query({ active: true, currentWindow: true });
-      return statusFor(tab?.id ?? -1);
+      return statusFor(await resolvePopupTabId(msg.tabId));
     })();
   }
   if (msg.type === "list-held") {
@@ -887,21 +1028,29 @@ ext.commands.onCommand.addListener((command, tab) => {
  * browses next — a privacy failure, in a product whose whole premise is that the
  * audio is yours — or it dies quietly and the popup reports a recording that
  * stopped. Both are unacceptable, so navigation ends the Meeting.
+ *
+ * Inspect every URL update, including same-document history changes (Zoom can
+ * route to /wc/home without unloading). Do not gate this on status === "loading".
+ * If a client ends without a URL event, the content runner's adapter-based DOM
+ * end detection remains the fallback.
  */
 ext.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.url === undefined || isMeetingUrl(changeInfo.url)) return;
   void (async () => {
+    await capturesStarting.get(tabId);
     const s = await getSession(tabId);
-    // Recording, or holding spans from an earlier one: either way there is audio
-    // whose only route to a summary is this Meeting End.
-    if (!s || (!s.recording && !hasRecording(s))) return;
-    console.warn("meeting-summarizer: tab navigated away from the meeting; finishing");
+    if (!s) return;
+    if (s.state === "capturing" &&
+      (s.recording || hasRecording(s) || s.accumulator.size > 0)) {
+      console.warn("meeting-summarizer: tab navigated away from the meeting; finishing");
+    }
     await finishMeeting(tabId, "navigated");
   })();
 });
 
 ext.tabs.onRemoved.addListener((tabId) => {
   void (async () => {
+    await capturesStarting.get(tabId);
     const s = await getSession(tabId);
     if (s && s.state === "capturing" && (s.accumulator.size > 0 || hasRecording(s))) {
       await finishMeeting(tabId, "tab-closed");
@@ -922,42 +1071,77 @@ ext.tabs.onRemoved.addListener((tabId) => {
  * ended, and audio nobody will ever transcribe sits in storage: the same silent
  * unrecoverable loss ADR-0005 fixed, reached from the other side.
  *
- * So on every wake: a session whose tab is gone, or has navigated off the meeting
- * client, is finished — which routes its audio to a summary or, failing that, to a
- * Held Recording. A session whose tab is still in a meeting but whose recorder
- * died has its claim corrected rather than left to lie.
+ * Checkpoint recovery never sends saved meeting data from a startup event:
+ * sessions whose tabs are gone are held for a manual retry. A session still in a
+ * meeting has interrupted processing and recording claims corrected.
  */
 async function reconcileSessions(): Promise<void> {
-  const recorderAlive = await (async () => {
+  const recorder = await (async (): Promise<OffscreenStatusReply | null> => {
     try {
-      return (await sendToOffscreen({ type: "offscreen-status" })).recording;
+      return await sendToOffscreen({ type: "offscreen-status" });
     } catch {
-      return false; // no offscreen document survived
+      return null;
     }
   })();
 
   for (const [tabId, s] of await allSessions()) {
-    if (!s.recording && !hasRecording(s)) continue;
-    const tab = await ext.tabs.get(tabId).catch(() => undefined);
-    if (!tab || !isMeetingUrl(tab.url)) {
-      await finishMeeting(tabId, "capture-lost");
-      if (!tab) await dropSession(tabId);
-      continue;
-    }
-    if (s.recording && !recorderAlive) {
-      // Still in the meeting, but the recorder is gone: stop claiming otherwise.
-      // The spans stay put — a later Meeting End still transcribes them.
-      s.recording = false;
-      s.recordingStartedAt = null;
+    let corrected = false;
+    const transcriptionAlive = recorder?.transcribingTabId === tabId;
+    if ((s.state === "transcribing" && !transcriptionAlive) || s.state === "summarizing") {
+      s.state = "capturing";
+      s.transcription = null;
       s.captureWarning = {
-        message: "Recording stopped unexpectedly — restart it to keep recording.",
-        detail: "the recorder was gone when the service worker woke",
+        message: "Processing stopped unexpectedly. Retry the saved meeting.",
+        detail: "processing was interrupted by a browser restart or extension reload",
       };
+      corrected = true;
+    }
+    if (s.recording && recorder && ownsCapture(recorder, tabId, s) &&
+      (recorder.captureFailure || recorder.error)) {
+      recordCaptureFailure(s, recorder.captureFailure ?? recorder.error!);
+      await stopRecording(tabId);
+      corrected = true;
+    } else if (s.recording && (!recorder?.recording || !ownsCapture(recorder, tabId, s))) {
+      interruptCapture(s, "the recorder did not own this meeting when the service worker woke");
+      corrected = true;
+    }
+    if (corrected) {
       await persistSessions();
       await updateBadge(tabId);
+    }
+    const tab = await ext.tabs.get(tabId).catch(() => undefined);
+    if (!tab || !isMeetingUrl(tab.url)) {
+      if (isRecoveredSession(tabId) && s.state === "capturing" &&
+        (s.recording || hasRecording(s) || s.accumulator.size > 0)) {
+        const transcript = sessionToTranscript(s);
+        const reason = "Meeting recovered after a restart or reload. Review and retry it manually.";
+        if (hasRecording(s)) {
+          await holdRecording(
+            {
+              recordingId: s.recordingId ?? s.spans[0]!.spanId,
+              transcript,
+              spans: s.spans,
+            },
+            reason,
+          );
+        } else {
+          await holdTranscript(transcript, reason);
+        }
+        // Remove the checkpoint only after the Held entry is durably stored.
+        await dropSession(tabId);
+        continue;
+      }
+      await finishMeeting(tabId, tab ? "navigated" : "tab-closed");
+      if (!tab) await dropSession(tabId);
+      continue;
     }
   }
 }
 
-ext.runtime.onStartup.addListener(() => void reconcileSessions());
-ext.runtime.onInstalled.addListener(() => void reconcileSessions());
+async function restoreMeetings(): Promise<void> {
+  await reconcileSessions();
+  await restoreMeetingContentScripts();
+}
+
+ext.runtime.onStartup.addListener(() => void restoreMeetings().catch(console.warn));
+ext.runtime.onInstalled.addListener(() => void restoreMeetings().catch(console.warn));

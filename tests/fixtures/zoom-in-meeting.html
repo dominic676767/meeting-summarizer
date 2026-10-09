@@ -1,0 +1,37 @@
+<!-- Zoom web client, in-meeting frame (the #webclient iframe on app.zoom.us), captured
+     2026-10-03 from a real 2-person meeting in speaker view with captions on. Trimmed to
+     the caption overlay, the two video tiles, and the leave button; names replaced, inline
+     styles and the photo URL dropped. Note the overlay line: an aria-hidden initial, then
+     the text. No speaker name is anywhere in it. -->
+<html>
+<head><title>Participant A's Personal Meeting Room</title></head>
+<body>
+<div id="wc-container">
+  <div class="live-transcription-subtitle__box live-transcription-subtitle__box--overlay">
+    <div class="live-transcription-subtitle__content live-transcription-subtitle__drag-handle">
+      <div id="live-transcription-subtitle" style="display: flex;">
+        <div aria-hidden="true" class="zmu-data-selector-item__icon">B</div>
+        <span class="live-transcription-subtitle__item" dir="auto"> One, two, three, hello, hello, testing, one, two, three Hello, testing 1, 2, 3.</span>
+      </div>
+    </div>
+  </div>
+  <div class="speaker-bar-container__video-frame">
+    <div class="video-avatar__avatar">
+      <div class="video-avatar__avatar-title"><div class="video-avatar__avatar-name">Participant B</div></div>
+      <div class="video-avatar__avatar-footer"><span role="none">Participant B</span></div>
+    </div>
+  </div>
+  <div class="speaker-active-container__video-frame">
+    <div class="video-avatar__avatar">
+      <div class="video-avatar__avatar-title"><img alt="Participant A" class="video-avatar__avatar-img" src=""/></div>
+      <div class="video-avatar__avatar-footer"><i class="video-avatar__avatar-footer--view-mute-computer"></i><span role="none">Participant A</span></div>
+    </div>
+  </div>
+  <div id="wc-footer">
+    <div class="footer__leave-btn-container" footer-section="right">
+      <button aria-label="Leave" class="footer-button-base__button ax-outline footer-button__button" type="button"></button>
+    </div>
+  </div>
+</div>
+</body>
+</html>

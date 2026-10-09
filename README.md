@@ -1,6 +1,8 @@
 # Meeting Summarizer
 
-A lightweight Chromium extension (Chrome/Edge) that records a Microsoft Teams web meeting's **tab audio**, transcribes it with **local WASM Whisper**, summarizes the meeting with **your LLM of choice** (Claude, OpenAI, Ollama, AWS Bedrock), and saves a single self-contained HTML summary — with the full transcript collapsible inside — to `Downloads/meeting-summaries/`.
+A lightweight Chromium extension (Chrome/Edge) that records a Microsoft Teams or Zoom web meeting's **tab audio**, transcribes it with **local WASM Whisper**, summarizes the meeting with **your LLM of choice** (Claude, OpenAI, Ollama, AWS Bedrock), and saves a single self-contained HTML summary — with the full transcript collapsible inside — to `Downloads/meeting-summaries/`.
+
+Zoom web client support is implemented on this branch. The four requested live functional tests passed across separate runs by 8 October 2026. See [the live test handover](docs/zoom-live-test-handoff-2026-10-07.md) for the evidence and limits. The remaining transcript-quality and live-validation work is tracked in [future improvements](docs/future-improvements.md). The full manual release checks remain open.
 
 Pure WebExtension: no companion app, no backend. Transcription runs on your machine by default, so the only things that leave it are the LLM call (nothing at all, with Ollama) and the one-time Whisper model download. Cloud transcription exists but is opt-in and off until you choose it.
 
@@ -17,18 +19,35 @@ Then in Chrome or Edge: `chrome://extensions` → enable **Developer mode** → 
 
 Unlike a Firefox temporary add-on, an unpacked Chromium extension survives browser restarts; click *Reload* on its card after each `npm run build`.
 
+For a meeting in an incognito window, open the extension's *Details* page and enable **Allow in Incognito**.
+
+## Participant notice and consent
+
+**You are responsible for notifying other participants and obtaining any required consent before the extension captures meeting audio or captions.** Follow applicable recording and privacy laws, your organisation's policies, and the meeting platform's terms.
+
+The extension does not notify other participants or trigger the meeting platform's built-in recording notices. This applies to Teams and Zoom web client support, including caption-only capture. A browser permission or your own microphone consent does not obtain consent from other participants.
+
+Tell participants how you intend to use the recording, transcript, and summary, including whether audio or transcripts will be sent to external providers you select.
+
 ## Use
 
 1. Open Settings (extension options), pick a Provider and paste its API key.
    - **Ollama**: run it with `OLLAMA_ORIGINS=chrome-extension://*` so the extension may call it.
    - **Bedrock**: use a Bedrock API key (bearer token) only.
-2. Join a Teams meeting at `teams.microsoft.com` and **turn on live captions** (More → Language and speech → Turn on live captions).
+   - If you enable the local microphone, select **Allow microphone access** in Settings and select **Allow** in Chrome. Then return to the meeting and start recording.
+2. Join a Teams or Zoom meeting in the browser and **turn on live captions** if available.
+   - **Teams**: at `teams.microsoft.com`, select More → Language and speech → Turn on live captions.
+   - **Zoom web client**: at `app.zoom.us/wc/...`, select More → Show Captions. If captions are unavailable, ask the host to enable them. Audio transcription can also run without captions.
 3. **Start recording** — the popup's *Start recording* button or `Ctrl/Cmd+Shift+U`. Chromium only lets an extension capture tab audio on an explicit invocation, so this click cannot be automatic. The badge reads `REC` while audio is being captured; you keep hearing the meeting normally.
 4. When the call ends — or you click *Summarize now* in the popup — the recording is transcribed and then summarized, and the summary lands in `Downloads/meeting-summaries/YYYY-MM-DD-<meeting-title>.html`. The audio is deleted once the file is written.
 
 The popup names each phase while you wait: the one-time model download (with megabytes transferred), transcription (with audio processed of audio total), then summarization. Local Whisper on a long meeting is genuinely slow; *Skip transcription, use captions* takes the caption-only summary instead of waiting.
 
 If summarization fails (provider outage, missing key), the transcript is **held** — retry it from the popup, optionally after switching provider. Nothing is retained once the summary file is written.
+
+Zoom captions currently use **Unknown** as the speaker name. The extension waits 30 seconds after the Zoom meeting controls disappear before it treats the meeting as ended. This permits short transitions, such as a breakout room change.
+
+Drag the in-page status row or its six-dot handle to move the card away from meeting controls. Its position is saved for later visits and kept inside the window when it is resized. You can also click the handle for move buttons, or focus it and use the arrow keys (hold Shift for larger steps). Escape closes the move buttons or cancels a drag.
 
 ## Transcription
 
@@ -76,12 +95,12 @@ Structured (TL;DR / decisions / action items with owners / open questions — de
 ## Development
 
 ```sh
-npm test          # vitest — transcription, pipeline, and Teams adapter seams
+npm test -- --exclude '**/.claude/**' --exclude '**/.eval/**'
 npm run typecheck
 npm run build     # esbuild → dist/
 
-WHISPER_INTEGRATION=1 npm test   # additionally runs real Whisper on a committed
-                                 # audio fixture (downloads the tiny model)
+WHISPER_INTEGRATION=1 npm test -- --exclude '**/.claude/**' --exclude '**/.eval/**'
+# Also runs real Whisper on a committed audio fixture (downloads the tiny model).
 ```
 
 The tests stop where the browser starts: loopback, tab capture, storage, and anything needing a second person in a real meeting cannot be asserted here. Those live in [docs/manual-checks.md](docs/manual-checks.md), to be run against a real browser before a release.

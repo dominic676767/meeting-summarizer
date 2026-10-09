@@ -11,3 +11,4 @@ dist/
 *.wav
 !tests/fixtures/known-phrase.wav
 *.reference.json
+.DS_Store

@@ -560,3 +560,64 @@ describe("Transcription Provider: several windows in flight", () => {
     await expect(run).rejects.toBeInstanceOf(TranscriptionCancelled);
   });
 });
+
+describe("Transcription Provider: retained inference duration", () => {
+  it("keeps short speech across concurrent windows without losing timings, labels, or progress", async () => {
+    const abort = new AbortController();
+    const progress = vi.fn();
+    let calls = 0;
+    let inFlight = 0;
+    let peak = 0;
+    const signals: Array<AbortSignal | undefined> = [];
+    const engine: TranscriptionEngine = {
+      ...fakeEngine({ maxInputMs: 120_000 }),
+      concurrency: 2,
+      inferenceDurationMs: () => 1_000,
+      async transcribe(_samples, signal) {
+        const call = ++calls;
+        signals.push(signal);
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 20 - call * 4));
+        inFlight--;
+        return [{ text: "Approved.", startSec: 0, endSec: 1, speaker: "Speaker 1" }];
+      },
+    };
+
+    const utterances = await provider(engine, 250).transcribe(recording(5_000), {
+      signal: abort.signal,
+      onAudioProgress: progress,
+    });
+
+    expect(peak).toBe(2);
+    expect(utterances).toEqual([
+      { text: "Approved.", startMs: 5_000, endMs: 6_000, diarizationLabel: "Speaker 1 (part 1)" },
+      { text: "Approved.", startMs: 125_000, endMs: 126_000, diarizationLabel: "Speaker 1 (part 2)" },
+      { text: "Approved.", startMs: 245_000, endMs: 246_000, diarizationLabel: "Speaker 1 (part 3)" },
+    ]);
+    expect(progress).toHaveBeenLastCalledWith(250_000, 250_000);
+    expect(signals.every((signal) => signal !== undefined && !signal.aborted)).toBe(true);
+    abort.abort();
+    expect(signals.every((signal) => signal?.aborted)).toBe(true);
+  });
+
+  it("keeps the decoded-duration check for engines without an override when silent windows are skipped", async () => {
+    const samples = audioOf(250);
+    samples.fill(0.5, 0, SAMPLE_RATE);
+    const engine: TranscriptionEngine = {
+      ...fakeEngine({
+        maxInputMs: 30_000,
+        spansFor: () => [{ text: "Approved.", startSec: 0, endSec: 1 }],
+      }),
+      windowing: { targetMs: 10_000, maxMs: 30_000 },
+      concurrency: 2,
+    };
+    const p = createTranscriptionProvider({
+      name: "fake",
+      engine,
+      decode: async () => ({ samples, sampleRate: SAMPLE_RATE }),
+    });
+
+    await expect(p.transcribe(recording())).rejects.toBeInstanceOf(TranscriptionSilent);
+  });
+});

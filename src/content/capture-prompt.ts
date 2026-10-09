@@ -10,6 +10,11 @@
 // meeting page cannot restyle it and it cannot restyle the page.
 import { ext } from "../platform";
 import type { CaptureStateReply, ContentMessage } from "../messages";
+import { positionPrompt } from "./prompt-position";
+
+const mounted = globalThis as typeof globalThis & {
+  meetingSummarizerPrompt?: () => void;
+};
 
 // One card per tab, in the top frame only — the content script also runs in
 // meeting iframes, and a card per frame would stack duplicates.
@@ -17,9 +22,12 @@ if (window === window.top) {
   mountPrompt();
 }
 
-function mountPrompt(): void {
+export function mountPrompt(): () => void {
+  mounted.meetingSummarizerPrompt?.();
+  document.getElementById("meeting-summarizer-capture-prompt")?.remove();
   const host = document.createElement("div");
-  host.style.cssText = "position:fixed;bottom:16px;left:16px;z-index:2147483647;";
+  host.id = "meeting-summarizer-capture-prompt";
+  host.style.cssText = "position:fixed;bottom:16px;left:16px;width:max-content;max-width:calc(100vw - 32px);z-index:2147483647;";
   const root = host.attachShadow({ mode: "open" });
   root.innerHTML = `
     <style>
@@ -33,12 +41,17 @@ function mountPrompt(): void {
       .card {
         font: 13px system-ui, sans-serif; color: #24292e; background: #fff;
         border: 1px solid #eee; border-radius: 4px; padding: 12px; width: 260px;
+        max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); overflow: auto;
       }
-      .card.collapsed { width: auto; display: flex; align-items: center; gap: 8px; }
-      .row { display: flex; align-items: center; gap: 8px; }
+      .card.collapsed { width: max-content; }
+      .row {
+        display: flex; align-items: center; gap: 8px;
+        cursor: grab; touch-action: none; user-select: none;
+      }
+      .row.dragging, .row.dragging .move { cursor: grabbing; }
       .dot { width: 8px; height: 8px; border-radius: 50%; background: #0e8a16; flex: none; }
       .dot.live { background: #d73a4a; }
-      .label { font-weight: 600; }
+      .label { font-weight: 600; min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
       .title { color: #555; font-size: 12px; margin: 6px 0 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .hint { color: #555; font-size: 12px; margin-bottom: 10px; }
       /* The microphone disclosure, in the same Muted supporting voice as the
@@ -54,9 +67,33 @@ function mountPrompt(): void {
         border: 1px solid #eee; border-radius: 4px; padding: 3px 8px; cursor: pointer;
       }
       button:focus-visible { outline: 2px solid #0e8a16; outline-offset: 1px; }
+      .move { flex: none; width: 28px; height: 28px; padding: 4px; cursor: grab; }
+      .move:hover, .move[aria-expanded="true"], .move-controls button:hover { background: #f6f8fa; }
+      .move svg { display: block; width: 18px; height: 18px; }
+      .move-controls { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-top: 8px; }
+      .move-controls button { min-height: 28px; }
+      .move-up { grid-column: 2; }
+      .move-left { grid-column: 1; }
     </style>
     <div class="card" role="status" aria-live="polite" hidden>
-      <div class="row"><span class="dot" aria-hidden="true"></span><span class="label"></span></div>
+      <div class="row">
+        <button type="button" class="move" aria-label="Move recording status"
+          aria-expanded="false" aria-controls="move-controls"
+          title="Drag to move. Click for move buttons, or use arrow keys when focused.">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <circle cx="8" cy="5" r="1.5"/><circle cx="16" cy="5" r="1.5"/>
+            <circle cx="8" cy="12" r="1.5"/><circle cx="16" cy="12" r="1.5"/>
+            <circle cx="8" cy="19" r="1.5"/><circle cx="16" cy="19" r="1.5"/>
+          </svg>
+        </button>
+        <span class="dot" aria-hidden="true"></span><span class="label"></span>
+      </div>
+      <div id="move-controls" class="move-controls" role="group" aria-label="Move recording status" hidden>
+        <button type="button" class="move-up" data-direction="ArrowUp" aria-label="Move up">Up</button>
+        <button type="button" class="move-left" data-direction="ArrowLeft" aria-label="Move left">Left</button>
+        <button type="button" data-direction="ArrowDown" aria-label="Move down">Down</button>
+        <button type="button" data-direction="ArrowRight" aria-label="Move right">Right</button>
+      </div>
       <div class="title"></div>
       <div class="mic"></div>
       <div class="hint"></div>
@@ -71,6 +108,32 @@ function mountPrompt(): void {
   const mic = root.querySelector(".mic") as HTMLElement;
   const hint = root.querySelector(".hint") as HTMLElement;
   const dismiss = root.querySelector(".dismiss") as HTMLButtonElement;
+  const positioning = positionPrompt(
+    host,
+    card,
+    root.querySelector(".row") as HTMLElement,
+    root.querySelector(".move") as HTMLButtonElement,
+    root.querySelector(".move-controls") as HTMLElement,
+  );
+  let stopped = false;
+  let timer: ReturnType<typeof setInterval> | undefined;
+
+  function stop(): void {
+    stopped = true;
+    if (timer !== undefined) clearInterval(timer);
+    positioning.stop();
+    host.remove();
+    if (mounted.meetingSummarizerPrompt === stop) delete mounted.meetingSummarizerPrompt;
+  }
+  mounted.meetingSummarizerPrompt = stop;
+
+  function orphaned(): boolean {
+    try {
+      return !ext.runtime.id;
+    } catch {
+      return true;
+    }
+  }
 
   /**
    * What the microphone will do once capture starts, stated before it does.
@@ -82,7 +145,7 @@ function mountPrompt(): void {
   function micLine(state: CaptureStateReply["mic"]): string {
     switch (state) {
       case "armed":
-        return "Your microphone will be recorded too.";
+      return "Microphone enabled. Chrome access is required before recording.";
       case "off":
         return "Your microphone will not be recorded.";
       case "unconfirmed":
@@ -96,7 +159,16 @@ function mountPrompt(): void {
 
   dismiss.addEventListener("click", () => {
     card.hidden = true;
-    void ext.runtime.sendMessage({ type: "dismiss-prompt" } satisfies ContentMessage);
+    positioning.refresh();
+    try {
+      void Promise.resolve(ext.runtime.sendMessage({
+        type: "dismiss-prompt",
+      } satisfies ContentMessage)).catch(() => {
+        if (orphaned()) stop();
+      });
+    } catch {
+      if (orphaned()) stop();
+    }
   });
 
   function shortcutHint(shortcut: string | null): string {
@@ -144,19 +216,27 @@ function mountPrompt(): void {
     } else {
       card.hidden = true;
     }
+    positioning.refresh();
   }
 
   async function poll(): Promise<void> {
+    if (stopped) return;
+    if (orphaned()) {
+      stop();
+      return;
+    }
     try {
       const reply = (await ext.runtime.sendMessage({
         type: "get-capture-state",
       } satisfies ContentMessage)) as CaptureStateReply;
-      if (reply) apply(reply);
+      if (!stopped && reply) apply(reply);
     } catch {
-      // Background waking up — keep the last render and try next tick.
+      if (orphaned()) stop();
+      // A worker can also be waking up. Retry while this context is valid.
     }
   }
 
   void poll();
-  setInterval(() => void poll(), 1000);
+  if (!stopped) timer = setInterval(() => void poll(), 1000);
+  return stop;
 }

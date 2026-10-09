@@ -140,6 +140,9 @@ export interface TranscriptionEngine {
    * finish before anything happens; an engine that answers quickly may ignore it.
    */
   transcribe(samples: Float32Array, signal?: AbortSignal): Promise<EngineSpan[]>;
+  /** Duration submitted to the model after quiet audio is skipped. Engines that
+   * infer the whole input can omit this and use the decoded input duration. */
+  inferenceDurationMs?(samples: Float32Array): number;
   /** Release engine resources (a worker, a session). Optional. */
   close?(): Promise<void> | void;
 }
@@ -230,12 +233,16 @@ export function createTranscriptionProvider(
             : stopOthers.signal;
 
       let doneMs = 0;
+      let inferenceMs = 0;
       const perWindow = await inPool(
         jobs.length,
         limit,
         async (i) => {
           abortIfCancelled(hooks?.signal);
           const job = jobs[i]!;
+          // Keep the full decoded duration for engines without an override,
+          // including windows skipped at pauses. Whisper measures retained audio.
+          inferenceMs += engine.inferenceDurationMs?.(job.samples) ?? job.lengthMs;
           // A window cut at pauses that holds no signal at all is not sent: the
           // engine would answer it with invented words, and nothing downstream
           // could tell them from speech.
@@ -257,14 +264,10 @@ export function createTranscriptionProvider(
       // In Meeting order whatever order the calls finished in.
       const utterances = perWindow.flat();
 
-      // The last thing the provider does is refuse to pass off silence as speech.
-      // Fed a silent recording an engine returns its filler — Whisper's is the
-      // single word "you" — and downstream nothing can tell that from a real
-      // word: it is stamped as recorded audio and replaces the caption words
-      // wholesale. Judged here because this is where the recording's own duration
-      // is known, and against that duration rather than a bare word count, so a
-      // genuinely short exchange still counts as audio.
-      const silent = rejectAsSilent(utterances, totalMs);
+      // Refuse filler output against the duration sent to the model. Local Whisper
+      // skips quiet sections, so a short sentence in a long recording must be
+      // judged against the retained audio. Progress still uses the full recording.
+      const silent = rejectAsSilent(utterances, inferenceMs);
       if (silent) throw new TranscriptionSilent(silent);
       return utterances;
     },

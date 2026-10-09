@@ -22,6 +22,7 @@ import {
   SUSTAINED_SILENCE_MS,
 } from "../src/offscreen/signal";
 import {
+  clearSilenceWarning,
   foldAnySignal,
   MIC_REVOKED_WARNING,
   NO_SOUND_MESSAGE,
@@ -170,6 +171,16 @@ describe("the sustained-silence warning the user sees mid-meeting", () => {
     const silent = silenceWarning(null, "no signal for 45s");
     expect(silenceWarning(silent, "no signal for 90s").message).toBe(NO_SOUND_MESSAGE);
     expect(MIC_REVOKED_WARNING.message).not.toBe(silent.message);
+  });
+
+  it("clears the initial silence warning when sound arrives", () => {
+    expect(clearSilenceWarning(silenceWarning(null, "no signal for 45s"))).toBeNull();
+  });
+
+  it("preserves microphone and other warnings when sound arrives", () => {
+    expect(clearSilenceWarning(MIC_REVOKED_WARNING)).toBe(MIC_REVOKED_WARNING);
+    expect(clearSilenceWarning(NOTHING_CAPTURED_WARNING)).toBe(NOTHING_CAPTURED_WARNING);
+    expect(clearSilenceWarning(null)).toBeNull();
   });
 });
 

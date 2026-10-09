@@ -18,12 +18,11 @@ import {
   type TranscriptionEngine,
 } from "../src/transcription/provider";
 import {
-  spansFromWhisperOutput,
   WHISPER_MODEL_REPOS,
   WHISPER_SAMPLE_RATE,
-  whisperRunOptions,
   type WhisperOutput,
 } from "../src/transcription/whisper-protocol";
+import { transcribeWhisperAudio } from "../src/transcription/whisper-audio";
 import { WHISPER_MAX_INPUT_MS } from "../src/transcription/local-whisper";
 
 const FIXTURE = new URL("./fixtures/known-phrase.wav", import.meta.url);
@@ -67,10 +66,9 @@ async function nodeWhisperEngine(): Promise<TranscriptionEngine> {
     },
     async transcribe(samples): Promise<EngineSpan[]> {
       if (!asr) throw new Error("model not loaded");
-      // The same options the worker asks for, language included — the fixture is
-      // spoken in English, so that is what this engine is told to expect.
-      const out = await asr(new Float32Array(samples), whisperRunOptions("en"));
-      return spansFromWhisperOutput(out, samples.length / WHISPER_SAMPLE_RATE);
+      // Exercise the same quiet-audio handling, options and time mapping as the
+      // browser worker. The fixture is spoken in English.
+      return transcribeWhisperAudio(new Float32Array(samples), "en", asr);
     },
   };
 }

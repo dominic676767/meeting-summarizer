@@ -19,6 +19,9 @@ import {
 import { deleteSpan, openAudioStore, readSpan, type AudioStore } from "./audio-store";
 import { mixCapture, type MixGraph } from "./audio-mix";
 import { FRESH_WATCH, noSignalDetail, observeSamples, type SignalWatch } from "./signal";
+import { microphonePermission } from "./microphone-permission";
+import { observeCaptureHealth, startCaptureHealth } from "./capture-health";
+import { MIC_REVOKED_WARNING } from "../background/capture-signal";
 
 let recorder: MediaRecorder | undefined;
 let context: AudioContext | undefined;
@@ -29,6 +32,7 @@ let startedAt = 0;
 let encodedBytes = 0;
 let lastError: string | null = null;
 let micError: string | null = null;
+let captureFailure: string | null = null;
 // What the mixed stream has actually carried. Kept past `stop()` on purpose: the
 // stop reply is where the service worker learns whether this span held any sound,
 // and by then the graph is gone.
@@ -38,6 +42,17 @@ let signalTimer: ReturnType<typeof setInterval> | undefined;
 // MediaRecorder fires ondataavailable synchronously while a prior write is
 // still in flight.
 let writeChain: Promise<void> = Promise.resolve();
+let captureOwner: { tabId: number; spanId: string } | undefined;
+let captureOperations: Promise<void> = Promise.resolve();
+
+function queueCapture<T>(operation: () => Promise<T>): Promise<T> {
+  const next = captureOperations.then(operation, operation);
+  captureOperations = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  return next;
+}
 
 /** Tab audio arrives as a stream whose constraints Chromium accepts only in
  * this non-standard form; the DOM lib has no type for them. */
@@ -97,18 +112,87 @@ function webAudioGraph(ctx: AudioContext): MixGraph<AudioNode> & { readonly mix:
  * silent.
  */
 const SIGNAL_POLL_MS = 500;
+const RECORDER_STOP_TIMEOUT_MS = 10_000;
+const MIC_NOTIFICATION_RETRY_MS = 2_000;
+
+/** Keep microphone loss visible even if the first event or reply is lost. */
+function watchMicrophone(
+  owner: { tabId: number; spanId: string },
+  microphone: MediaStream | undefined,
+): () => void {
+  const tracks = microphone?.getAudioTracks() ?? [];
+  let acknowledged = false;
+  let nextAttemptAt = 0;
+
+  const check = () => {
+    if (
+      tracks.length === 0 ||
+      captureOwner !== owner ||
+      recorder?.state !== "recording" ||
+      tracks.some((track) => track.readyState === "live")
+    ) return;
+
+    micError ??= MIC_REVOKED_WARNING.detail ?? "The microphone stopped.";
+    if (acknowledged) return;
+    const now = Date.now();
+    if (now < nextAttemptAt) return;
+
+    nextAttemptAt = now + MIC_NOTIFICATION_RETRY_MS;
+    void ext.runtime
+      .sendMessage({
+        type: "mic-track-ended",
+        tabId: owner.tabId,
+        spanId: owner.spanId,
+      } satisfies OffscreenEventMessage)
+      .then((reply) => {
+        if (captureOwner === owner && recorder?.state === "recording" && reply?.ok === true) {
+          acknowledged = true;
+        }
+      })
+      .catch(() => {
+        // The existing signal poll retries while this capture is active.
+      });
+  };
+
+  for (const track of tracks) track.addEventListener("ended", check);
+  return check;
+}
+
+function failCapture(
+  detail: string,
+  owner = captureOwner,
+): void {
+  if (!owner || captureOwner !== owner || captureFailure !== null) return;
+  captureFailure = detail;
+  lastError ??= detail;
+  void ext.runtime
+    .sendMessage({
+      type: "capture-failed",
+      tabId: owner.tabId,
+      spanId: owner.spanId,
+      detail,
+    } satisfies OffscreenEventMessage)
+    .catch(() => {
+      // The failure also survives in the status and stop replies.
+    });
+}
 
 /**
  * Watches the MIXED stream — the tab and the microphone summed, which is what gets
- * recorded — and tells the service worker the first time it has been silent long
- * enough to mean something.
+ * recorded — and tells the service worker when the first sound arrives or when
+ * recording starts with a sustained period of silence.
  *
  * On the mix rather than on bytes written, because bytes only prove the encoder
  * ran: it ran, correctly, for both of the artifacts that held nothing but the word
  * "you". The rules themselves are in `./signal`, pure and tested over sample data;
  * this function is the browser plumbing that feeds them.
  */
-function watchSignal(ctx: AudioContext, mix: AudioNode, tabId: number): void {
+function watchSignal(
+  ctx: AudioContext,
+  mix: AudioNode,
+  owner: { tabId: number; spanId: string },
+  checkMicrophone: () => void,
+): void {
   const analyser = ctx.createAnalyser();
   // The largest window the analyser offers — about 0.7s at 48 kHz — so each read
   // is an average over most of a second rather than a 40ms glimpse.
@@ -122,25 +206,50 @@ function watchSignal(ctx: AudioContext, mix: AudioNode, tabId: number): void {
   analyser.connect(ctx.createMediaStreamDestination());
 
   const samples = new Float32Array(analyser.fftSize);
-  let readAt = Date.now();
-  watch = FRESH_WATCH;
+  let health = startCaptureHealth(Date.now(), ctx.currentTime, encodedBytes);
   signalTimer = setInterval(() => {
+    if (captureOwner !== owner) return;
+    checkMicrophone();
+    const observation = observeCaptureHealth(
+      health,
+      Date.now(),
+      ctx.currentTime,
+      encodedBytes,
+    );
+    health = observation.health;
+    if (health.failure !== null) {
+      clearInterval(signalTimer);
+      signalTimer = undefined;
+      failCapture(health.failure, owner);
+      return;
+    }
+    if (observation.signalElapsedMs === 0 || captureFailure !== null) return;
     analyser.getFloatTimeDomainData(samples);
-    const now = Date.now();
-    const elapsedMs = now - readAt;
-    readAt = now;
     const warned = watch.hadSilentWindow;
-    watch = observeSamples(watch, samples, elapsedMs);
+    const hadSignal = watch.hadAnySignal;
+    watch = observeSamples(watch, samples, observation.signalElapsedMs);
+    if (!hadSignal && watch.hadAnySignal) {
+      void ext.runtime
+        .sendMessage({
+          type: "capture-signal",
+          tabId: owner.tabId,
+          spanId: owner.spanId,
+        } satisfies OffscreenEventMessage)
+        .catch(() => {
+          // A status or stop reply also carries the signal measurement.
+        });
+    }
     // Once per Capture Span, at the moment the window closes. Pushed rather than
     // left for the next status poll because the popup may never be opened, and a
     // warning the user reads after the meeting is the defect, not the fix. Not
     // repeated, because a warning that keeps arriving is a warning that gets
     // dismissed — and the sentence says "yet", which is only true the first time.
-    if (!warned && watch.hadSilentWindow) {
+    if (!watch.hadAnySignal && !warned && watch.hadSilentWindow) {
       void ext.runtime
         .sendMessage({
           type: "capture-silent",
-          tabId,
+          tabId: owner.tabId,
+          spanId: owner.spanId,
           detail: noSignalDetail(watch),
         } satisfies OffscreenEventMessage)
         .catch(() => {
@@ -160,9 +269,15 @@ async function start(
   tabId: number,
   mic: boolean,
 ): Promise<void> {
-  if (recorder) return; // already recording; start is idempotent
+  const owner = { tabId, spanId };
+  captureOwner = owner;
   lastError = null;
   micError = null;
+  captureFailure = null;
+  watch = FRESH_WATCH;
+  encodedBytes = 0;
+  startedAt = 0;
+  writeChain = Promise.resolve();
   const constraints: TabCaptureConstraints = {
     audio: { mandatory: { chromeMediaSource: "tab", chromeMediaSourceId: streamId } },
   };
@@ -180,8 +295,9 @@ async function start(
   // is not happening. Tell the service worker instead of letting it lie.
   for (const track of stream.getTracks()) {
     track.addEventListener("ended", () => {
+      if (captureOwner !== owner || recorder?.state !== "recording") return;
       void ext.runtime
-        .sendMessage({ type: "capture-track-ended", tabId } satisfies OffscreenEventMessage)
+        .sendMessage({ type: "capture-track-ended", tabId, spanId } satisfies OffscreenEventMessage)
         .catch(() => {
           // Service worker asleep; its own tab reconciliation is the backstop.
         });
@@ -193,13 +309,7 @@ async function start(
   // The recording survives — the remote participants are still captured — so this
   // must NOT end the Meeting. What it must do is stop the span claiming to hold
   // the local user, because from here on it does not.
-  for (const track of micStream?.getTracks() ?? []) {
-    track.addEventListener("ended", () => {
-      void ext.runtime
-        .sendMessage({ type: "mic-track-ended", tabId } satisfies OffscreenEventMessage)
-        .catch(() => {});
-    });
-  }
+  const checkMicrophone = watchMicrophone(owner, micStream);
 
   // One AudioContext sums the tab and the microphone into one destination, and
   // keeps the tab playing to the speakers on the way past — tabCapture stops the
@@ -210,40 +320,48 @@ async function start(
   context = new AudioContext();
   const graph = webAudioGraph(context);
   const mixed = mixCapture(graph, { tab: stream, mic: micStream });
-  // Watched at the sum itself, so what is measured is exactly what is recorded.
-  watchSignal(context, graph.mix, tabId);
-
-  encodedBytes = 0;
-  writeChain = Promise.resolve();
-  store = await openAudioStore(spanId);
+  // An offscreen AudioContext can start suspended. MediaRecorder would still
+  // write WebM chunks, but the mix (and the meeting's speaker playback) would
+  // carry silence until the context is running.
+  await context.resume();
+  if (context.state !== "running") {
+    throw new Error("Audio capture could not start because the audio context is not running.");
+  }
+  const currentStore = await openAudioStore(spanId);
+  store = currentStore;
   // The mix, not the raw tab stream: recording the tab stream directly is what
   // left the local user out of every Audio Recording.
-  recorder = new MediaRecorder(mixed, { mimeType: "audio/webm" });
-  recorder.ondataavailable = (e) => {
+  const currentRecorder = new MediaRecorder(mixed, { mimeType: "audio/webm" });
+  recorder = currentRecorder;
+  currentRecorder.ondataavailable = (e) => {
+    if (captureOwner !== owner || recorder !== currentRecorder) return;
     if (e.data.size === 0) return;
     encodedBytes += e.data.size;
-    const s = store;
-    if (!s) return;
     // Append incrementally. A quota failure is recorded as a capture warning
     // rather than swallowed, so the user learns before the meeting is lost.
     writeChain = writeChain
-      .then(() => s.append(e.data))
+      .then(() => currentStore.append(e.data))
       .catch((err) => {
-        lastError = err instanceof Error ? err.message : String(err);
+        failCapture(
+          `The recorded audio could not be saved: ${err instanceof Error ? err.message : String(err)}`,
+          owner,
+        );
       });
   };
-  recorder.onerror = () => {
-    lastError = "recorder error";
+  currentRecorder.onerror = () => {
+    failCapture("The recorder could not capture audio.", owner);
   };
   // A timeslice keeps encoding incremental instead of building one hour-long
   // buffer in memory, which would contradict the lightweightness requirement.
-  recorder.start(5_000);
+  currentRecorder.start(5_000);
   startedAt = Date.now();
+  // Start the watcher only after storage and the encoder are ready.
+  watchSignal(context, graph.mix, owner, checkMicrophone);
 }
 
 async function stop(): Promise<void> {
   const r = recorder;
-  recorder = undefined;
+  const owner = captureOwner;
   // The watcher stops with the recorder, but `watch` is left standing: this stop's
   // own reply is how the service worker learns whether the span held any sound, and
   // the next Capture Start is what resets it.
@@ -251,13 +369,42 @@ async function stop(): Promise<void> {
   signalTimer = undefined;
   if (r && r.state !== "inactive") {
     await new Promise<void>((resolve) => {
-      r.onstop = () => resolve();
-      r.stop();
+      const timer = setTimeout(() => {
+        failCapture("The recorder did not finish saving the audio.", owner);
+        resolve();
+      }, RECORDER_STOP_TIMEOUT_MS);
+      const finish = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      r.onstop = finish;
+      try {
+        r.stop();
+      } catch (err) {
+        failCapture(
+          `The recorder could not stop: ${err instanceof Error ? err.message : String(err)}`,
+          owner,
+        );
+        finish();
+      }
     });
+  }
+  if (r) {
+    r.ondataavailable = null;
+    r.onerror = null;
+    r.onstop = null;
+    if (encodedBytes === 0) {
+      failCapture("The recorder produced no audio data.", owner);
+    }
   }
   // Let the last flushed chunks finish landing before the file is closed.
   await writeChain;
-  await store?.close().catch(() => undefined);
+  await store?.close().catch((err) => {
+    failCapture(
+      `The recorded audio could not be saved: ${err instanceof Error ? err.message : String(err)}`,
+      owner,
+    );
+  });
   store = undefined;
   stream?.getTracks().forEach((t) => t.stop());
   stream = undefined;
@@ -268,21 +415,27 @@ async function stop(): Promise<void> {
   micStream = undefined;
   await context?.close().catch(() => undefined);
   context = undefined;
+  recorder = undefined;
 }
 
 function status(): OffscreenStatusReply {
+  const recording = recorder?.state === "recording";
   return {
-    recording: recorder !== undefined,
-    startedAt: recorder ? startedAt : null,
+    tabId: captureOwner?.tabId ?? null,
+    spanId: captureOwner?.spanId ?? null,
+    transcribingTabId: running?.tabId ?? null,
+    recording,
+    startedAt: recording ? startedAt : null,
     encodedBytes,
     // The span's whole-length measure, not the warning's. Read by the service
     // worker off the stop reply to decide whether this Meeting's audio is worth
     // transcribing at all.
     anySignal: watch.hadAnySignal,
     error: lastError,
+    captureFailure,
     // Reported from the live stream rather than from the request: asking for the
     // microphone and getting it are different things.
-    micRecording: recorder !== undefined && micStream !== undefined,
+    micRecording: recording && micStream?.getAudioTracks().some((track) => track.readyState === "live") === true,
     micError,
   };
 }
@@ -294,7 +447,9 @@ function status(): OffscreenStatusReply {
 // WASM model runs in. Progress is pushed to the service worker rather than
 // polled, because it is what makes a multi-minute wait readable as work.
 
-let running: { provider: { close(): void }; abort: AbortController } | undefined;
+let running:
+  | { tabId: number; provider: { close(): void }; abort: AbortController }
+  | undefined;
 
 /** The status region updates at most once a second (a screen reader should not
  * be flooded), so there is nothing to gain from posting faster. */
@@ -329,7 +484,7 @@ async function transcribe(
       workerUrl: ext.runtime.getURL("whisper-worker.js"),
       awsCredentials: msg.awsCredentials,
     });
-    running = { provider, abort };
+    running = { tabId: msg.tabId, provider, abort };
     // Every span of the Meeting, in order, each with the offset that keeps its
     // words where they actually fell in the Meeting.
     const spans = await Promise.all(
@@ -391,7 +546,20 @@ async function transcribe(
 ext.runtime.onMessage.addListener((raw: unknown) => {
   const msg = raw as OffscreenMessage;
   if (msg.type === "offscreen-start") {
-    return (async () => {
+    return queueCapture(async () => {
+      if (recorder) {
+        if (
+          captureOwner?.tabId === msg.tabId &&
+          captureOwner.spanId === msg.spanId
+        ) {
+          return status();
+        }
+        return {
+          ...status(),
+          error:
+            "Another meeting tab is recording. Stop that recording before starting this one.",
+        };
+      }
       try {
         await start(msg.streamId, msg.spanId, msg.tabId, msg.mic);
       } catch (err) {
@@ -399,16 +567,25 @@ ext.runtime.onMessage.addListener((raw: unknown) => {
         await stop();
       }
       return status();
-    })();
+    });
   }
   if (msg.type === "offscreen-stop") {
-    return (async () => {
+    return queueCapture(async () => {
+      if (
+        (msg.tabId !== undefined && captureOwner?.tabId !== msg.tabId) ||
+        (msg.spanId !== undefined && captureOwner?.spanId !== msg.spanId)
+      ) {
+        return status();
+      }
       await stop();
       return status();
-    })();
+    });
   }
   if (msg.type === "offscreen-status") {
     return Promise.resolve(status());
+  }
+  if (msg.type === "offscreen-mic-permission") {
+    return microphonePermission().then((permission) => ({ permission }));
   }
   if (msg.type === "offscreen-transcribe") {
     return transcribe(msg);
@@ -416,8 +593,10 @@ ext.runtime.onMessage.addListener((raw: unknown) => {
   if (msg.type === "offscreen-cancel-transcribe") {
     // Terminating the worker stops the WASM run mid-chunk, so the user who will
     // not wait is not made to wait anyway.
-    running?.abort.abort();
-    running?.provider.close();
+    if (msg.tabId === undefined || running?.tabId === msg.tabId) {
+      running?.abort.abort();
+      running?.provider.close();
+    }
     return Promise.resolve({ ok: true });
   }
   if (msg.type === "offscreen-discard-spans") {

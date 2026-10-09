@@ -1,0 +1,23 @@
+<!-- Zoom web client, in-meeting frame, captured 2026-10-03 moments after the host ended the
+     meeting. The ended dialog is a generic .zm-modal whose only distinguishing content is
+     localized text, and the leave button is STILL in the DOM while it shows, so "leave
+     button present" alone reads as still in the meeting here. The top frame later
+     navigated to /wc/home (see docs/research/zoom-web-client.md, U1). -->
+<html>
+<head><title>Participant A's Personal Meeting Room</title></head>
+<body>
+<div id="wc-container">
+  <div id="wc-footer">
+    <div class="footer__leave-btn-container" footer-section="right">
+      <button aria-label="Leave" class="footer-button-base__button ax-outline footer-button__button" type="button"></button>
+    </div>
+  </div>
+  <div class="zm-modal zm-modal-legacy react-draggable">
+    <div class="zm-modal-body"><div class="zm-modal-body-title">This meeting has been ended by host</div></div>
+    <div class="zm-modal-footer"><div class="zm-modal-footer-default"><div class="zm-modal-footer-default-actions">
+      <button class="zm-btn zm-btn-legacy zm-btn--primary zm-btn__outline--blue" type="button">OK</button>
+    </div></div></div>
+  </div>
+</div>
+</body>
+</html>

@@ -1,5 +1,5 @@
-// Per-tab Meeting session state, mirrored to storage.session so a service
-// worker suspension can't lose a Transcript mid-meeting.
+// Per-tab Meeting session state. storage.session handles worker suspension;
+// a local checkpoint also preserves the link to saved audio across reloads.
 import { TranscriptAccumulator } from "../adapters/accumulator";
 import type { TranscriptionProgress } from "../messages";
 import type { CaptureSpan, Transcript } from "../domain/types";
@@ -32,6 +32,7 @@ export interface MeetingSession {
   spans: CaptureSpan[];
   /** Non-fatal capture problem (quota, recorder fault) to surface to the user. */
   captureWarning: CaptureWarning | null;
+  captureFailure: string | null;
   /** The local microphone is live in the mix right now. */
   micRecording: boolean;
   /**
@@ -84,7 +85,16 @@ export interface MeetingSession {
 }
 
 const sessions = new Map<number, MeetingSession>();
+const recoveredSessions = new Set<number>();
 let rehydration: Promise<void> | undefined;
+let persistence = Promise.resolve();
+
+const CHECKPOINT_KEY = "meetingSessionsCheckpoint";
+
+interface SessionsCheckpoint {
+  version: 1;
+  sessions: Record<string, PersistedSession>;
+}
 
 interface PersistedSession {
   platform: string;
@@ -98,6 +108,7 @@ interface PersistedSession {
   /** Always written; absent only on a record from before Capture Spans. */
   spans?: CaptureSpan[];
   captureWarning: CaptureWarning | null;
+  captureFailure?: string | null;
   promptDismissed: boolean;
   audioWords: boolean | null;
   /** Absent on a record from before silent recordings were refused. */
@@ -149,12 +160,35 @@ function rehydrate(): Promise<void> {
 }
 
 async function doRehydrate(): Promise<void> {
+  let saved: Record<string, PersistedSession> | undefined;
+  let fromCheckpoint = false;
   try {
     const stored = (await ext.storage.session.get("sessions")) as {
       sessions?: Record<string, PersistedSession>;
     };
-    for (const [tabId, p] of Object.entries(stored.sessions ?? {})) {
-      sessions.set(Number(tabId), {
+    saved = stored.sessions;
+  } catch {
+    // A local checkpoint can still be used without storage.session.
+  }
+  if (saved === undefined) {
+    try {
+      const stored = (await ext.storage.local.get(CHECKPOINT_KEY)) as {
+        meetingSessionsCheckpoint?: SessionsCheckpoint;
+      };
+      const checkpoint = stored.meetingSessionsCheckpoint;
+      if (checkpoint?.version === 1) {
+        saved = checkpoint.sessions;
+        fromCheckpoint = true;
+      }
+    } catch {
+      // Both stores are unavailable — keep using in-memory sessions.
+    }
+  }
+  for (const [tabId, p] of Object.entries(saved ?? {})) {
+    const id = Number(tabId);
+    if (!Number.isInteger(id)) continue;
+    try {
+      sessions.set(id, {
         platform: p.platform,
         title: p.title,
         startedAt: p.startedAt,
@@ -165,6 +199,7 @@ async function doRehydrate(): Promise<void> {
         recordingId: p.recordingId ?? null,
         spans: spansOf(p),
         captureWarning: p.captureWarning ?? null,
+        captureFailure: p.captureFailure ?? null,
         micRecording: p.micRecording ?? false,
         // A span recorded before the microphone existed had none in it, so the
         // absent field reads as false rather than as "unknown, assume captured".
@@ -177,41 +212,54 @@ async function doRehydrate(): Promise<void> {
         transcription: null,
         accumulator: TranscriptAccumulator.fromJSON(p.entries),
       });
+      if (fromCheckpoint) recoveredSessions.add(id);
+    } catch {
+      // One invalid stored session must not prevent the others from recovering.
     }
-  } catch {
-    // storage.session unavailable — in-memory only.
   }
 }
 
-export async function persistSessions(): Promise<void> {
-  try {
-    const obj: Record<string, PersistedSession> = {};
-    for (const [tabId, s] of sessions) {
-      obj[tabId] = {
-        platform: s.platform,
-        title: s.title,
-        startedAt: s.startedAt,
-        inMeeting: s.inMeeting,
-        state: s.state,
-        recording: s.recording,
-        recordingStartedAt: s.recordingStartedAt,
-        recordingId: s.recordingId,
-        spans: s.spans,
-        captureWarning: s.captureWarning,
-        micRecording: s.micRecording,
-        localMicrophone: s.localMicrophone,
-        micError: s.micError,
-        promptDismissed: s.promptDismissed,
-        audioWords: s.audioWords,
-        noSpeech: s.noSpeech,
-        hadAnySignal: s.hadAnySignal,
-        entries: s.accumulator.toJSON(),
-      };
-    }
-    await ext.storage.session.set({ sessions: obj });
-  } catch {
-    // storage.session unavailable — in-memory only.
+export function persistSessions(): Promise<void> {
+  // Snapshot at the call boundary. Later mutations must not change a queued
+  // write, and an older write must not land after a newer session state.
+  const obj: Record<string, PersistedSession> = {};
+  for (const [tabId, s] of sessions) {
+    obj[tabId] = {
+      platform: s.platform,
+      title: s.title,
+      startedAt: s.startedAt,
+      inMeeting: s.inMeeting,
+      state: s.state,
+      recording: s.recording,
+      recordingStartedAt: s.recordingStartedAt,
+      recordingId: s.recordingId,
+      spans: s.spans.map((span) => ({ ...span })),
+      captureWarning: s.captureWarning ? { ...s.captureWarning } : null,
+      captureFailure: s.captureFailure,
+      micRecording: s.micRecording,
+      localMicrophone: s.localMicrophone,
+      micError: s.micError,
+      promptDismissed: s.promptDismissed,
+      audioWords: s.audioWords,
+      noSpeech: s.noSpeech,
+      hadAnySignal: s.hadAnySignal,
+      entries: s.accumulator.toJSON().map(([key, entry]) => [key, { ...entry }]),
+    };
   }
+  const checkpoint: SessionsCheckpoint = { version: 1, sessions: obj };
+  const write = async (): Promise<void> => {
+    await Promise.allSettled([
+      Promise.resolve().then(() => ext.storage.session.set({ sessions: obj })),
+      Promise.resolve().then(() => ext.storage.local.set({ [CHECKPOINT_KEY]: checkpoint })),
+    ]);
+  };
+  persistence = persistence.then(write, write);
+  return persistence;
+}
+
+/** True when this session came from the checkpoint after a reload or restart. */
+export function isRecoveredSession(tabId: number): boolean {
+  return recoveredSessions.has(tabId);
 }
 
 export async function getSession(tabId: number): Promise<MeetingSession | undefined> {
@@ -225,6 +273,7 @@ export async function ensureSession(tabId: number, platform: string): Promise<Me
   // A done session ended normally; a failed one is already safe in the Held
   // Transcript store — either way, new captions mean a new Meeting.
   if (!s || s.state === "done" || s.state === "failed") {
+    recoveredSessions.delete(tabId);
     s = {
       platform,
       title: null,
@@ -236,6 +285,7 @@ export async function ensureSession(tabId: number, platform: string): Promise<Me
       recordingId: null,
       spans: [],
       captureWarning: null,
+      captureFailure: null,
       micRecording: false,
       localMicrophone: null,
       micError: null,
@@ -264,6 +314,7 @@ export async function allSessions(): Promise<Array<[number, MeetingSession]>> {
 export async function dropSession(tabId: number): Promise<void> {
   await rehydrate();
   sessions.delete(tabId);
+  recoveredSessions.delete(tabId);
   await persistSessions();
 }
 
@@ -282,7 +333,8 @@ export function sessionToTranscript(s: MeetingSession): Transcript {
     // Carried on the caption Transcript so it survives fusion, which keeps the
     // base Transcript's metadata: whether the local user is in the audio is a fact
     // about the recording, not about the words that came out of it.
-    localMicrophone: s.localMicrophone === true,
+    localMicrophone: !s.captureFailure && s.localMicrophone === true,
+    ...(s.captureFailure ? { captureError: s.captureFailure, noSpeech: false } : {}),
     segments: s.accumulator.toSegments(),
   };
 }

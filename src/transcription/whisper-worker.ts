@@ -10,12 +10,9 @@
 // network, once, into the browser cache.
 import { env, pipeline } from "@huggingface/transformers";
 import type { MeetingLanguage, WhisperModelSize } from "../domain/types";
+import { transcribeWhisperAudio, type WhisperInference } from "./whisper-audio";
 import {
-  spansFromWhisperOutput,
   WHISPER_MODEL_REPOS,
-  WHISPER_SAMPLE_RATE,
-  whisperRunOptions,
-  type WhisperOutput,
   type WhisperRequest,
   type WhisperResponse,
 } from "./whisper-protocol";
@@ -78,11 +75,9 @@ function reportModelProgress(file: string, loaded: number, total: number | null)
   post({ type: "model-progress", loadedBytes, totalBytes });
 }
 
-type Asr = (samples: Float32Array, options: Record<string, unknown>) => Promise<WhisperOutput>;
+let asr: Promise<WhisperInference> | undefined;
 
-let asr: Promise<Asr> | undefined;
-
-function load(size: WhisperModelSize): Promise<Asr> {
+function load(size: WhisperModelSize): Promise<WhisperInference> {
   // Not `??=` alone: a rejected promise cached here would fail every retry for
   // the life of the worker, so a failed load is forgotten rather than memoized.
   asr ??= (pipeline("automatic-speech-recognition", WHISPER_MODEL_REPOS[size], {
@@ -101,7 +96,7 @@ function load(size: WhisperModelSize): Promise<Asr> {
       if (e.status !== "progress" || typeof e.file !== "string") return;
       reportModelProgress(e.file, e.loaded ?? 0, typeof e.total === "number" ? e.total : null);
     },
-  }) as unknown as Promise<Asr>).catch((err) => {
+  }) as unknown as Promise<WhisperInference>).catch((err) => {
     asr = undefined;
     throw err;
   });
@@ -111,8 +106,7 @@ function load(size: WhisperModelSize): Promise<Asr> {
 async function transcribe(samples: Float32Array, language: MeetingLanguage): Promise<EngineSpan[]> {
   const run = await asr;
   if (!run) throw new Error("model not loaded");
-  const out = await run(samples, whisperRunOptions(language));
-  return spansFromWhisperOutput(out, samples.length / WHISPER_SAMPLE_RATE);
+  return transcribeWhisperAudio(samples, language, run);
 }
 
 self.addEventListener("message", (event: MessageEvent<WhisperRequest>) => {

@@ -1,0 +1,544 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-06",
+  "scope": "Issue 37 research in the signed-in external Chrome app on macOS",
+  "client": "Zoom web client 7.1.0.3.12693 in iframe#webclient",
+  "harness": {
+    "version": "0.0.1",
+    "recorder": "Isolated research extension using the bundled unchanged recorder",
+    "productEndToEndVerified": false,
+    "stimulus": "Participant A used a 9.319-second synthetic microphone clip; Zoom generated the captions",
+    "audioInRepository": false
+  },
+  "method": {
+    "rms": "Square root of the mean squared decoded channel-0 samples in each 0.5-second bucket",
+    "peak": "Largest absolute decoded channel-0 sample in a bucket",
+    "signalThresholdRms": 0.003,
+    "scope": "Signal presence compared with adjacent quiet windows; no listening or transcription quality score"
+  },
+  "fixtures": [
+    {
+      "file": "tests/fixtures/zoom-caption-speaker-a-hidden.html",
+      "source": "zoom-remote-a-main-caption-capture.json",
+      "capturedAt": "2026-10-06T09:09:44.954Z",
+      "captionRows": 1,
+      "visible": false,
+      "initials": "PA"
+    },
+    {
+      "file": "tests/fixtures/zoom-main-caption-a-return-hidden.html",
+      "source": "zoom-breakout-return-a-caption-capture.json",
+      "capturedAt": "2026-10-06T09:45:10.025Z",
+      "captionRows": 1,
+      "visible": false,
+      "initials": "PA"
+    }
+  ],
+  "remoteMain": {
+    "sources": [
+      "remote-a-main-audio-analysis.json",
+      "remote-a-main-stop.json"
+    ],
+    "startedAt": "2026-10-06T09:05:50.024Z",
+    "stimulusStartedAt": "2026-10-06T09:07:49.339Z",
+    "stoppedAt": "2026-10-06T09:09:56.204Z",
+    "audio": {
+      "encodedBytes": 3962230,
+      "decodedDurationSeconds": 246.12,
+      "decodedSampleRateHz": 48000,
+      "decodedChannels": 2,
+      "analyzedChannel": 0,
+      "bucketSeconds": 0.5,
+      "bucketCount": 493,
+      "maximumBucketRms": 0.20531575015781575,
+      "maximumPeak": 0.8073641657829285,
+      "signalBucketsAbove0_003": 19
+    },
+    "stopStatus": {
+      "recording": false,
+      "encodedBytes": 3962230,
+      "anySignal": true,
+      "error": null,
+      "micRecording": false,
+      "micError": null
+    },
+    "finding": "Remote speech was present in the tab recording of the joined iframe client"
+  },
+  "breakoutRoundTrip": {
+    "sources": [
+      "breakout-recording-window-summary.json",
+      "breakout-recording-analysis.json",
+      "breakout-recording-transitions.json",
+      "retry-final-recorder-status.json",
+      "breakout-recording-stop.json"
+    ],
+    "startedAt": "2026-10-06T09:19:59.120000+00:00",
+    "audio": {
+      "encodedBytes": 24350573,
+      "decodedDurationSeconds": 1530.42,
+      "decodedSampleRateHz": 48000,
+      "decodedChannels": 2,
+      "analyzedChannel": 0,
+      "bucketSeconds": 0.5,
+      "bucketCount": 3061,
+      "maximumBucketRms": 0.20857506032741224,
+      "maximumPeak": 0.8304997086524963,
+      "signalBucketsAbove0_003": 58
+    },
+    "stopStatus": {
+      "recording": false,
+      "encodedBytes": 24350573,
+      "anySignal": true,
+      "error": null,
+      "micRecording": false,
+      "micError": null
+    },
+    "windows": [
+      {
+        "stage": "main-before",
+        "playAt": "2026-10-06T09:22:06.408+00:00",
+        "offset": 127.288,
+        "speechWithPadding": {
+          "fromSeconds": 125.288,
+          "toSeconds": 140.288,
+          "buckets": 30,
+          "maxRms": 0.20857506032741224,
+          "meanRms": 0.10056095495212246,
+          "maxPeak": 0.8304997086524963,
+          "signalBucketsAbove0_003": 19
+        },
+        "quietBefore": {
+          "fromSeconds": 112.288,
+          "toSeconds": 122.288,
+          "buckets": 20,
+          "maxRms": 0.00004667995898529329,
+          "meanRms": 0.000044376983556401156,
+          "maxPeak": 0.00022243568673729897,
+          "signalBucketsAbove0_003": 0
+        },
+        "quietAfter": {
+          "fromSeconds": 145.288,
+          "toSeconds": 155.288,
+          "buckets": 20,
+          "maxRms": 0.000044380367441074934,
+          "meanRms": 0.00004260400204198077,
+          "maxPeak": 0.00024051422951743007,
+          "signalBucketsAbove0_003": 0
+        }
+      },
+      {
+        "stage": "breakout",
+        "playAt": "2026-10-06T09:32:23.616+00:00",
+        "offset": 744.496,
+        "speechWithPadding": {
+          "fromSeconds": 742.496,
+          "toSeconds": 757.496,
+          "buckets": 30,
+          "maxRms": 0.20147485627474324,
+          "meanRms": 0.09996251894974889,
+          "maxPeak": 0.8141371011734009,
+          "signalBucketsAbove0_003": 20
+        },
+        "quietBefore": {
+          "fromSeconds": 729.496,
+          "toSeconds": 739.496,
+          "buckets": 20,
+          "maxRms": 0.000012439272300693847,
+          "meanRms": 0.000011277932772623464,
+          "maxPeak": 0.00008845703268889338,
+          "signalBucketsAbove0_003": 0
+        },
+        "quietAfter": {
+          "fromSeconds": 762.496,
+          "toSeconds": 772.496,
+          "buckets": 20,
+          "maxRms": 0.00004657529354998354,
+          "meanRms": 0.00004349893469498998,
+          "maxPeak": 0.00021218389156274498,
+          "signalBucketsAbove0_003": 0
+        }
+      },
+      {
+        "stage": "main-after",
+        "playAt": "2026-10-06T09:43:02.412+00:00",
+        "offset": 1383.292,
+        "speechWithPadding": {
+          "fromSeconds": 1381.292,
+          "toSeconds": 1396.292,
+          "buckets": 30,
+          "maxRms": 0.20483135841370959,
+          "meanRms": 0.10086968799293003,
+          "maxPeak": 0.8297549486160278,
+          "signalBucketsAbove0_003": 19
+        },
+        "quietBefore": {
+          "fromSeconds": 1368.292,
+          "toSeconds": 1378.292,
+          "buckets": 20,
+          "maxRms": 0.000017177650912230276,
+          "meanRms": 0.00001560069303627147,
+          "maxPeak": 0.00009990308899432421,
+          "signalBucketsAbove0_003": 0
+        },
+        "quietAfter": {
+          "fromSeconds": 1401.292,
+          "toSeconds": 1411.292,
+          "buckets": 20,
+          "maxRms": 0.00003884651242262809,
+          "meanRms": 0.00003788161294900998,
+          "maxPeak": 0.00019224738935008645,
+          "signalBucketsAbove0_003": 0
+        }
+      }
+    ],
+    "signalSegments": [
+      {
+        "first": 127.5,
+        "last": 136.5,
+        "maxRms": 0.20857506032741224,
+        "buckets": 19
+      },
+      {
+        "first": 744.5,
+        "last": 754,
+        "maxRms": 0.20147485627474324,
+        "buckets": 20
+      },
+      {
+        "first": 1383.5,
+        "last": 1392.5,
+        "maxRms": 0.20483135841370959,
+        "buckets": 19
+      }
+    ],
+    "sampler": {
+      "intervalMilliseconds": 250,
+      "startedAt": "2026-10-06T09:20:11.951Z",
+      "endedAt": "2026-10-06T09:45:43.056Z",
+      "changedStateCount": 125,
+      "stableTopDocumentIdentity": 1,
+      "stableIframeIdentity": 2,
+      "stableMeetingDocumentIdentity": 3,
+      "urlChanged": false,
+      "captionRootObjectIdentities": [
+        4,
+        9,
+        13
+      ],
+      "identityScope": "This sampler only; not DOM IDs or identities from another capture session",
+      "samples": [
+        {
+          "at": "2026-10-06T09:20:11.952Z",
+          "state": "main-before: retained caption hidden",
+          "captionRoots": [
+            {
+              "objectIdentity": 4,
+              "visible": false
+            }
+          ],
+          "loadingLayers": [],
+          "visibleDialogs": [],
+          "audioOrCaptionControls": [
+            "unmute my microphone",
+            "Hide Captions"
+          ]
+        },
+        {
+          "at": "2026-10-06T09:22:16.929Z",
+          "state": "main-before: remote caption complete",
+          "captionRoots": [
+            {
+              "objectIdentity": 4,
+              "visible": true
+            }
+          ],
+          "loadingLayers": [],
+          "visibleDialogs": [],
+          "audioOrCaptionControls": [
+            "unmute my microphone",
+            "Hide Captions"
+          ]
+        },
+        {
+          "at": "2026-10-06T09:28:34.476Z",
+          "state": "breakout entry: Joining Room 1 loading state",
+          "captionRoots": [],
+          "loadingLayers": [
+            {
+              "objectIdentity": 6,
+              "visible": true
+            }
+          ],
+          "visibleDialogs": [],
+          "audioOrCaptionControls": [
+            "join audio"
+          ]
+        },
+        {
+          "at": "2026-10-06T09:28:36.824Z",
+          "state": "breakout entry: Join Audio and Show Captions controls",
+          "captionRoots": [],
+          "loadingLayers": [],
+          "visibleDialogs": [],
+          "audioOrCaptionControls": [
+            "join audio",
+            "Show Captions"
+          ]
+        },
+        {
+          "at": "2026-10-06T09:31:22.675Z",
+          "state": "breakout: displayed English language prompt",
+          "captionRoots": [],
+          "loadingLayers": [],
+          "visibleDialogs": [
+            {
+              "objectIdentity": 8
+            }
+          ],
+          "audioOrCaptionControls": [
+            "unmute my microphone",
+            "Show Captions"
+          ]
+        },
+        {
+          "at": "2026-10-06T09:32:11.189Z",
+          "state": "breakout: captions shown again",
+          "captionRoots": [
+            {
+              "objectIdentity": 9,
+              "visible": true
+            }
+          ],
+          "loadingLayers": [],
+          "visibleDialogs": [],
+          "audioOrCaptionControls": [
+            "unmute my microphone",
+            "Hide Captions"
+          ]
+        },
+        {
+          "at": "2026-10-06T09:35:35.425Z",
+          "state": "breakout: hidden caption and room-closing dialog",
+          "captionRoots": [
+            {
+              "objectIdentity": 9,
+              "visible": false
+            }
+          ],
+          "loadingLayers": [],
+          "visibleDialogs": [
+            {
+              "objectIdentity": 10
+            }
+          ],
+          "audioOrCaptionControls": [
+            "unmute my microphone",
+            "Hide Captions"
+          ]
+        },
+        {
+          "at": "2026-10-06T09:38:01.673Z",
+          "state": "breakout: 60-second return countdown",
+          "captionRoots": [
+            {
+              "objectIdentity": 9,
+              "visible": false
+            }
+          ],
+          "loadingLayers": [],
+          "visibleDialogs": [],
+          "audioOrCaptionControls": [
+            "unmute my microphone",
+            "Hide Captions"
+          ]
+        },
+        {
+          "at": "2026-10-06T09:39:00.924Z",
+          "state": "automatic return: Returning to Main Session loading state",
+          "captionRoots": [],
+          "loadingLayers": [
+            {
+              "objectIdentity": 11,
+              "visible": true
+            }
+          ],
+          "visibleDialogs": [],
+          "audioOrCaptionControls": [
+            "join audio"
+          ]
+        },
+        {
+          "at": "2026-10-06T09:39:03.219Z",
+          "state": "main-after: Join Audio and Show Captions controls",
+          "captionRoots": [],
+          "loadingLayers": [],
+          "visibleDialogs": [],
+          "audioOrCaptionControls": [
+            "join audio",
+            "Show Captions"
+          ]
+        },
+        {
+          "at": "2026-10-06T09:40:22.674Z",
+          "state": "main-after: captions shown again",
+          "captionRoots": [
+            {
+              "objectIdentity": 13,
+              "visible": true
+            }
+          ],
+          "loadingLayers": [],
+          "visibleDialogs": [],
+          "audioOrCaptionControls": [
+            "unmute my microphone",
+            "Hide Captions"
+          ]
+        },
+        {
+          "at": "2026-10-06T09:43:13.440Z",
+          "state": "main-after: remote caption complete",
+          "captionRoots": [
+            {
+              "objectIdentity": 13,
+              "visible": true
+            }
+          ],
+          "loadingLayers": [],
+          "visibleDialogs": [],
+          "audioOrCaptionControls": [
+            "unmute my microphone",
+            "Hide Captions"
+          ]
+        },
+        {
+          "at": "2026-10-06T09:43:33.443Z",
+          "state": "main-after: retained caption hidden",
+          "captionRoots": [
+            {
+              "objectIdentity": 13,
+              "visible": false
+            }
+          ],
+          "loadingLayers": [],
+          "visibleDialogs": [],
+          "audioOrCaptionControls": [
+            "unmute my microphone",
+            "Hide Captions"
+          ]
+        }
+      ]
+    },
+    "recorderEvents": [
+      {
+        "at": "2026-10-06T09:19:59.120Z",
+        "event": "capture-start",
+        "microphoneRequested": false
+      },
+      {
+        "at": "2026-10-06T09:20:44.128Z",
+        "event": "capture-silent"
+      },
+      {
+        "at": "2026-10-06T09:28:36.305Z",
+        "event": "tabs.onUpdated",
+        "changes": {
+          "audible": false
+        }
+      },
+      {
+        "at": "2026-10-06T09:28:36.971Z",
+        "event": "tabs.onUpdated",
+        "changes": {
+          "audible": true
+        }
+      },
+      {
+        "at": "2026-10-06T09:39:02.731Z",
+        "event": "tabs.onUpdated",
+        "changes": {
+          "audible": false
+        }
+      },
+      {
+        "at": "2026-10-06T09:39:03.451Z",
+        "event": "tabs.onUpdated",
+        "changes": {
+          "audible": true
+        }
+      }
+    ],
+    "finding": "One recorder captured remote speech before, inside and after the breakout room",
+    "limits": [
+      "No continuous speech was supplied during either transition; gapless audio is unverified",
+      "Captions and Join Audio required user-interface actions after room changes",
+      "The caption observer and complete extension flow were not under test"
+    ]
+  },
+  "microphone": {
+    "sources": [
+      "tab-plus-mic-pregranted-audio-analysis.json",
+      "tab-plus-mic-pregranted-start.json",
+      "tab-plus-mic-pregranted-stop.json",
+      "mic-visible-permission.json",
+      "tab-plus-mic-start.json"
+    ],
+    "initialOffscreenAttempt": {
+      "recording": true,
+      "encodedBytes": 146326,
+      "anySignal": false,
+      "error": null,
+      "micRecording": false,
+      "micError": "Permission dismissed"
+    },
+    "visiblePermissionGrant": {
+      "at": "2026-10-06T08:45:17.250Z",
+      "before": "prompt",
+      "after": "granted",
+      "grantedExtensionPermissions": [
+        "activeTab",
+        "storage",
+        "tabs",
+        "tabCapture",
+        "offscreen"
+      ],
+      "liveAudioTrackCount": 1,
+      "permissionTestTracksStoppedAfterCheck": true
+    },
+    "pregrantedStartStatus": {
+      "recording": true,
+      "encodedBytes": 148560,
+      "anySignal": false,
+      "error": null,
+      "micRecording": true,
+      "micError": null
+    },
+    "audio": {
+      "encodedBytes": 4070288,
+      "decodedDurationSeconds": 274.38,
+      "decodedSampleRateHz": 48000,
+      "decodedChannels": 2,
+      "analyzedChannel": 0,
+      "bucketSeconds": 0.5,
+      "bucketCount": 549,
+      "maximumBucketRms": 0.000020796535993990588,
+      "maximumPeak": 0.0007163080153986812,
+      "signalBucketsAbove0_003": 0
+    },
+    "stopStatus": {
+      "recording": false,
+      "encodedBytes": 4070288,
+      "anySignal": false,
+      "error": null,
+      "micRecording": false,
+      "micError": null
+    },
+    "finding": "After a visible permission grant, Zoom audio and the offscreen microphone were live concurrently on macOS",
+    "limits": [
+      "The local speech stimulus did not produce measurable speech or a Zoom caption; local voice capture is unproven",
+      "Live tracks alone do not verify local microphone recording or absence of echo",
+      "Windows, Linux and a fresh profile of the product extension remain untested",
+      "The returned permissions did not include audioCapture; issue 49 remains separate"
+    ]
+  },
+  "privacy": "Only selected DOM excerpts, anonymous test speech, timestamps, numeric metrics and allowlisted event fields are included"
+}

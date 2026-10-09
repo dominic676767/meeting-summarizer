@@ -94,9 +94,8 @@ describe("mixing the microphone into the Audio Recording", () => {
 
 describe("whether a Capture Start asks for the microphone", () => {
   it("does not ask before the disclosure has been answered", () => {
-    // Switched on is not consented to: an escalation the user was never told
-    // about is one they did not agree to — and an offscreen document cannot raise
-    // Chromium's own prompt, so this is the only disclosure there is.
+    // The extension disclosure and Chrome's microphone permission are separate.
+    // Capture needs the disclosure first; Settings requests Chrome access.
     expect(shouldCaptureMic({ enabled: true, confirmedAt: null })).toBe(false);
   });
 
@@ -276,10 +275,6 @@ describe("a revoked microphone stops the Meeting claiming to hold the local user
 });
 
 describe("a silent recording is not a missing recording", () => {
-  // SKIPPED PENDING the provenance clause in artifact.ts, which the design/UI
-  // session owns and is implementing. The `noSpeech` flag it renders against is
-  // in place on Transcript and set by the background. Un-skip when the clause
-  // lands — this assertion is the contract it has to satisfy.
   it("says the recording contained no speech rather than that none was made", () => {
     // Two different facts: audio WAS recorded here, and the engine ran and heard
     // nothing. Reporting it as "no audio was recorded" would send the reader
@@ -291,5 +286,46 @@ describe("a silent recording is not a missing recording", () => {
     });
     expect(html).not.toContain("no audio was recorded");
     expect(html).toContain("no speech");
+  });
+});
+
+describe("a failed capture is not a silent recording", () => {
+  it("reports the failure even if an older result claimed there was no speech", () => {
+    const html = renderArtifact(
+      "## TL;DR\nThe report is due on Monday.",
+      transcript({
+        provenance: "captions-only",
+        noSpeech: true,
+        captureError: "The audio stream stopped advancing.",
+      }),
+    );
+    expect(html).toContain("from live captions only — audio capture failed");
+    expect(html).toContain("Audio capture failed:");
+    expect(html).toContain("The transcript can be incomplete.");
+    expect(html).not.toContain("no speech");
+  });
+
+  it("escapes the capture failure in the saved HTML", () => {
+    const html = renderArtifact(
+      "## TL;DR\nAvailable captions.",
+      transcript({ captureError: "<script>alert('capture')</script>" }),
+    );
+    expect(html).toContain("&lt;script&gt;alert('capture')&lt;/script&gt;");
+    expect(html).not.toContain("<script>alert('capture')</script>");
+  });
+
+  it("keeps the available captions in the transcript when audio capture fails", () => {
+    const marker = "My marker is silver lantern six. I will send the report on Monday.";
+    const html = renderArtifact(
+      "## TL;DR\nThe report is due on Monday.",
+      transcript({
+        provenance: "captions-only",
+        captureError: "The recorder stopped producing audio data.",
+        segments: [{ capturedAt: 1_000, speaker: "Dominic Hong", text: marker }],
+      }),
+    );
+    expect(html).toContain(marker);
+    expect(html).toContain("Dominic Hong");
+    expect(html).toContain("audio capture failed");
   });
 });

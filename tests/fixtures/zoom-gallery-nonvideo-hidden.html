@@ -1,0 +1,76 @@
+<!--
+Real Zoom meeting-frame DOM, captured on 2026-10-06.
+Source: zoom-layout-b-hide-nonvideo-confirmed.json
+Captured at: 2026-10-06T05:02:37.527Z (UTC)
+Client assets: web_client/7.1.0.3.12693.
+Scope: Participant B selected Hide Non-Video Participants. The menu now offers Show Non-Video Participants. All four video-off tiles remained displayed in the live all-video-off view; this does not test a mixed camera-on/camera-off view.
+The HTML/body wrapper is a fixture wrapper. Separate excerpts retain their own
+observed ancestor paths; their common meeting-page ancestors are omitted.
+Host name becomes Participant F. URLs, styles, dynamic IDs, and media are removed.
+Participant SVG icon classes remain; SVG geometry is removed.
+-->
+<!doctype html>
+<html>
+<body>
+  <div class="dark-dropdown full-screen-widget__pop-menu dropdown-menu show">
+    <a aria-label="Speaker View" class="dropdown-item" role="button" tabindex="0">Speaker View</a>
+    <a aria-label="Gallery View" class="full-screen-widget__pop-menu--checked dropdown-item" role="button" tabindex="0">Gallery View</a>
+    <a aria-label="Multi-speaker View" class="dropdown-item" role="button" tabindex="0">Multi-speaker View</a>
+    <div class="common-ui-component__dropdown-divider"></div>
+    <a aria-label="Sort Gallery By" class="dropdown-item" role="button" tabindex="0">
+      <div>
+        <span>Sort Gallery By<span></span></span>
+      </div>
+    </a>
+    <div class="common-ui-component__dropdown-divider"></div>
+    <a aria-label="Hide Self View" class="dropdown-item" role="button" tabindex="0">Hide Self View</a>
+    <a aria-label="Show Non-Video Participants" class="dropdown-item" role="button" tabindex="0">Show Non-Video Participants</a>
+    <div class="common-ui-component__dropdown-divider"></div>
+    <a aria-label="Fullscreen" class="dropdown-item" role="button" tabindex="0">Fullscreen</a>
+  </div>
+  <div class="gallery-video-container__video-frame gallery-video-container__video-frame--active react-draggable">
+    <div class="video-avatar__avatar">
+      <div class="video-avatar__avatar-title">
+        <img class="video-avatar__avatar-img" alt="Participant F">
+      </div>
+      <div class="video-avatar__avatar-footer">
+        <i class="video-avatar__avatar-footer--view-mute-computer"></i>
+        <span role="none">Participant F</span>
+      </div>
+    </div>
+  </div>
+  <div class="gallery-video-container__video-frame react-draggable">
+    <div class="video-avatar__avatar">
+      <div class="video-avatar__avatar-title">
+        <div class="video-avatar__avatar-name">Participant B</div>
+      </div>
+      <div class="video-avatar__avatar-footer">
+        <i class="video-avatar__avatar-footer--view-mute-computer"></i>
+        <span role="none">Participant B</span>
+      </div>
+    </div>
+  </div>
+  <div class="gallery-video-container__video-frame react-draggable">
+    <div class="video-avatar__avatar">
+      <div class="video-avatar__avatar-title">
+        <div class="video-avatar__avatar-name">Participant A</div>
+      </div>
+      <div class="video-avatar__avatar-footer">
+        <i class="video-avatar__avatar-footer--view-mute-computer"></i>
+        <span role="none">Participant A</span>
+      </div>
+    </div>
+  </div>
+  <div class="gallery-video-container__video-frame react-draggable">
+    <div class="video-avatar__avatar">
+      <div class="video-avatar__avatar-title">
+        <div class="video-avatar__avatar-name">Participant C</div>
+      </div>
+      <div class="video-avatar__avatar-footer">
+        <i class="video-avatar__avatar-footer--view-mute-computer"></i>
+        <span role="none">Participant C</span>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

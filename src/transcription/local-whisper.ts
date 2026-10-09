@@ -7,6 +7,8 @@
 // offscreen document, the only extension context with both an AudioContext for
 // decoding and the ability to spawn a worker.
 import type { MeetingLanguage, WhisperModelSize } from "../domain/types";
+import { isSilenceArtifact } from "./silence";
+import { whisperInferenceDurationMs } from "./whisper-audio";
 import {
   TranscriptionError,
   type DecodedAudio,
@@ -76,7 +78,7 @@ export function createLocalWhisperEngine(opts: {
       loading?.resolve();
       loading = undefined;
     } else if (msg.type === "spans") {
-      pending.get(msg.id)?.resolve(msg.spans);
+      pending.get(msg.id)?.resolve(msg.spans.filter((span) => !isSilenceArtifact(span.text)));
       pending.delete(msg.id);
     } else {
       const err = new TranscriptionError(`local Whisper: ${msg.message}`);
@@ -98,6 +100,7 @@ export function createLocalWhisperEngine(opts: {
     name: "local-whisper",
     sampleRate: WHISPER_SAMPLE_RATE,
     maxInputMs: WHISPER_MAX_INPUT_MS,
+    inferenceDurationMs: whisperInferenceDurationMs,
     load(progress) {
       onModelProgress = progress;
       return new Promise<void>((resolve, reject) => {
