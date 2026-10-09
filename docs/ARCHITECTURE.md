@@ -122,6 +122,7 @@ flowchart LR
         mount["mount.ts<br/>one runner per platform and frame"]
         runner["runner.ts<br/>shared content loop"]
         capturePrompt["capture-prompt.ts"]
+        promptPosition["prompt-position.ts<br/>drag, keyboard movement, saved position"]
     end
     subgraph adapters["src/adapters"]
         adapter["adapter.ts<br/>PlatformAdapter interface"]
@@ -234,6 +235,7 @@ flowchart LR
     popupTs --> awsCreds
     optionsTs --> micPermission
     optionsTs --> optionsMicAccess --> micPermission
+    capturePrompt --> promptPosition
 ```
 
 `platform.ts` (the `chrome` namespace as `ext`), `messages.ts` (the protocol) and `domain/types.ts` (the vocabulary) are imported almost everywhere and are left off the arrows.
@@ -670,6 +672,7 @@ The functions to read first, by job.
 | `src/content/mount.ts` | replaces the previous runner for the same platform and frame |
 | `src/content/runner.ts` | shared content-script loop for any adapter: MutationObserver, 400 ms debounce, diffing, Meeting End grace period |
 | `src/content/capture-prompt.ts` | in-page "start recording" card in a shadow root |
+| `src/content/prompt-position.ts` | moves the in-page card by pointer, buttons or keyboard; saves its relative position in `storage.local` and keeps it inside the viewport |
 | `src/adapters/adapter.ts` | `PlatformAdapter` interface, incl. optional `leaveGraceMs` (default 10 s) |
 | `src/adapters/teams.ts` | Teams caption and call-state selectors |
 | `src/adapters/zoom.ts` | Zoom subtitle capture, sliding subtitle overlap, visibility, breakout grace period and host-end detection |

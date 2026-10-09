@@ -47,6 +47,8 @@ If summarization fails (provider outage, missing key), the transcript is **held*
 
 Zoom captions currently use **Unknown** as the speaker name. The extension waits 30 seconds after the Zoom meeting controls disappear before it treats the meeting as ended. This permits short transitions, such as a breakout room change.
 
+Drag the in-page status row or its six-dot handle to move the card away from meeting controls. Its position is saved for later visits and kept inside the window when it is resized. You can also click the handle for move buttons, or focus it and use the arrow keys (hold Shift for larger steps). Escape closes the move buttons or cancels a drag.
+
 ## Transcription
 
 Configured separately from the summary Provider, because most LLM backends have no speech-to-text API — a Claude or Bedrock key cannot transcribe audio.
