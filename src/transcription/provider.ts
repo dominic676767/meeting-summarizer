@@ -10,6 +10,8 @@
 // chunking, offset correction, progress, cancellation) is testable with no
 // browser, no WASM, and no real audio.
 import type { Utterance } from "../domain/types";
+import { SILENT_BELOW_RMS } from "../offscreen/signal";
+import { loudestRms, pauseWindows, type PauseWindowing, type SampleWindow } from "./pauses";
 import { rejectAsSilent } from "./silence";
 
 /** One Capture Span's audio, as the recorder wrote it. */
@@ -118,9 +120,26 @@ export interface TranscriptionEngine {
   readonly sampleRate: number;
   /** Longest single input the engine accepts, ms. Longer recordings are chunked. */
   readonly maxInputMs: number;
+  /**
+   * Set by an engine whose output has no timestamps: its windows are then cut
+   * short and at pauses (`./pauses`), because each window becomes one Utterance
+   * with one speaker. Without it, windows are `maxInputMs` long.
+   */
+  readonly windowing?: PauseWindowing;
+  /**
+   * How many windows may be in flight at once. Absent means one at a time. Set
+   * by an engine whose calls each cost a fixed wait, such as a round trip to a
+   * remote endpoint, which several calls in flight share.
+   */
+  readonly concurrency?: number;
   /** Fetch and initialise the model. Cached by the engine; called once per run. */
   load(onProgress?: (loadedBytes: number, totalBytes: number | null) => void): Promise<void>;
-  transcribe(samples: Float32Array): Promise<EngineSpan[]>;
+  /**
+   * `signal` is the user's cancel. An engine whose one call can run for minutes
+   * (a cloud upload) must pass it on, or "use captions" waits for the upload to
+   * finish before anything happens; an engine that answers quickly may ignore it.
+   */
+  transcribe(samples: Float32Array, signal?: AbortSignal): Promise<EngineSpan[]>;
   /** Duration submitted to the model after quiet audio is skipped. Engines that
    * infer the whole input can omit this and use the decoded input duration. */
   inferenceDurationMs?(samples: Float32Array): number;
@@ -138,10 +157,17 @@ function abortIfCancelled(signal: AbortSignal | undefined): void {
   if (signal?.aborted) throw new TranscriptionCancelled();
 }
 
-async function attempt<T>(what: string, run: () => Promise<T>): Promise<T> {
+async function attempt<T>(
+  what: string,
+  run: () => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
   try {
     return await run();
   } catch (cause) {
+    // An engine that honoured the cancel fails with whatever its fetch threw.
+    // That is the user skipping the wait, not a failure to hold a Recording for.
+    if (signal?.aborted) throw new TranscriptionCancelled();
     if (cause instanceof TranscriptionError) throw cause;
     throw new TranscriptionError(
       `${what}: ${cause instanceof Error ? cause.message : String(cause)}`,
@@ -155,7 +181,8 @@ async function attempt<T>(what: string, run: () => Promise<T>): Promise<T> {
  *
  * Every Capture Span is transcribed in order and their Utterances concatenated.
  * A span longer than the engine's input limit is transcribed in windows of that
- * length, and each engine span is shifted by its window's position *plus its own
+ * length (or, for an engine that asks, in short windows cut at pauses), and each
+ * engine span is shifted by its window's position *plus its own
  * span's Capture Start*, so Utterance timings stay absolute relative to the
  * Meeting across both chunk and span boundaries. Fusion matches on those
  * timings, so an uncorrected offset would silently misattribute every word after
@@ -186,32 +213,56 @@ export function createTranscriptionProvider(
       }
       const totalMs = decoded.reduce((ms, d) => ms + msFor(d.samples.length, d.sampleRate), 0);
 
-      const utterances: Utterance[] = [];
+      // Every window of every span is known before the first call, for the part
+      // numbers below. A diarizing engine's labels mean something only inside the
+      // one call that produced them: its "Speaker 1" in one window and in the next
+      // need not be the same person. So when the recording takes more than one
+      // call, every label names its part, and two people never share one.
+      const jobs = windowJobs(engine, decoded);
+
+      // With more than one window in flight, one failure must stop the others:
+      // the Recording is held either way, and their answers would be thrown away.
+      // One at a time, the engine is handed the user's own signal, unchanged.
+      const limit = Math.max(1, engine.concurrency ?? 1);
+      const stopOthers = new AbortController();
+      const engineSignal =
+        limit === 1
+          ? hooks?.signal
+          : hooks?.signal
+            ? AbortSignal.any([hooks.signal, stopOthers.signal])
+            : stopOthers.signal;
+
       let doneMs = 0;
       let inferenceMs = 0;
-      for (const { samples, sampleRate, startOffsetMs } of decoded) {
-        const windowSamples = Math.max(1, Math.round((engine.maxInputMs / 1000) * sampleRate));
-        for (let offset = 0; offset < samples.length; offset += windowSamples) {
+      const perWindow = await inPool(
+        jobs.length,
+        limit,
+        async (i) => {
           abortIfCancelled(hooks?.signal);
-          const end = Math.min(offset + windowSamples, samples.length);
-          // Absolute zero for this window: where the Meeting began, not where the
-          // window did and not where this span's Capture Start was.
-          const baseMs = startOffsetMs + msFor(offset, sampleRate);
-          const input = samples.subarray(offset, end);
-          const spans = await attempt("engine failed", () => {
-            inferenceMs += engine.inferenceDurationMs?.(input) ?? msFor(input.length, sampleRate);
-            return engine.transcribe(input);
-          });
-          for (const span of spans) {
-            const utterance = toUtterance(span, baseMs);
-            if (utterance) utterances.push(utterance);
-          }
+          const job = jobs[i]!;
+          // Keep the full decoded duration for engines without an override,
+          // including windows skipped at pauses. Whisper measures retained audio.
+          inferenceMs += engine.inferenceDurationMs?.(job.samples) ?? job.lengthMs;
+          // A window cut at pauses that holds no signal at all is not sent: the
+          // engine would answer it with invented words, and nothing downstream
+          // could tell them from speech.
+          const spans = job.silent
+            ? []
+            : await attempt(
+                "engine failed",
+                () => engine.transcribe(job.samples, engineSignal),
+                hooks?.signal,
+              );
           // Progress counts audio transcribed, not Meeting time elapsed: the gap
           // between two spans was never recorded and is not work to be done.
-          hooks?.onAudioProgress?.(doneMs + msFor(end, sampleRate), totalMs);
-        }
-        doneMs += msFor(samples.length, sampleRate);
-      }
+          doneMs += job.lengthMs;
+          hooks?.onAudioProgress?.(doneMs, totalMs);
+          return spans.flatMap((span) => toUtterance(span, job.baseMs, job.part) ?? []);
+        },
+        () => stopOthers.abort(),
+      );
+      // In Meeting order whatever order the calls finished in.
+      const utterances = perWindow.flat();
 
       // Refuse filler output against the duration sent to the model. Local Whisper
       // skips quiet sections, so a short sentence in a long recording must be
@@ -227,8 +278,114 @@ function msFor(sampleCount: number, sampleRate: number): number {
   return Math.round((sampleCount / sampleRate) * 1000);
 }
 
-/** Engine span → Utterance, or null for a span with no words in it. */
-function toUtterance(span: EngineSpan, baseMs: number): Utterance | null {
+/** One engine call to make, or to skip, with everything its answer needs. */
+interface WindowJob {
+  samples: Float32Array;
+  /** Where the window starts, ms from the Meeting start. */
+  baseMs: number;
+  /** The 1-based call number, or null when the recording takes one call. */
+  part: number | null;
+  /** This window's share of the progress total. */
+  lengthMs: number;
+  /** No signal at all: skipped rather than sent. */
+  silent: boolean;
+}
+
+/**
+ * Every window of every span, in Meeting order. Progress shares are taken as
+ * differences of each window's end, so that they add up to the totals exactly.
+ */
+function windowJobs(
+  engine: TranscriptionEngine,
+  decoded: { samples: Float32Array; sampleRate: number; startOffsetMs: number }[],
+): WindowJob[] {
+  const windows = decoded.map((d) => windowsFor(engine, d.samples, d.sampleRate));
+  const count = windows.reduce((n, w) => n + w.length, 0);
+  const jobs: WindowJob[] = [];
+  let spanDoneMs = 0;
+  let previousEndMs = 0;
+  for (const [i, d] of decoded.entries()) {
+    for (const w of windows[i] ?? []) {
+      const endMs = spanDoneMs + msFor(w.end, d.sampleRate);
+      jobs.push({
+        samples: d.samples.subarray(w.start, w.end),
+        baseMs: d.startOffsetMs + msFor(w.start, d.sampleRate),
+        part: count > 1 ? jobs.length + 1 : null,
+        lengthMs: endMs - previousEndMs,
+        // Only for windows cut at pauses. A long window always holds some sound
+        // worth an answer, and those engines answer silence in their own ways.
+        silent:
+          engine.windowing !== undefined &&
+          loudestRms(d.samples, d.sampleRate, w) < SILENT_BELOW_RMS,
+      });
+      previousEndMs = endMs;
+    }
+    spanDoneMs += msFor(d.samples.length, d.sampleRate);
+  }
+  return jobs;
+}
+
+/**
+ * Runs `run(0)` … `run(count - 1)` with at most `limit` in flight, and returns
+ * their results in index order. The first failure stops new work, calls
+ * `onFailure` so the work in flight can be stopped, and is the one thrown.
+ */
+async function inPool<T>(
+  count: number,
+  limit: number,
+  run: (index: number) => Promise<T>,
+  onFailure: () => void,
+): Promise<T[]> {
+  const results: T[] = new Array<T>(count);
+  let next = 0;
+  let failure: { error: unknown } | null = null;
+  const worker = async () => {
+    while (failure === null && next < count) {
+      const index = next++;
+      try {
+        results[index] = await run(index);
+      } catch (error) {
+        if (failure === null) {
+          failure = { error };
+          onFailure();
+        }
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, count) }, worker));
+  if (failure !== null) throw (failure as { error: unknown }).error;
+  return results;
+}
+
+/**
+ * One span's windows: cut at pauses for an engine that asked for that, and
+ * otherwise back to back at the engine's input limit. Either way no window is
+ * longer than `maxInputMs`.
+ */
+function windowsFor(
+  engine: TranscriptionEngine,
+  samples: Float32Array,
+  sampleRate: number,
+): SampleWindow[] {
+  if (engine.windowing) {
+    return pauseWindows(samples, sampleRate, {
+      targetMs: engine.windowing.targetMs,
+      maxMs: Math.min(engine.windowing.maxMs, engine.maxInputMs),
+    });
+  }
+  const size = Math.max(1, Math.round((engine.maxInputMs / 1000) * sampleRate));
+  const windows: SampleWindow[] = [];
+  for (let start = 0; start < samples.length; start += size) {
+    windows.push({ start, end: Math.min(start + size, samples.length) });
+  }
+  return windows;
+}
+
+/**
+ * Engine span → Utterance, or null for a span with no words in it. `part` is the
+ * 1-based engine call the span came from, or null when the recording took one.
+ */
+function toUtterance(span: EngineSpan, baseMs: number, part: number | null): Utterance | null {
   const text = span.text.trim();
   if (text === "") return null;
   const startMs = Math.round(baseMs + span.startSec * 1000);
@@ -237,6 +394,8 @@ function toUtterance(span: EngineSpan, baseMs: number): Utterance | null {
     text,
     startMs,
     endMs: Math.max(startMs, endMs),
-    ...(span.speaker ? { diarizationLabel: span.speaker } : {}),
+    ...(span.speaker
+      ? { diarizationLabel: part === null ? span.speaker : `${span.speaker} (part ${part})` }
+      : {}),
   };
 }

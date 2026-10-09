@@ -4,4 +4,11 @@ node_modules/
 dist/
 .impeccable/hook.cache.json
 .codex/
+# Evaluation data: clips, reference transcripts, engine outputs and the model
+# cache all live under .eval/ and never enter git (docs/evaluations/README.md).
+# The patterns below catch a clip or reference saved anywhere else by mistake.
+.eval/
+*.wav
+!tests/fixtures/known-phrase.wav
+*.reference.json
 .DS_Store

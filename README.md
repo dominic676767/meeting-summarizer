@@ -6,7 +6,7 @@ Zoom web client support is implemented on this branch. The four requested live f
 
 Pure WebExtension: no companion app, no backend. Transcription runs on your machine by default, so the only things that leave it are the LLM call (nothing at all, with Ollama) and the one-time Whisper model download. Cloud transcription exists but is opt-in and off until you choose it.
 
-Speaker attribution is not wired up yet: base Whisper performs no diarization, so transcript lines read as *Unknown speaker* until captions are fused with the audio. A meeting with no recording still gets a caption-only summary.
+Speaker names come from Teams' live captions, matched against the audio's timings. Whisper cannot tell voices apart, so a line the captions missed reads *Unknown speaker*; with ElevenLabs Scribe (below) it reads *Speaker 1*, *Speaker 2* instead. A meeting with no recording still gets a caption-only summary.
 
 ## Install (unpacked, for development)
 
@@ -33,7 +33,7 @@ Tell participants how you intend to use the recording, transcript, and summary, 
 
 1. Open Settings (extension options), pick a Provider and paste its API key.
    - **Ollama**: run it with `OLLAMA_ORIGINS=chrome-extension://*` so the extension may call it.
-   - **Bedrock**: use a Bedrock API key (bearer token). AWS SigV4 credentials are not supported.
+   - **Bedrock**: use a Bedrock API key (bearer token) only.
    - If you enable the local microphone, select **Allow microphone access** in Settings and select **Allow** in Chrome. Then return to the meeting and start recording.
 2. Join a Teams or Zoom meeting in the browser and **turn on live captions** if available.
    - **Teams**: at `teams.microsoft.com`, select More → Language and speech → Turn on live captions.
@@ -56,6 +56,35 @@ Local Whisper is the default and needs no key. Pick a model size in Settings —
 **Meeting language** is one setting for whichever engine is selected, and it defaults to **English**. Nothing detects it: the engine transcribes as if the language you picked were the one being spoken, so a meeting held in another language comes back as wrong words until you change it.
 
 **OpenAI transcription** is the opt-in cloud alternative: faster and more accurate, at the cost of uploading the meeting's audio. It takes its own key in the Transcription section of Settings — separate from the OpenAI key used for summarizing — and a model that returns per-segment timestamps (`whisper-1`), because speaker names come from matching those timings against the captions. Switching engine changes what the next meeting uses; nothing else about the flow changes.
+
+**ElevenLabs Scribe** is the second opt-in cloud engine, chosen for the one thing the others cannot do: it tells voices apart. Where the captions give no name, a line reads *Speaker 1* or *Speaker 2* rather than *Unknown speaker*. The cost is the same as OpenAI's — the meeting's audio is uploaded, and ElevenLabs may keep it under its own terms. It takes its own key in the Transcription section of Settings and the model `scribe_v2`. Audio goes up an hour at a time, and speaker labels only hold within one upload, so a recording that needs more than one labels each speaker with its part (*Speaker 1 (part 2)*) rather than risk giving two people the same name. See [ADR-0008](docs/adr/0008-elevenlabs-scribe-the-diarizing-cloud-engine.md).
+
+**Amazon SageMaker** is the third opt-in cloud engine: your own endpoint, in your own AWS account, running **Qwen3-ASR 1.7B** from SageMaker JumpStart. Of the JumpStart speech-to-text models it has the best average English word error rate, and it covers 30 languages. The meeting's audio is uploaded to that endpoint, and what is kept there depends on how you set it up: with SageMaker data capture on, for example, every request is stored in S3. See [ADR-0009](docs/adr/0009-sagemaker-transcription-on-temporary-aws-credentials.md) and the research in [docs/research/](docs/research/sagemaker-jumpstart-stt.md).
+
+1. Deploy `huggingface-asr-qwen3-asr-1-7b` from SageMaker JumpStart to a real-time endpoint. The default instance, `ml.g6.xlarge`, costs about $1.13 an hour in `us-east-1` for as long as it runs. The extension only calls the endpoint: it never creates, scales or deletes anything.
+2. Give the credentials you will paste this one permission, and nothing more:
+
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Effect": "Allow",
+         "Action": "sagemaker:InvokeEndpoint",
+         "Resource": "arn:aws:sagemaker:<region>:<account-id>:endpoint/<endpoint-name>"
+       }
+     ]
+   }
+   ```
+
+3. In Settings → Transcription, choose *Amazon SageMaker*, enter the region and the endpoint name, and paste **temporary** credentials: the `export AWS_…` lines from the AWS access portal, a credentials-file profile, or the output of `aws configure export-credentials`. Long-term keys (`AKIA…`) are refused. The credentials are kept in memory only, and are gone when you close the browser.
+4. Click *Test the endpoint*. It sends one second of silence, never meeting audio, and says which part of the setup to fix, if any.
+
+Qwen3-ASR returns words without timings, so the audio goes in pieces of about 10 seconds, cut at pauses, four at a time, and each piece takes its speaker name from the captions. A piece with no sound at all is not sent, because the model invents words for silence. If the credentials expire before a meeting ends, the popup warns you while it records, and the meeting's audio is kept: paste fresh credentials and use *Retry transcription* in the popup. If the meeting language is set wrong, Qwen3-ASR translates into it rather than mistranscribing. It does not list Hebrew, Norwegian or Ukrainian; for these, no language is sent and the model guesses.
+
+Choosing a different cloud engine asks for microphone consent again, because the recording would go somewhere else: to a different company, or with SageMaker, to your own AWS account.
+
+How the engines compare on the same audio — word error rate, and how often each word is credited to the right speaker — is measured with the harness in `eval/`; the method and the rules for what audio may be used are in [docs/evaluations](docs/evaluations/README.md).
 
 ## Summary shapes
 

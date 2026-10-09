@@ -62,11 +62,11 @@ The auto-detected condition (call controls disappearing, call-ended DOM state, o
 
 ### Transcription Provider
 
-The user-selected engine that turns an Audio Recording into Utterances. Distinct from [[Provider]] — most LLM backends have no speech-to-text API. Local WASM Whisper is the default (nothing leaves the machine); cloud engines are opt-in.
+The user-selected engine that turns an Audio Recording into Utterances. Distinct from [[Provider]] — most LLM backends have no speech-to-text API. Local WASM Whisper is the default (nothing leaves the machine); cloud engines are opt-in. One of them is not a vendor's service but the user's own: a SageMaker endpoint in their own AWS account, called with temporary AWS credentials that are kept in memory only (ADR-0009).
 
 ### Meeting Language
 
-The language the user declares their meetings are spoken in, passed to whichever [[Transcription Provider]] is selected as its language hint. Declared rather than detected: nothing in the pipeline detects it, and an engine given no hint silently assumes English — so an undeclared German meeting comes back *mistranscribed*, and the Prompt Templates then faithfully summarize the wrong words. It describes the Meeting, not the engine, so it is one setting rather than one per engine.
+The language the user declares their meetings are spoken in, passed to whichever [[Transcription Provider]] is selected as its language hint. Declared rather than detected: nothing in the pipeline detects it, and an engine given no hint silently assumes English — so an undeclared German meeting comes back *mistranscribed*, and the Prompt Templates then faithfully summarize the wrong words. It describes the Meeting, not the engine, so it is one setting rather than one per engine. One engine cannot take every declared language: Qwen3-ASR on SageMaker does not list Hebrew, Norwegian or Ukrainian, so for those no hint is sent and it guesses (ADR-0009).
 
 ### Provider
 

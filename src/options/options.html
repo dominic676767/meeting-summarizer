@@ -68,7 +68,7 @@
 
     <fieldset id="panel-bedrock" class="hidden">
       <legend>AWS Bedrock</legend>
-      <p class="note">Bedrock API key (bearer token) only — AWS SigV4 credentials are not supported.</p>
+      <p class="note">Bedrock API key (bearer token) only.</p>
       <label for="bedrock-key">API key</label>
       <input type="password" id="bedrock-key" autocomplete="off" />
       <label for="bedrock-region">Region</label>
@@ -95,8 +95,8 @@
       from the summary.
     </p>
     <p class="note hidden" id="mic-why-cloud">
-      The recording — your microphone mixed with the meeting audio — is uploaded to OpenAI to be
-      transcribed, so a recording of your voice leaves this computer. To keep it on this machine,
+      The recording — your microphone mixed with the meeting audio — is uploaded to
+      <span id="mic-why-cloud-engine">OpenAI</span> to be transcribed, so a recording of your voice leaves this computer. To keep it on this machine,
       switch transcription to the local engine below.
     </p>
     <p class="note">Takes effect the next time you start recording.</p>
@@ -108,6 +108,8 @@
     <select id="transcription-provider">
       <option value="local-whisper">Local Whisper (on this machine, no API key)</option>
       <option value="openai">OpenAI (cloud — uploads your meeting audio)</option>
+      <option value="elevenlabs">ElevenLabs Scribe (cloud — uploads your meeting audio)</option>
+      <option value="sagemaker">Amazon SageMaker, your own endpoint (cloud — uploads your meeting audio)</option>
     </select>
     <p class="note">
       <strong>This is not the LLM above.</strong> Summarizing and transcribing are two different
@@ -163,6 +165,77 @@
         from live captions matched against those timings, so a model without them costs you the
         names.
       </p>
+    </fieldset>
+
+    <fieldset id="panel-transcription-elevenlabs" class="hidden">
+      <legend>ElevenLabs Scribe transcription</legend>
+      <p class="note">
+        Tells voices apart: where live captions miss who was speaking, the summary reads
+        <em>Speaker 1</em>, <em>Speaker 2</em> instead of <em>Unknown speaker</em>. The price is that
+        the meeting's audio is <strong>uploaded to ElevenLabs</strong>, and ElevenLabs may keep it
+        under its own terms. Do not choose this for a confidential meeting — local Whisper keeps the
+        audio on this machine.
+      </p>
+      <label for="transcription-elevenlabs-key">API key</label>
+      <input type="password" id="transcription-elevenlabs-key" autocomplete="off" />
+      <label for="transcription-elevenlabs-model">Model</label>
+      <input type="text" id="transcription-elevenlabs-model" />
+      <p class="note">
+        Use a Scribe model (<code>scribe_v2</code>). Speaker labels hold within one upload of up to an
+        hour; if a recording needs more than one, each label says which part it came from.
+      </p>
+    </fieldset>
+
+    <fieldset id="panel-transcription-sagemaker" class="hidden">
+      <legend>Amazon SageMaker transcription</legend>
+      <p class="note">
+        Sends the meeting's audio to your own SageMaker endpoint, running Qwen3-ASR from SageMaker
+        JumpStart. The audio is <strong>uploaded to your AWS account</strong>, and what is kept there
+        depends on how the endpoint is set up: with SageMaker data capture on, for example, the
+        endpoint stores every request in S3. Do not choose this for a confidential meeting unless you
+        control that account — local Whisper keeps the audio on this machine.
+      </p>
+      <p class="note">
+        Qwen3-ASR returns words without timings. So the audio is sent in short pieces cut at pauses,
+        and each piece gets its speaker name from the live captions.
+      </p>
+      <label for="transcription-sagemaker-region">Region</label>
+      <input type="text" id="transcription-sagemaker-region" placeholder="us-east-1" />
+      <label for="transcription-sagemaker-endpoint">Endpoint name</label>
+      <input type="text" id="transcription-sagemaker-endpoint" autocomplete="off" />
+
+      <label for="transcription-sagemaker-credentials">Temporary AWS credentials</label>
+      <textarea
+        id="transcription-sagemaker-credentials"
+        rows="4"
+        autocomplete="off"
+        spellcheck="false"
+        aria-describedby="transcription-sagemaker-credentials-help"
+        placeholder="export AWS_ACCESS_KEY_ID=ASIA…&#10;export AWS_SECRET_ACCESS_KEY=…&#10;export AWS_SESSION_TOKEN=…"
+        style="width: 100%; box-sizing: border-box; font: 12px monospace;"
+      ></textarea>
+      <p class="note" id="transcription-sagemaker-credentials-status" role="status" aria-live="polite"></p>
+      <p class="note" id="transcription-sagemaker-credentials-help">
+        Paste the block your tool prints: <code>export AWS_…</code> lines from the AWS access portal or
+        <code>aws configure export-credentials --format env</code>, a credentials-file profile, or the
+        JSON from <code>aws configure export-credentials</code>. They need
+        <code>sagemaker:InvokeEndpoint</code> on this endpoint and nothing more. Long-term keys
+        (<code>AKIA…</code>) are refused. The credentials are kept in memory only, never saved to disk,
+        and are gone when you close the browser. If they expire before a meeting ends, its audio is
+        kept so that you can paste fresh ones and retry.
+      </p>
+      <button id="transcription-sagemaker-forget" type="button">Forget the credentials</button>
+
+      <p class="note">
+        With this engine, a meeting held in another language than the one chosen above comes back
+        <strong>translated</strong> into the chosen language, not as wrong words. Qwen3-ASR does not
+        list Hebrew, Norwegian or Ukrainian. For a meeting in one of these, no language is sent and
+        the model guesses, so expect wrong words.
+      </p>
+
+      <button id="transcription-sagemaker-test" type="button">Test the endpoint</button>
+      <p class="note">Sends one second of silence, never meeting audio, with the values above.</p>
+      <p class="note" id="transcription-sagemaker-test-result" role="status" aria-live="polite"></p>
     </fieldset>
 
     <h2>Summary</h2>

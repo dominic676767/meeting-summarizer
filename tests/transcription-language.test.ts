@@ -135,6 +135,20 @@ describe("meeting language", () => {
     expect(form.get("language")).toBe("de");
   });
 
+  it("reaches Scribe as its language_code, the same declaration unchanged", async () => {
+    const { fn, calls } = fakeFetch({
+      words: [{ text: "Selamat pagi semua.", type: "word", start: 0, end: 1, speaker_id: "s0" }],
+    });
+    const settings = settingsFor({
+      provider: "elevenlabs",
+      language: "ms",
+      elevenlabs: { apiKey: "xi-t", model: "scribe_v2" },
+    });
+    await createTranscriptionProviderFor(settings, deps(fn)).transcribe(recording());
+    const form = calls[0]!.init.body as FormData;
+    expect(form.get("language_code")).toBe("ms");
+  });
+
   it("asks the model for that language without giving up the timings fusion needs", () => {
     const options = whisperRunOptions("uk");
     expect(options.language).toBe("uk");
@@ -151,5 +165,23 @@ describe("meeting language", () => {
     expect(s.transcription.language).toBe("en");
     // The rest of that user's transcription settings survive untouched.
     expect(s.transcription.localWhisper.model).toBe("small");
+  });
+
+  it("gives settings saved before Scribe existed its defaults, and changes nothing else", async () => {
+    stored.settings = {
+      provider: "anthropic",
+      transcription: {
+        provider: "openai",
+        language: "de",
+        localWhisper: { model: "small" },
+        openai: { apiKey: "sk-kept", model: "whisper-1" },
+      },
+    };
+    const s = await loadSettings();
+    expect(s.transcription.elevenlabs).toEqual({ apiKey: "", model: "scribe_v2" });
+    // An upgrade never changes which engine runs, or where audio goes.
+    expect(s.transcription.provider).toBe("openai");
+    expect(s.transcription.openai.apiKey).toBe("sk-kept");
+    expect(s.transcription.language).toBe("de");
   });
 });

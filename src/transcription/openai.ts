@@ -9,6 +9,7 @@
 // second pipeline: the same wrapper decodes, chunks, and makes offsets absolute,
 // so this module only turns one window of samples into timed spans.
 import type { MeetingLanguage } from "../domain/types";
+import { wav16 } from "./pcm";
 import { TranscriptionError, type EngineSpan, type TranscriptionEngine } from "./provider";
 
 export type FetchFn = typeof fetch;
@@ -34,36 +35,9 @@ interface VerboseTranscription {
   segments?: { start: number; end: number; text: string }[];
 }
 
-/**
- * 16-bit PCM WAV around raw samples.
- *
- * The endpoint takes a file, and the provider wrapper hands out decoded samples,
- * so one of the two has to encode. WAV is the cheapest correct container and
- * keeps the extension dependency-free.
- */
+/** The upload: a WAV file, because the endpoint takes a file. */
 function toWav(samples: Float32Array, sampleRate: number): Blob {
-  const buffer = new ArrayBuffer(44 + samples.length * 2);
-  const view = new DataView(buffer);
-  const ascii = (offset: number, text: string) => {
-    for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
-  };
-  ascii(0, "RIFF");
-  view.setUint32(4, 36 + samples.length * 2, true);
-  ascii(8, "WAVEfmt ");
-  view.setUint32(16, 16, true); // fmt chunk size
-  view.setUint16(20, 1, true); // PCM
-  view.setUint16(22, 1, true); // mono
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true); // byte rate
-  view.setUint16(32, 2, true); // block align
-  view.setUint16(34, 16, true); // bits per sample
-  ascii(36, "data");
-  view.setUint32(40, samples.length * 2, true);
-  for (let i = 0; i < samples.length; i++) {
-    const clamped = Math.max(-1, Math.min(1, samples[i] ?? 0));
-    view.setInt16(44 + i * 2, Math.round(clamped * 32_767), true);
-  }
-  return new Blob([buffer], { type: "audio/wav" });
+  return new Blob([wav16(samples, sampleRate)], { type: "audio/wav" });
 }
 
 /**
@@ -100,7 +74,7 @@ export function createOpenAiTranscriptionEngine(opts: {
     load() {
       return Promise.resolve();
     },
-    async transcribe(samples) {
+    async transcribe(samples, signal) {
       const durationSec = samples.length / OPENAI_TRANSCRIPTION_SAMPLE_RATE;
       const form = new FormData();
       form.append("file", toWav(samples, OPENAI_TRANSCRIPTION_SAMPLE_RATE), "meeting.wav");
@@ -117,6 +91,9 @@ export function createOpenAiTranscriptionEngine(opts: {
         method: "POST",
         headers: { authorization: `Bearer ${opts.apiKey}` },
         body: form,
+        // A ten-minute window is a long upload to sit through after the user
+        // has asked for captions instead.
+        signal,
       });
       if (!res.ok) {
         const detail = await res.text().catch(() => "");

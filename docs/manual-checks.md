@@ -68,6 +68,50 @@ Both of these decide how much this extension's own indicator has to carry. An of
 
 The recorder checks microphone track state every 500 ms. If all microphone audio tracks have ended, it keeps the warning in recorder status and sends `mic-track-ended`. It retries every 2 seconds until the background confirms that it accepted the event. The retries stop when capture stops or the capture owner changes. Automated tests cover missing events, failed or missing replies, startup, and capture replacement. These tests do not complete the physical revocation check above.
 
+## ElevenLabs Scribe (#34)
+
+Everything Scribe decides about a transcript is a pure function and is tested with the HTTP call faked: the word list turned into spans, the renumbered and part-named labels, the request's fields, the timeout, the cancel reaching an upload in flight, and the consent rule (`micConsentAfterSave`). None of that proves the live endpoint answers the request the engine sends, or that the pages show what the code sets. These checks do. They need a real ElevenLabs key, so they are also the only place the engine meets the real service before a release.
+
+**Run them on audio you are allowed to upload.** A mock meeting with people who have agreed to be recorded and sent to ElevenLabs, never a work or customer call. Choosing this engine uploads the meeting.
+
+Setup: `npm run build`, reload the unpacked extension, and in Settings choose **ElevenLabs Scribe**, paste the key, and leave the model as `scribe_v2`. Turn on **Name the transcription engine in saved summaries** for the artifact check below.
+
+- [ ] **The live endpoint accepts the request and returns diarized words.** A two-person mock meeting of a few minutes, captions on, ends in a Summary Artifact whose transcript came from recorded audio. The request shape is asserted against a fake; only the real service can say it accepts bare PCM with `file_format=pcm_s16le_16` and the language code, and that the extension's host permission lets the offscreen document reach it.
+- [ ] **Where captions give no name, lines read `Speaker 1` / `Speaker 2`, not `Unknown speaker`.** Turn live captions off for a stretch of the meeting and speak in turns. The fallback is tested in fusion; that Scribe really separates two voices in a real mix (tab audio plus microphone, ADR-0007) is the claim this engine exists to make.
+- [ ] **Stopping and resuming capture names each label's part.** Stop recording partway, resume, and again leave a stretch uncaptioned: labels in the second stretch read `Speaker 1 (part 2)`. Tested with a fake engine; this checks the parts line up with real Capture Spans.
+- [ ] **The popup says where the audio is while it waits**: *Uploading to ElevenLabs to transcribe…*, with no percentage, until the summary is written.
+- [ ] **"Skip transcription, use captions" during the upload ends the wait within a few seconds**, produces a caption-only summary, and leaves nothing in the Held Recordings list. Also look at the ElevenLabs usage page afterwards and record whether the cancelled upload was billed. The extension cannot know, and a user skipping a long upload should be told if it still costs them.
+- [ ] **A wrong key holds the Recording, and fixing the key recovers it.** Save a deliberately wrong key, run a short meeting: it lands in Held Recordings with an HTTP 401 reason. Correct the key and use **Retry transcription**: the same meeting is summarized from audio.
+- [ ] **The Meeting Language reaches the live endpoint.** Set the language to Malay and hold a short stretch in Malay, then Chinese in Mandarin: the transcript comes back in that language and script, not translated and not romanized. How *accurate* it is belongs to the evaluation in `docs/evaluations/`, not here.
+- [ ] **The Summary Artifact names the engine as `ElevenLabs scribe_v2`** when engine naming is on, and names no engine when it is off.
+
+### Consent when the destination changes (ADR-0008)
+
+The rule is pure and tested. What is not is the options page wiring the right inputs into it and showing the right company name.
+
+- [ ] **Local → ElevenLabs asks again, naming ElevenLabs.** With microphone consent given under local Whisper, select ElevenLabs Scribe and save. The microphone disclosure's cloud variant must read *uploaded to ElevenLabs*, and the popup must treat the microphone as unconfirmed until the disclosure is answered again.
+- [ ] **OpenAI → ElevenLabs asks again, naming ElevenLabs.** The same, starting from consent given under OpenAI. This is the case ADR-0008 changed.
+- [ ] **Saving again under ElevenLabs does not ask again.** After answering the disclosure under ElevenLabs, change an unrelated setting such as the summary shape and save: consent stays.
+- [ ] **ElevenLabs → local keeps consent**, and the disclosure goes back to the on-this-machine wording.
+
+## Amazon SageMaker (#50)
+
+Everything the engine decides is a pure function and is tested with the network faked: the request (route header, multipart body, `to_language`), the signing (pinned to AWS's published `get-vanilla` example), how a reply and a failure are read, the credentials parser, the pause windows, and the factory's refusals. None of that proves that a real endpoint accepts the call, or that the pages show what the code sets. These checks do. They need your own JumpStart endpoint and temporary AWS credentials, so they are also the only place the engine meets SageMaker before a release.
+
+**Run them on audio you are allowed to upload to that AWS account.** A mock meeting with people who have agreed to it, never a work or customer call.
+
+Setup: deploy `huggingface-asr-qwen3-asr-1-7b` from SageMaker JumpStart. `npm run build`, reload the unpacked extension, and in Settings choose **Amazon SageMaker**. Enter the region and the endpoint name, and paste temporary credentials that allow only `sagemaker:InvokeEndpoint` on that endpoint. Turn on **Name the transcription engine in saved summaries** for the artifact check below.
+
+- [ ] **The Test button reports OK, and names each broken part.** First with everything right: *The endpoint answered, in the format the engine reads.* Then one fault at a time: a wrong endpoint name (*Endpoint: … was not found in …*), credentials without the permission (*Credentials: … may not invoke …*), and credentials that have expired (*Credentials: … expired*). The mapping is tested on fake replies; only a real endpoint shows that AWS sends those error types.
+- [ ] **A paste is stored in memory only.** After a valid paste, the box empties and the panel names the key, masked. In the Settings page's DevTools, Application → Extension storage: **Session** holds `sagemakerCredentials`, and **Local** holds no part of them. Close and reopen the browser: the panel says there are no credentials.
+- [ ] **A real meeting is transcribed from audio, with caption names.** A two-person mock meeting of a few minutes, captions on, ends in a Summary Artifact whose transcript came from recorded audio, and whose lines carry the right speakers. This is the claim that the pause windows make up for the missing timestamps.
+- [ ] **The Meeting Language reaches the model.** Set the language to German and hold a short stretch in German: the transcript comes back in German, not translated. Then choose Ukrainian: the panel's note says the model guesses, and a transcript still comes back.
+- [ ] **Credentials that expire during a meeting cost a retry, not the meeting.** Paste credentials with a short life, from `aws configure export-credentials`, so that the expiry is known. Start recording and wait until they expire: the popup warns while it records. At Meeting End the recording lands in Held Recordings with the *expired* reason, and a caption summary is written. Paste fresh credentials and use **Retry transcription**: the same meeting is summarized from audio.
+- [ ] **A silent stretch adds no invented lines.** Mute the meeting and yourself for 30 s in the middle of a mock meeting. The transcript must have no line in that stretch. Qwen3-ASR invents text for digital silence, so this checks that a real recording's silence is below the level at which the wrapper skips a window.
+- [ ] **"Skip transcription, use captions" ends the wait within a few seconds**, produces a caption-only summary, and leaves nothing in the Held Recordings list.
+- [ ] **The Summary Artifact names the engine as `Amazon SageMaker <endpoint>`** when engine naming is on, and names no engine when it is off.
+- [ ] **Local → SageMaker, and ElevenLabs → SageMaker, ask again for microphone consent**, and the disclosure reads *uploaded to Amazon SageMaker, in the AWS account your credentials belong to*.
+
 ## The popup and logo redesign (#25)
 
 Not yet landed. Its checks live in `design-system/meeting-summarizer/MASTER.md` on the `popup-logo-redesign` branch and move here when #25 merges, per the rule above.

@@ -8,7 +8,13 @@ import type {
 } from "../messages";
 import type { Settings } from "../domain/types";
 import type { MicCaptureState } from "../background/mic-capture";
-import { loadSettings } from "../settings";
+import { loadAwsCredentials, loadSettings } from "../settings";
+import { credentialsWarning, type AwsCredentials } from "../transcription/aws-credentials";
+import {
+  TRANSCRIPTION_ENGINE_NAMES,
+  uploadDestination,
+  uploadsAudio,
+} from "../transcription/engines";
 
 const regionEl = document.getElementById("status-region")!;
 const statusEl = document.getElementById("status")!;
@@ -76,13 +82,9 @@ function micWhy(s: Settings): string {
   if (s.transcription.provider === "local-whisper") {
     return "Your voice is not recorded yet. Including it means the summary covers your side of the meeting too — everything is transcribed on this machine.";
   }
-  return `Your voice is not recorded yet. Including it means the summary covers your side of the meeting too — and because you have chosen ${TRANSCRIPTION_ENGINE_NAMES[s.transcription.provider]} to transcribe, the recording, including your voice, is uploaded to ${TRANSCRIPTION_ENGINE_NAMES[s.transcription.provider]} to be transcribed.`;
+  return `Your voice is not recorded yet. Including it means the summary covers your side of the meeting too — and because you have chosen ${TRANSCRIPTION_ENGINE_NAMES[s.transcription.provider]} to transcribe, the recording, including your voice, is uploaded to ${uploadDestination(s.transcription.provider)} to be transcribed.`;
 }
 
-const TRANSCRIPTION_ENGINE_NAMES: Record<Settings["transcription"]["provider"], string> = {
-  "local-whisper": "local Whisper",
-  openai: "OpenAI",
-};
 
 // Bind controls to the tab in the window that opened this popup. A service-worker
 // active-tab query can resolve to a different Zoom window.
@@ -234,8 +236,28 @@ function isConfigured(s: Settings): boolean {
 }
 
 async function refreshHint(): Promise<void> {
-  hintEl.hidden = isConfigured(await loadSettings());
+  const s = await loadSettings();
+  hintEl.hidden = isConfigured(s);
+  uploadingTo = uploadsAudio(s.transcription.provider)
+    ? TRANSCRIPTION_ENGINE_NAMES[s.transcription.provider]
+    : null;
+  sageMaker =
+    s.transcription.provider === "sagemaker" ? { credentials: await loadAwsCredentials() } : null;
 }
+
+/**
+ * The cloud engine a transcription is sent to, or null for the local one. Read
+ * with the rest of the settings; the run itself reads the same settings when it
+ * starts, so this names where the audio actually went.
+ */
+let uploadingTo: string | null = null;
+
+/**
+ * The SageMaker engine's credentials when it is the one selected, read when the
+ * popup opens. Their expiry is checked on every render, so a popup left open
+ * still warns once they run out.
+ */
+let sageMaker: { credentials: AwsCredentials | null } | null = null;
 
 /** A duration as mm:ss, or h:mm:ss past an hour. */
 function clock(ms: number): string {
@@ -278,8 +300,13 @@ function renderTranscribing(p: TranscriptionProgress | null): void {
     if (!barEl.hidden) barEl.value = ((p.loadedBytes ?? 0) / (p.totalBytes ?? 1)) * 100;
     return;
   }
-  statusEl.textContent = "Transcribing audio…";
   barEl.hidden = true;
+  const measured = p !== null && p.processedMs !== null && p.totalMs !== null && p.totalMs > 0;
+  // A cloud engine reports nothing until a whole upload comes back — an hour of
+  // audio can be one. Saying where the audio went is true the whole time; a
+  // percentage would be invented.
+  statusEl.textContent =
+    uploadingTo && !measured ? `Uploading to ${uploadingTo} to transcribe…` : "Transcribing audio…";
   if (p && p.processedMs !== null && p.totalMs !== null && p.totalMs > 0) {
     detailEl.textContent = `${clock(p.processedMs)} of ${clock(p.totalMs)} processed`;
     detailEl.hidden = false;
@@ -351,6 +378,12 @@ function render(status: StatusReply): void {
       statusEl.className = "warning";
       statusEl.textContent =
         "Recording the other participants only — your own words will be missing until you answer below.";
+    } else if (sageMaker && credentialsWarning(sageMaker.credentials, Date.now()) !== null) {
+      // Below the microphone on purpose: a voice that was not recorded is lost,
+      // while audio held for want of credentials can still be retried. Above the
+      // captions, because without credentials there are no audio words at all.
+      statusEl.className = "warning";
+      statusEl.textContent = credentialsWarning(sageMaker.credentials, Date.now()) ?? "";
     } else if (status.segmentCount === 0) {
       // Captions are no longer the transcript, so their absence no longer costs
       // the meeting — it costs the names on the action items. Still a warning

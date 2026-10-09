@@ -1,8 +1,10 @@
 // Settings persistence in extension local storage (ADR-0001: no native host,
-// keys live here).
+// keys live here). The one exception is the SageMaker engine's AWS credentials,
+// which are kept in session storage instead (see the end of this file).
 import type { Settings } from "./domain/types";
 import { ext } from "./platform";
 import { DEFAULT_TEMPLATES } from "./pipeline/templates";
+import type { AwsCredentials } from "./transcription/aws-credentials";
 
 export const DEFAULT_SETTINGS: Settings = {
   provider: "anthropic",
@@ -36,6 +38,11 @@ export const DEFAULT_SETTINGS: Settings = {
     // whisper-1 by default because it is the transcription model that returns
     // per-segment timestamps, and fusion attributes speakers by time overlap.
     openai: { apiKey: "", model: "whisper-1" },
+    // Scribe's current model. It returns word timings and speaker ids, which is
+    // everything fusion needs.
+    elevenlabs: { apiKey: "", model: "scribe_v2" },
+    // No endpoint until the user names one: the engine is theirs to deploy.
+    sagemaker: { region: "us-east-1", endpointName: "" },
   },
 };
 
@@ -69,10 +76,44 @@ export async function loadSettings(): Promise<Settings> {
         ...DEFAULT_SETTINGS.transcription.openai,
         ...s.transcription?.openai,
       },
+      elevenlabs: {
+        ...DEFAULT_SETTINGS.transcription.elevenlabs,
+        ...s.transcription?.elevenlabs,
+      },
+      sagemaker: {
+        ...DEFAULT_SETTINGS.transcription.sagemaker,
+        ...s.transcription?.sagemaker,
+      },
     },
   };
 }
 
 export async function saveSettings(settings: Settings): Promise<void> {
   await ext.storage.local.set({ settings });
+}
+
+const AWS_CREDENTIALS_KEY = "sagemakerCredentials";
+
+/**
+ * The SageMaker engine's temporary AWS credentials, or null when none are
+ * pasted.
+ *
+ * Kept in `storage.session`, not with the settings: it is held in memory only,
+ * never written to disk, and cleared when the browser closes (ADR-0009). That
+ * costs nothing, because temporary credentials have usually expired by the next
+ * browser start anyway, and a Held Recording waits for fresh ones.
+ */
+export async function loadAwsCredentials(): Promise<AwsCredentials | null> {
+  const stored = (await ext.storage.session.get(AWS_CREDENTIALS_KEY)) as {
+    [AWS_CREDENTIALS_KEY]?: AwsCredentials;
+  };
+  return stored[AWS_CREDENTIALS_KEY] ?? null;
+}
+
+export async function saveAwsCredentials(credentials: AwsCredentials): Promise<void> {
+  await ext.storage.session.set({ [AWS_CREDENTIALS_KEY]: credentials });
+}
+
+export async function clearAwsCredentials(): Promise<void> {
+  await ext.storage.session.remove(AWS_CREDENTIALS_KEY);
 }

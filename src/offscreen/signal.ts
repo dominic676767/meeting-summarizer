@@ -35,8 +35,11 @@
  * far below any speech (conversational level lands around 0.02–0.1) and above the
  * floor a muted tab and an echo-cancelled, noise-suppressed microphone leave
  * behind, which is near enough to digital zero.
+ *
+ * The transcription wrapper uses the same level to skip a window cut at pauses
+ * that holds no signal, so "silent" means one thing across the extension.
  */
-const SILENT_BELOW_RMS = 0.001;
+export const SILENT_BELOW_RMS = 0.001;
 
 /**
  * How long silence must persist before it means anything. Conversational pauses

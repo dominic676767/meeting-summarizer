@@ -14,7 +14,8 @@ import type { CaptureSpan, HeldRecording, Settings, Utterance } from "../domain/
 import { artifactFilename } from "../pipeline/filename";
 import { summarizeTranscript } from "../pipeline/pipeline";
 import { createProviderClient } from "../providers/factory";
-import { loadSettings, saveSettings } from "../settings";
+import { loadAwsCredentials, loadSettings, saveSettings } from "../settings";
+import type { AwsCredentials } from "../transcription/aws-credentials";
 import { fuseTranscript } from "../transcription/fusion";
 import { writeArtifact } from "./artifact-writer";
 import { deriveCaptureState, isDegraded } from "./capture-state";
@@ -31,6 +32,7 @@ import { prepareMicrophoneAccess } from "./microphone-access";
 import { badgeFor } from "./badge";
 import { beginSpan, orderedSpans, spanIdsOf } from "./capture-spans";
 import { isMeetingUrl } from "./meeting-url";
+import { TRANSCRIPTION_ENGINE_NAMES } from "../transcription/engines";
 import { restoreMeetingContentScripts } from "./restore-content";
 import { getHeld, holdTranscript, listHeld, releaseHeld, updateHeldReason } from "./held";
 import {
@@ -495,9 +497,27 @@ function reasonOf(err: unknown): string {
  */
 /** The engine that ran, as the artifact names it when the user opts in. */
 function engineOf(t: Settings["transcription"]): { id: string; model: string } {
-  return t.provider === "openai"
-    ? { id: "OpenAI", model: t.openai.model }
-    : { id: "local Whisper", model: t.localWhisper.model };
+  const id = TRANSCRIPTION_ENGINE_NAMES[t.provider];
+  switch (t.provider) {
+    case "openai":
+      return { id, model: t.openai.model };
+    case "elevenlabs":
+      return { id, model: t.elevenlabs.model };
+    case "local-whisper":
+      return { id, model: t.localWhisper.model };
+    case "sagemaker":
+      // The endpoint is the most the extension knows about the model behind it.
+      return { id, model: t.sagemaker.endpointName };
+  }
+}
+
+/**
+ * The credentials the selected engine needs, and no others: only SageMaker takes
+ * AWS credentials, so for every other engine none are sent to the offscreen
+ * document at all.
+ */
+async function credentialsFor(t: Settings["transcription"]): Promise<AwsCredentials | null> {
+  return t.provider === "sagemaker" ? loadAwsCredentials() : null;
 }
 
 async function transcribeRecording(
@@ -517,6 +537,7 @@ async function transcribeRecording(
       // last one, and each span carries the offset that keeps its timings absolute.
       spans: orderedSpans(s.spans),
       transcription: settings.transcription,
+      awsCredentials: await credentialsFor(settings.transcription),
       tabId,
     } satisfies OffscreenMessage)) as OffscreenTranscribeReply;
     if (reply.error) console.error(`meeting-summarizer: transcription failed: ${reply.error}`);
@@ -656,6 +677,9 @@ async function transcribeHeldRecording(
       // would lose the rest, which is the failure this whole shape exists to stop.
       spans: orderedSpans(entry.spans),
       transcription: settings.transcription,
+      // Read now, like the settings: a retry is how fresh credentials rescue a
+      // Recording that was held because the old ones expired.
+      awsCredentials: await credentialsFor(settings.transcription),
       // No live session owns a retried Meeting, so progress has no session to
       // land on; the popup reports the retry on the row the user clicked.
       tabId: -1,

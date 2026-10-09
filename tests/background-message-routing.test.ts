@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Message, OffscreenMessage, OffscreenStatusReply } from "../src/messages";
 import type { SessionState } from "../src/background/sessions";
+import { DEFAULT_SETTINGS } from "../src/settings";
 import {
   MIC_REVOKED_WARNING,
   NO_SOUND_MESSAGE,
@@ -255,12 +256,8 @@ describe("background runtime message routing", () => {
     {
       type: "offscreen-transcribe",
       spans: [],
-      transcription: {
-        provider: "local-whisper",
-        language: "en",
-        localWhisper: { model: "base" },
-        openai: { apiKey: "", model: "whisper-1" },
-      },
+      transcription: structuredClone(DEFAULT_SETTINGS.transcription),
+      awsCredentials: null,
       tabId: 42,
     },
   ];
