@@ -8,7 +8,11 @@
     "build": "node build.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "eval": "node eval/run.mjs"
+    "eval": "node eval/run.mjs",
+    "doctor": "node scripts/doctor.mjs"
+  },
+  "engines": {
+    "node": ">=22"
   },
   "devDependencies": {
     "@types/chrome": "^0.2.9",

@@ -1,7 +1,8 @@
 // Options page: Provider selection + keys (browser.storage.local, ADR-0001),
 // Summary shape toggle, and editable Prompt Templates. The SageMaker engine's
 // AWS credentials are the exception: pasted here, kept in storage.session only
-// (ADR-0009), and tested from here against the user's endpoint.
+// (ADR-0009), and tested from here against the user's endpoint. A pasted
+// settings import fills the form and stores nothing until Save (ADR-0010).
 import type {
   MeetingLanguage,
   Settings,
@@ -32,6 +33,7 @@ import {
 } from "../transcription/sagemaker";
 import { microphonePermission } from "../offscreen/microphone-permission";
 import { allowMicrophoneAccess, microphoneAccessFailure } from "./microphone-access";
+import { MEETING_LANGUAGES, parseSettingsImport, type ImportedSettings } from "./settings-import";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const providerSelect = $<HTMLSelectElement>("provider");
@@ -46,43 +48,6 @@ const TRANSCRIPTION_PROVIDERS: TranscriptionProviderId[] = [
   "sagemaker",
 ];
 
-/**
- * The languages offered, in the order they appear in the select. A Record over
- * MeetingLanguage rather than a hand-written list of `<option>`s so the compiler
- * refuses a page that offers a code no engine was told about — a code an engine
- * rejects costs the whole Meeting a failed transcription.
- */
-const MEETING_LANGUAGES: Record<MeetingLanguage, string> = {
-  ar: "Arabic",
-  zh: "Chinese",
-  cs: "Czech",
-  da: "Danish",
-  nl: "Dutch",
-  en: "English",
-  fi: "Finnish",
-  fr: "French",
-  de: "German",
-  el: "Greek",
-  he: "Hebrew",
-  hi: "Hindi",
-  hu: "Hungarian",
-  id: "Indonesian",
-  it: "Italian",
-  ja: "Japanese",
-  ko: "Korean",
-  ms: "Malay",
-  no: "Norwegian",
-  pl: "Polish",
-  pt: "Portuguese",
-  ro: "Romanian",
-  ru: "Russian",
-  es: "Spanish",
-  sv: "Swedish",
-  th: "Thai",
-  tr: "Turkish",
-  uk: "Ukrainian",
-  vi: "Vietnamese",
-};
 const languageSelect = $<HTMLSelectElement>("meeting-language");
 for (const [code, label] of Object.entries(MEETING_LANGUAGES)) {
   languageSelect.add(new Option(label, code));
@@ -182,6 +147,54 @@ $("transcription-sagemaker-test").addEventListener("click", async () => {
   } finally {
     button.disabled = false;
   }
+});
+
+const importBox = $<HTMLTextAreaElement>("settings-import");
+const importStatus = $("settings-import-status");
+
+/** Puts each imported choice in its field. Keys, credentials, the microphone and
+ * the templates are never in an import, so their fields are not touched. */
+function fillForm(i: ImportedSettings): void {
+  const set = (id: string, value: string | undefined) => {
+    if (value !== undefined) $<HTMLInputElement | HTMLSelectElement>(id).value = value;
+  };
+  set("provider", i.provider);
+  set("anthropic-model", i.anthropic?.model);
+  set("openai-model", i.openai?.model);
+  set("ollama-url", i.ollama?.baseUrl);
+  set("ollama-model", i.ollama?.model);
+  set("bedrock-region", i.bedrock?.region);
+  set("bedrock-model", i.bedrock?.model);
+  set("transcription-provider", i.transcription?.provider);
+  set("meeting-language", i.transcription?.language);
+  set("whisper-model", i.transcription?.localWhisper?.model);
+  set("transcription-openai-model", i.transcription?.openai?.model);
+  set("transcription-elevenlabs-model", i.transcription?.elevenlabs?.model);
+  set("transcription-sagemaker-region", i.transcription?.sagemaker?.region);
+  set("transcription-sagemaker-endpoint", i.transcription?.sagemaker?.endpointName);
+  set("shape", i.shape);
+  if (i.nameEngineInArtifact !== undefined) {
+    $<HTMLInputElement>("name-engine").checked = i.nameEngineInArtifact;
+  }
+  showPanel(providerSelect.value);
+  showTranscriptionPanel(transcriptionSelect.value);
+}
+
+// Used as soon as the paste reads as a complete block, like the credentials box.
+// The form changes; storage does not, so the user reads the result before Save.
+importBox.addEventListener("input", () => {
+  if (!importBox.value.trim()) {
+    importStatus.textContent = "";
+    return;
+  }
+  const parsed = parseSettingsImport(importBox.value);
+  if (!parsed.ok) {
+    importStatus.textContent = parsed.reason;
+    return;
+  }
+  fillForm(parsed.settings);
+  importBox.value = "";
+  importStatus.textContent = `Filled in ${parsed.count} ${parsed.count === 1 ? "setting" : "settings"}. Check them below, add your keys, then select Save. Nothing is stored until you do.`;
 });
 
 providerSelect.addEventListener("change", () => showPanel(providerSelect.value));

@@ -474,7 +474,7 @@ Status on 2026-10-10. Every question is decided. The user answered in two rounds
 9. **Ollama changes.** Decided: the agent may set `OLLAMA_ORIGINS` and restart Ollama. It allows only this extension's origin, which the manifest `key` makes the same for every clone (section 8.3).
 10. **Platform scope.** Decided: macOS only for now. Windows and Linux are future work.
 11. **Tests during install.** Decided: only in developer mode.
-12. **Tone.** Decided: the agent says a project tagline at the start. After the setup report at the end, it lists this repo's main features with example uses, then asks once for a GitHub star. It runs `gh repo star` only on an explicit yes.
+12. **Tone.** Decided: the agent says a project tagline at the start. After the setup report at the end, it lists this repo's main features with example uses, then asks once for a GitHub star. It stars the repo only on an explicit yes. `gh` has no `repo star` command (gh 2.100.0), so the guide uses `gh api --method PUT /user/starred/dominic676767/meeting-summarizer`, the call that OMO's installer makes.
 13. **A `/setup` skill.** Decided: a Claude skill and a one-line `.opencode/commands/setup.md` that points to the guide.
 14. **Manifest `key` and existing installs.** Decided: add the key with no migration note.
 15. **`OLLAMA_ORIGINS` after a reboot.** Decided: the doctor detects a missing value, and the agent sets it again.

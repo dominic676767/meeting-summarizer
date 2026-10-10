@@ -112,6 +112,18 @@ Setup: deploy `huggingface-asr-qwen3-asr-1-7b` from SageMaker JumpStart. `npm ru
 - [ ] **The Summary Artifact names the engine as `Amazon SageMaker <endpoint>`** when engine naming is on, and names no engine when it is off.
 - [ ] **Local → SageMaker, and ElevenLabs → SageMaker, ask again for microphone consent**, and the disclosure reads *uploaded to Amazon SageMaker, in the AWS account your credentials belong to*.
 
+## Agent setup (#52)
+
+The settings parser, the extension ID that the manifest `key` gives, and the doctor's Ollama rule are tested in code (`tests/settings-import.test.ts`, `tests/manifest-key.test.ts`, `tests/doctor.test.ts`). None of that proves what Chrome, Ollama and a real coding agent do. These checks do. Run the agent checks with a fresh clone in a new folder, so that they do not touch your own install.
+
+- [ ] **Chrome shows the fixed ID.** After `npm run build` and *Load unpacked*, the card's ID is `hbobmcebmpakimlijcjiaklipegdelap`. Load a second clone from another folder: Chrome must not give it a second, path-based ID.
+- [ ] **`open -a "Google Chrome" "chrome://extensions"` opens the Extensions page** from Terminal. Also try `chrome-extension://hbobmcebmpakimlijcjiaklipegdelap/options.html`: the Settings page opens. Write down if either one does nothing.
+- [ ] **The import fills the form and stores nothing.** Paste the guide's example block into *Import settings*: the status names the count, the Provider and engine panels change, and DevTools → Application → Extension storage → Local is unchanged until **Save**. Reload the page without Save: the old values come back.
+- [ ] **A refused block changes nothing.** Paste a block with an `apiKey`: the status names the field and says where keys go, and no field on the form changes.
+- [ ] **An imported engine asks again for microphone consent.** With the microphone on under Local Whisper, import `"transcription": { "provider": "openai" }` and Save: the microphone consent is withdrawn, as when the select is changed by hand.
+- [ ] **Ollama allows this extension only.** Run the guide's Step 5A, then summarize a meeting with Ollama: it succeeds. `npm run doctor -- --ollama` shows three `ok` Ollama lines. Restart the Mac: the doctor now shows the `FAIL` line with the `launchctl` fix.
+- [ ] **A coding agent completes the guide.** Paste the README prompt into at least two agents (for example Claude Code and Codex). Each one greets with the tagline, asks the Step 0 questions, never asks for a key in the chat, builds, opens the Extensions page, prepares a block that the page accepts, ends with the report and the feature list, and runs the star command only after an explicit yes.
+
 ## The popup and logo redesign (#25)
 
 Not yet landed. Its checks live in `design-system/meeting-summarizer/MASTER.md` on the `popup-logo-redesign` branch and move here when #25 merges, per the rule above.
