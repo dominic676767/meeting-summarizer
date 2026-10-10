@@ -238,6 +238,7 @@ function isConfigured(s: Settings): boolean {
 async function refreshHint(): Promise<void> {
   const s = await loadSettings();
   hintEl.hidden = isConfigured(s);
+  micWhyEl.textContent = micWhy(s);
   uploadingTo = uploadsAudio(s.transcription.provider)
     ? TRANSCRIPTION_ENGINE_NAMES[s.transcription.provider]
     : null;
@@ -349,7 +350,14 @@ function render(status: StatusReply): void {
   // capture starts, and during it, because a Meeting recorded without the user's
   // voice can still have its next Capture Span include it.
   const inMeeting = status.state === "detected" || status.state === "recording";
-  micDisclosureEl.hidden = !(inMeeting && status.mic === "unconfirmed");
+  // Never the button without its explanation: until the settings are read, the
+  // popup cannot say where the audio goes, and a yes given without the
+  // destination is not consent to it (ADR-0007). The next poll shows it.
+  micDisclosureEl.hidden = !(
+    inMeeting &&
+    status.mic === "unconfirmed" &&
+    micWhyEl.textContent !== ""
+  );
   // Only before capture starts: these sentences are in the future tense, and once
   // recording the status line states the microphone in the present tense instead.
   const micLine = status.state === "detected" ? MIC_LINE[status.mic] : undefined;

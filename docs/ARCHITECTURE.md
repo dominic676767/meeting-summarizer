@@ -375,12 +375,14 @@ flowchart TD
     tx --> out{"outcome"}
     out -- "utterances" --> fuse["fuseTranscript()<br/>audio words + caption names"]
     out -- "noSpeech" --> silentCap
-    out -- "cancelled by user" --> seg
-    out -- "error" --> holdR["holdRecording()<br/>keep every span for retry"]
-    holdR --> seg
+    out -- "cancelled by user" --> skipCap["untranscribed = skipped<br/>keep caption words"]
+    out -- "error" --> holdTx["holdRecording()<br/>untranscribed = failed<br/>on the summary, not the held copy"]
+    holdR["holdRecording()<br/>keep every span for retry"] --> seg
+    holdTx --> seg
 
     fuse --> seg
     silentCap --> seg
+    skipCap --> seg
     seg{"transcript has segments?"}
     seg -- no --> nothing["state back to capturing<br/>warn if silence was the reason"]
     seg -- yes --> sum["state = summarizing<br/>summarizeAndWrite()"]
@@ -389,7 +391,7 @@ flowchart TD
     ok -- no --> holdT["holdTranscript()<br/>state = failed"]
 ```
 
-Three outcomes of transcription are kept apart on purpose: **words** (fuse them), **silence** (not an error, nothing to retry), **failure** (hold the audio, fall back to captions now). Silence requires a healthy capture. If the audio clock or encoder stops, the recording is held and `noSpeech` stays false. A later retry that returns no speech cannot clear that capture failure.
+Three outcomes of transcription are kept apart on purpose: **words** (fuse them), **silence** (not an error, nothing to retry), **failure** (hold the audio, fall back to captions now). Silence requires a healthy capture. If the audio clock or encoder stops, the recording is held and `noSpeech` stays false. A later retry that returns no speech cannot clear that capture failure. A recording that was made but not transcribed carries `untranscribed` (`skipped` or `failed`), so its caption-only artifact says the transcription was skipped or failed, not that no audio was recorded.
 
 What the artifact says about its source (`Transcript.provenance`):
 
@@ -530,7 +532,7 @@ flowchart LR
 
     popup["Popup: Retry"] -- "retry-held-recording" --> rhr["retryHeldRecording()<br/>reads CURRENT transcription settings<br/>and SageMaker credentials"]
     hr --> rhr
-    rhr -- "words or healthy silence" --> fuse2["fuseTranscript()"] --> ht2["holdTranscript()<br/>then releaseHeldRecording()"]
+    rhr -- "words or healthy silence" --> fuse2["fuseTranscript()<br/>words: engine of THIS run<br/>silence: noSpeech = true"] --> ht2["holdTranscript()<br/>then releaseHeldRecording()"]
     ht2 --> rh
     rhr -- "fails again" --> hr
     rhr -- "no speech after capture failure" --> hr

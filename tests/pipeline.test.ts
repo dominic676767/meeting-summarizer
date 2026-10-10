@@ -189,6 +189,29 @@ describe("Summary Artifact provenance", () => {
     expect(html).not.toContain(AUDIO_CLAUSE);
     expect(html).toContain("Full captions");
   });
+
+  // Audio WAS recorded in both cases; after a failure it is still held for retry.
+  // "no audio was recorded" would tell a forwarded reader that no recording exists.
+  it.each([
+    ["skipped", "from live captions only — audio transcription was skipped"],
+    ["failed", "from live captions only — audio transcription failed"],
+  ] as const)("says a recording was made when its transcription was %s", async (untranscribed, clause) => {
+    const html = await render({ ...captionBase(), untranscribed });
+    expect(html).toContain(clause);
+    expect(html).not.toContain(CAPTIONS_CLAUSE);
+    expect(html).not.toContain(AUDIO_CLAUSE);
+    expect(html).toContain("Full captions");
+  });
+
+  it("states a failed capture before an untranscribed recording", async () => {
+    const html = await render({
+      ...captionBase(),
+      untranscribed: "failed",
+      captureError: "The audio stream stopped advancing.",
+    });
+    expect(html).toContain("from live captions only — audio capture failed");
+    expect(html).not.toContain("audio transcription failed");
+  });
 });
 
 describe("Meta line: duration and the opt-in engine clause", () => {

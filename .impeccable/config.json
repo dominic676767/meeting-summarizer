@@ -10,6 +10,15 @@
           "src/options/options.html"
         ],
         "createdAt": "2026-09-14T04:15:02.516Z"
+      },
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": [
+          "tests/pipeline.test.ts"
+        ],
+        "createdAt": "2026-10-10T12:29:01.733Z",
+        "reason": "agent: tests/pipeline.test.ts:93 is an HTML-escaping fixture string ('use <img> tags'), not markup that ships"
       }
     ]
   }

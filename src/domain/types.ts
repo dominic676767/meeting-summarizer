@@ -94,6 +94,19 @@ export interface Transcript {
    * belongs in the log, not in a document that gets forwarded.
    */
   noSpeech?: boolean;
+  /**
+   * An Audio Recording exists, but none of its words reached this Transcript:
+   * the user skipped the wait (`skipped`), or the Transcription Provider failed
+   * and the recording is held for retry (`failed`).
+   *
+   * Without it the caption-only artifact says "no audio was recorded", which is
+   * false in both cases — the audio was recorded, and after a failure it still
+   * exists. The two values have different remedies, so they are kept apart.
+   *
+   * Absent reads as no claim: no recording, a silent one (`noSpeech`), or a
+   * failed capture (`captureError`), each stated in its own words.
+   */
+  untranscribed?: "skipped" | "failed";
   segments: TranscriptSegment[];
 }
 
