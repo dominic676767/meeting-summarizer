@@ -52,12 +52,12 @@ You are a coding agent. A user asked you to install Meeting Summarizer. Do the s
 
 ### Step 0: Greet the user and ask questions
 
-Say this first, as written:
+Before you run any command, send the user this greeting, as written. Send it in every case: also when the user gave their answers in advance, and also when your own style rules say to skip a preamble. It is part of this setup, not a preamble:
 
 > **Meeting Summarizer: what was actually said, summarized by your own LLM, on your own machine.**
 > I will set it up for you on this Mac. First, a few questions.
 
-Then ask these questions. Ask them one group at a time. Give the default for each one. Skip a question when its condition is false.
+Then ask these questions. Ask them one group at a time. Give the default for each one. Skip a question when its condition is false. If the user already gave an answer, do not ask that question again: show the answer in the summary below.
 
 | # | Question | Choices (default first) | What the answer controls |
 |---|---|---|---|

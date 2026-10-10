@@ -4,6 +4,7 @@
 //
 //   npm run doctor               the build and the toolchain
 //   npm run doctor -- --ollama   also Ollama, when Ollama is the chosen Provider
+//   npm run doctor -- --ollama --ollama-url=http://host:port   Ollama elsewhere
 //
 // A warning never fails the run. A failure prints what to do next.
 import { createHash } from "node:crypto";
@@ -137,7 +138,8 @@ async function main() {
   const results = [checkNode(), ...checkBuild(root), ...checkPlatform(), await checkHuggingFace()];
   if (process.argv.includes("--ollama")) {
     const key = JSON.parse(readFileSync(resolve(root, "src/manifest.json"), "utf8")).key;
-    results.push(...(await checkOllama(extensionIdFromKey(key))));
+    const url = process.argv.find((arg) => arg.startsWith("--ollama-url="))?.slice("--ollama-url=".length);
+    results.push(...(await checkOllama(extensionIdFromKey(key), fetch, url?.replace(/\/+$/, "") || OLLAMA_URL)));
   }
   for (const r of results) {
     console.log(`${MARK[r.level]}  ${r.text}`);
