@@ -334,9 +334,13 @@ stateDiagram-v2
     transcribing --> capturing: no segments at all
     summarizing --> done: artifact written
     summarizing --> failed: provider error, transcript held
+    done --> capturing: next content message, ensureSession() starts a new Meeting
+    failed --> capturing: next content message, ensureSession() starts a new Meeting
     done --> [*]: tab closed, dropSession()
     failed --> [*]: tab closed, dropSession()
 ```
+
+A new session from `done` or `failed` keeps `inMeeting` and the title of the session it replaces. After *Summarize now* the call goes on. The content script sends `meeting-status` only when the status changes, so the new session cannot wait for it. Meeting End has already set `inMeeting = false`, so a call that ended does not carry into the next one.
 
 Microphone state is its own axis (`micCaptureState()` in `mic-capture.ts`): `off → unconfirmed → armed → recording`, or `unavailable` if Chromium refused it. The mic is recorded only when the setting is on **and** the disclosure was answered (ADR-0007). Consent is withdrawn whenever the cloud destination changes, including from one cloud engine to another (ADR-0008). Chrome must also grant microphone access. When that access is required, capture pauses and Settings opens. The visible Settings page requests access, closes the temporary stream, and tells the user to return to the meeting and start recording. A connected microphone track does not prove that speech reached the file. A capture failure clears the microphone recording flag and shows a warning.
 

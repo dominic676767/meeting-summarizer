@@ -217,6 +217,51 @@ describe("meeting status after Zoom completion", () => {
     expect(pipeline.write).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps meeting status for captions that arrive after Summarize now", async () => {
+    const { listener, session } = await seedMeeting();
+    session.title = "Weekly sync";
+    await listener({ type: "summarize-now", tabId: 42 }, {});
+
+    // The call goes on, so the content script sends captions but no new meeting-status.
+    await listener(
+      {
+        type: "captions-update",
+        platform: "Zoom",
+        title: null,
+        updates: [{ key: "caption-2", speaker: "Participant B", text: "Next item." }],
+      },
+      { tab: { id: 42 } },
+    );
+
+    const { getSession } = await import("../src/background/sessions");
+    const next = await getSession(42);
+    expect(next).not.toBe(session);
+    expect(next).toMatchObject({ state: "capturing", inMeeting: true, title: "Weekly sync" });
+    const status = await listener({ type: "get-status", tabId: 42 }, {});
+    expect(status).toEqual(expect.objectContaining({ state: "detected", inMeeting: true }));
+  });
+
+  it("does not carry meeting status into captions after Meeting End", async () => {
+    const { listener, session } = await seedMeeting();
+    session.title = "Weekly sync";
+    await listener({ type: "meeting-ended", platform: "Zoom", title: null }, { tab: { id: 42 } });
+
+    await listener(
+      {
+        type: "captions-update",
+        platform: "Zoom",
+        title: null,
+        updates: [{ key: "caption-2", speaker: "Participant B", text: "Hello." }],
+      },
+      { tab: { id: 42 } },
+    );
+
+    const { getSession } = await import("../src/background/sessions");
+    expect(await getSession(42)).toMatchObject({ state: "capturing", inMeeting: false, title: null });
+    const status = await listener({ type: "get-status", tabId: 42 }, {});
+    expect(status).toEqual(expect.objectContaining({ state: "idle", inMeeting: false }));
+  });
+
   it("clears status during processing without duplicating the report", async () => {
     const { listener, session } = await seedMeeting();
     let completeSummary!: (value: { html: string }) => void;
