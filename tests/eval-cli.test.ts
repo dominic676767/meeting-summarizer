@@ -3,9 +3,21 @@
 import { describe, expect, it } from "vitest";
 import { billingPlan, formatBilling } from "../eval/billing";
 import { parseCliArgs, UsageError } from "../eval/cli";
-import { engineInfo, redactKeys, sageMakerFromEnv } from "../eval/engines";
+import {
+  createNodeOllama,
+  engineInfo,
+  OLLAMA_DIFFERENCES,
+  ollamaFromEnv,
+  redactKeys,
+  sageMakerFromEnv,
+} from "../eval/engines";
 import { formatDuration, renderMarkdown, type EngineResult, type RunResult } from "../eval/report";
 import { SCRIBE_MAX_INPUT_MS } from "../src/transcription/elevenlabs";
+import {
+  DEFAULT_OLLAMA_TRANSCRIPTION_MODEL,
+  OLLAMA_TRANSCRIPTION_MAX_INPUT_MS,
+  OLLAMA_TRANSCRIPTION_WINDOWING,
+} from "../src/transcription/ollama";
 import { OPENAI_TRANSCRIPTION_MAX_INPUT_MS } from "../src/transcription/openai";
 
 const parse = (...argv: string[]) => parseCliArgs(argv, "/work", "/repo");
@@ -31,6 +43,14 @@ describe("parseCliArgs", () => {
     expect(parse("--manifest", "c.json", "--engines", "sagemaker,openai")?.engines).toEqual([
       "openai",
       "sagemaker",
+    ]);
+  });
+
+  it("runs Ollama only when it is asked for by name, after the other engines", () => {
+    expect(parse("--manifest", "c.json")?.engines).not.toContain("ollama");
+    expect(parse("--manifest", "c.json", "--engines", "ollama,local-whisper")?.engines).toEqual([
+      "local-whisper",
+      "ollama",
     ]);
   });
 
@@ -87,8 +107,8 @@ describe("billingPlan", () => {
     );
   });
 
-  it("has nothing to bill when only local Whisper runs", () => {
-    expect(billingPlan([600], [engines[0]!])).toEqual([]);
+  it("has nothing to bill when only the local engines run", () => {
+    expect(billingPlan([600], [engines[0]!, engineInfo("ollama", "base")])).toEqual([]);
   });
 
   it("says SageMaker bills by running time, and counts its windows cut at pauses", () => {
@@ -125,6 +145,98 @@ describe("sageMakerFromEnv", () => {
       ok: false,
       missing: ["AWS_SESSION_TOKEN", "SAGEMAKER_ENDPOINT"],
     });
+  });
+});
+
+describe("ollamaFromEnv", () => {
+  it("defaults to the extension's own base URL and model", () => {
+    expect(ollamaFromEnv({})).toEqual({
+      ok: true,
+      config: { baseUrl: "http://localhost:11434", model: DEFAULT_OLLAMA_TRANSCRIPTION_MODEL },
+    });
+    expect(ollamaFromEnv({ OLLAMA_BASE_URL: " ", OLLAMA_TRANSCRIPTION_MODEL: "" })).toEqual(ollamaFromEnv({}));
+  });
+
+  it("reads its own variables, not the Ollama server's OLLAMA_HOST", () => {
+    expect(
+      ollamaFromEnv({
+        OLLAMA_HOST: "0.0.0.0",
+        OLLAMA_BASE_URL: "http://127.0.0.1:11500",
+        OLLAMA_TRANSCRIPTION_MODEL: "qwen3-asr:local",
+      }),
+    ).toEqual({ ok: true, config: { baseUrl: "http://127.0.0.1:11500", model: "qwen3-asr:local" } });
+  });
+
+  it.each(["http://192.168.1.20:11434", "https://localhost:11434", "localhost:11434"])(
+    "refuses %s, which is not this computer",
+    (baseUrl) => {
+      const result = ollamaFromEnv({ OLLAMA_BASE_URL: baseUrl });
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.problem).toContain(`OLLAMA_BASE_URL ${baseUrl} is not this computer`);
+    },
+  );
+});
+
+describe("engineInfo for Ollama", () => {
+  it("is local, does not diarize, and has the engine's windows", () => {
+    expect(engineInfo("ollama", "base")).toEqual({
+      id: "ollama",
+      name: "local Ollama",
+      model: DEFAULT_OLLAMA_TRANSCRIPTION_MODEL,
+      uploads: false,
+      diarizes: false,
+      maxInputMs: OLLAMA_TRANSCRIPTION_MAX_INPUT_MS,
+      windowMs: OLLAMA_TRANSCRIPTION_WINDOWING.targetMs,
+    });
+  });
+
+  it("carries the model the environment named", () => {
+    expect(engineInfo("ollama", "base", "qwen3-asr:local").model).toBe("qwen3-asr:local");
+  });
+});
+
+describe("createNodeOllama", () => {
+  const config = { baseUrl: "http://localhost:11434/", model: DEFAULT_OLLAMA_TRANSCRIPTION_MODEL };
+  const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+
+  it("checks the model as the extension does, then loads it with the engine's context size", async () => {
+    const calls: { url: string; body: unknown }[] = [];
+    const fetchFn = (async (url: string, init?: RequestInit) => {
+      calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      if (url.endsWith("/api/show")) return json({ capabilities: ["completion", "audio"] });
+      if (url.endsWith("/api/generate")) return json({ done: true, done_reason: "load" });
+      return json({ version: "0.40.1" });
+    }) as typeof fetch;
+    await expect(createNodeOllama(config, fetchFn).load()).resolves.toEqual({ version: "0.40.1" });
+    expect(calls).toEqual([
+      { url: "http://localhost:11434/api/show", body: { model: config.model } },
+      { url: "http://localhost:11434/api/generate", body: { model: config.model, options: { num_ctx: 8192 } } },
+      { url: "http://localhost:11434/api/version", body: undefined },
+    ]);
+  });
+
+  it("fails the load in the extension's words when Ollama is not running", async () => {
+    const fetchFn = (async () => {
+      throw new TypeError("fetch failed");
+    }) as typeof fetch;
+    await expect(createNodeOllama(config, fetchFn).load()).rejects.toThrow(
+      "Ollama is not running at http://localhost:11434",
+    );
+  });
+
+  it("fails the load when the model is not pulled", async () => {
+    const fetchFn = (async () => json({ error: "model not found" }, 404)) as typeof fetch;
+    await expect(createNodeOllama(config, fetchFn).load()).rejects.toThrow(`run ollama pull ${config.model}`);
+  });
+
+  it("fails the load when Ollama cannot put the model in memory", async () => {
+    const fetchFn = (async (url: string) =>
+      url.endsWith("/api/show")
+        ? json({ capabilities: ["audio"] })
+        : json({ error: "out of memory" }, 500)) as typeof fetch;
+    await expect(createNodeOllama(config, fetchFn).load()).rejects.toThrow(
+      `Ollama could not load ${config.model} (500)`,
+    );
   });
 });
 
@@ -186,6 +298,18 @@ describe("renderMarkdown", () => {
   it("lists how local Whisper differs from the extension's only when it ran", () => {
     expect(renderMarkdown(run([]))).not.toContain("differs");
     expect(renderMarkdown({ ...run([]), localWhisperDifferences: ["Node backend"] })).toContain("- Node backend");
+  });
+
+  it("lists how local Ollama differs from the extension's, with its version, only when it ran", () => {
+    expect(renderMarkdown(run([]))).not.toContain("Ollama");
+    const base = run([]);
+    const text = renderMarkdown({
+      ...base,
+      host: { ...base.host, ollama: "0.40.1" },
+      ollamaDifferences: OLLAMA_DIFFERENCES,
+    });
+    expect(text).toContain("Local Ollama 0.40.1 here differs from the extension's:");
+    expect(text).toContain("- Calls come from Node's fetch");
   });
 });
 

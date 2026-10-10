@@ -508,6 +508,8 @@ function engineOf(t: Settings["transcription"]): { id: string; model: string } {
     case "sagemaker":
       // The endpoint is the most the extension knows about the model behind it.
       return { id, model: t.sagemaker.endpointName };
+    case "ollama":
+      return { id, model: t.ollama.model };
   }
 }
 

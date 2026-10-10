@@ -5,6 +5,7 @@ import type { Settings } from "./domain/types";
 import { ext } from "./platform";
 import { DEFAULT_TEMPLATES } from "./pipeline/templates";
 import type { AwsCredentials } from "./transcription/aws-credentials";
+import { DEFAULT_OLLAMA_TRANSCRIPTION_MODEL } from "./transcription/ollama";
 
 export const DEFAULT_SETTINGS: Settings = {
   provider: "anthropic",
@@ -43,6 +44,9 @@ export const DEFAULT_SETTINGS: Settings = {
     elevenlabs: { apiKey: "", model: "scribe_v2" },
     // No endpoint until the user names one: the engine is theirs to deploy.
     sagemaker: { region: "us-east-1", endpointName: "" },
+    // Ollama's own address, and the Qwen3-ASR build the README tells the user to
+    // pull. The engine stays unused until the user selects it.
+    ollama: { baseUrl: "http://localhost:11434", model: DEFAULT_OLLAMA_TRANSCRIPTION_MODEL },
   },
 };
 
@@ -83,6 +87,10 @@ export async function loadSettings(): Promise<Settings> {
       sagemaker: {
         ...DEFAULT_SETTINGS.transcription.sagemaker,
         ...s.transcription?.sagemaker,
+      },
+      ollama: {
+        ...DEFAULT_SETTINGS.transcription.ollama,
+        ...s.transcription?.ollama,
       },
     },
   };

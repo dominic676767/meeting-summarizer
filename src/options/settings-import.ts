@@ -70,6 +70,7 @@ export interface ImportedSettings {
     openai?: { model?: string };
     elevenlabs?: { model?: string };
     sagemaker?: { region?: string; endpointName?: string };
+    ollama?: { baseUrl?: string; model?: string };
   };
 }
 
@@ -83,6 +84,7 @@ const TRANSCRIPTION_PROVIDERS: readonly TranscriptionProviderId[] = [
   "openai",
   "elevenlabs",
   "sagemaker",
+  "ollama",
 ];
 const SHAPES: readonly SummaryShape[] = ["structured", "narrative"];
 const WHISPER_MODELS: readonly WhisperModelSize[] = ["tiny", "base", "small"];
@@ -106,6 +108,7 @@ const ALLOWED: Shape = {
     openai: { model: "text" },
     elevenlabs: { model: "text" },
     sagemaker: { region: "text", endpointName: "text" },
+    ollama: { baseUrl: "text", model: "text" },
   },
 };
 

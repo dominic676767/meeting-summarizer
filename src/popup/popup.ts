@@ -71,7 +71,7 @@ const MIC_LINE: Partial<Record<MicCaptureState, string>> = {
  * Why including the microphone is reasonable, in the same breath as the ask.
  *
  * Two variants, because the sentence that earns a yes is only true of the local
- * engine: "everything is transcribed on this machine" is what makes handing over a
+ * engines: "everything is transcribed on this machine" is what makes handing over a
  * microphone acceptable for a member of the public, and it is false the moment a
  * cloud Transcription Provider is selected — which is exactly when recording your
  * own voice matters most. The destination is named rather than called "the cloud",
@@ -79,7 +79,7 @@ const MIC_LINE: Partial<Record<MicCaptureState, string>> = {
  * third party does with the audio.
  */
 function micWhy(s: Settings): string {
-  if (s.transcription.provider === "local-whisper") {
+  if (!uploadsAudio(s.transcription.provider)) {
     return "Your voice is not recorded yet. Including it means the summary covers your side of the meeting too — everything is transcribed on this machine.";
   }
   return `Your voice is not recorded yet. Including it means the summary covers your side of the meeting too — and because you have chosen ${TRANSCRIPTION_ENGINE_NAMES[s.transcription.provider]} to transcribe, the recording, including your voice, is uploaded to ${uploadDestination(s.transcription.provider)} to be transcribed.`;

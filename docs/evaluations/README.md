@@ -1,6 +1,6 @@
 # Evaluating the Transcription Providers
 
-The harness under `eval/` runs the Transcription Providers on the same clip and scores each against a hand-corrected reference. The providers are local Whisper, OpenAI's `whisper-1`, ElevenLabs Scribe and, when it is asked for by name, Qwen3-ASR on your own SageMaker endpoint. Each runs through the extension's own code: the engine it ships, wrapped by the same `createTranscriptionProvider`. So chunking, offsets, part-labelling, pause windows and the Silent Recording check are the product's, and the numbers describe what a user gets.
+The harness under `eval/` runs the Transcription Providers on the same clip and scores each against a hand-corrected reference. The providers are local Whisper, OpenAI's `whisper-1`, ElevenLabs Scribe and, when they are asked for by name, Qwen3-ASR on your own SageMaker endpoint and Qwen3-ASR in your own Ollama on this computer. Each runs through the extension's own code: the engine it ships, wrapped by the same `createTranscriptionProvider`. So chunking, offsets, part-labelling, pause windows and the Silent Recording check are the product's, and the numbers describe what a user gets.
 
 This document is the method. The results at the end hold numbers only, never a transcript.
 
@@ -8,7 +8,7 @@ This document is the method. The results at the end hold numbers only, never a t
 
 - **Non-work audio only.** A clip is either a mock meeting whose every participant agreed to be recorded for this purpose, or a public clip you are allowed to use. Public clips are kept locally and never redistributed. A real meeting from work is never a clip, however harmless it seems: its participants agreed to a meeting, not to an evaluation.
 - **Nothing but method and numbers enters git.** Clips, reference transcripts and engine output all live under `.eval/`, which is git-ignored. So is any `.wav` or `.reference.json` anywhere else in the repository, except the one committed test fixture. The JSON results contain every engine's Utterances, which are the clip's content, so they stay under `.eval/results/` too.
-- A cloud engine's run sends the clip to that company under its own terms: OpenAI for `whisper-1`, ElevenLabs for Scribe. A SageMaker run sends it to your own AWS account, which keeps what its setup keeps. The data rules above are what make that acceptable.
+- A cloud engine's run sends the clip to that company under its own terms: OpenAI for `whisper-1`, ElevenLabs for Scribe. A SageMaker run sends it to your own AWS account, which keeps what its setup keeps. An Ollama run sends it to Ollama on this computer only: the harness refuses any other host. The data rules above are what make that acceptable.
 
 ## Preparing a clip
 
@@ -48,13 +48,14 @@ Several clips are listed in a manifest, with paths relative to the manifest:
 npm run eval -- --manifest .eval/clips/clips.json
 npm run eval -- --manifest .eval/clips/clips.json --clips standup --engines local-whisper,elevenlabs --yes
 npm run eval -- --audio .eval/clips/a.wav --reference .eval/clips/a.reference.json --language zh --yes
+npm run eval -- --manifest .eval/clips/clips.json --engines local-whisper,ollama
 ```
 
 | Flag | Meaning |
 | --- | --- |
 | `--manifest <path>` | The clips to run. Or give one clip with `--audio`, `--reference` and `--language`. |
 | `--clips <a,b>` | Only these clips from the manifest. An unknown name is an error, not a skip. |
-| `--engines <ids>` | Any of `local-whisper`, `openai`, `elevenlabs`, `sagemaker`. Default: the first three. SageMaker runs only when named, because it needs an endpoint you deployed. |
+| `--engines <ids>` | Any of `local-whisper`, `openai`, `elevenlabs`, `sagemaker`, `ollama`. Default: the first three. SageMaker and Ollama run only when named: SageMaker needs an endpoint you deployed, and Ollama needs the Ollama app running and the model pulled. |
 | `--whisper-model <size>` | `tiny`, `base` or `small`. Default: `base`, the extension's default. |
 | `--out <dir>` | Where the JSON results go. Default: `.eval/results`. |
 | `--yes` | Proceed once the cloud bill has been printed. |
@@ -62,6 +63,15 @@ npm run eval -- --audio .eval/clips/a.wav --reference .eval/clips/a.reference.js
 Keys come only from `OPENAI_API_KEY` and `ELEVENLABS_API_KEY` in the environment. There is no flag for one. A key is never printed or written, and is scrubbed from any error an endpoint returns.
 
 SageMaker reads the AWS CLI's own variables, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`, plus `AWS_REGION` and `SAGEMAKER_ENDPOINT`. So `eval "$(aws configure export-credentials --format env)"` sets the credentials. They are scrubbed from errors like a key.
+
+Ollama reads `OLLAMA_BASE_URL` and `OLLAMA_TRANSCRIPTION_MODEL`. Each defaults to the extension's default: `http://localhost:11434` and `hf.co/ggml-org/Qwen3-ASR-1.7B-GGUF:Q8_0`. It does not read `OLLAMA_HOST`, which is the address the Ollama server binds to, not a URL. The base URL must be this computer (`localhost`, `127.0.0.1` or `[::1]`, over `http`), as in the extension, and the harness refuses any other before anything runs. Before the clips, the harness makes the engine's own check of the setup (Ollama answers, the model is pulled, takes audio and runs on this computer) and then has Ollama put the model in memory. If either fails, every Ollama row reads **failed** with the reason, and the other engines still run. To set it up once:
+
+```sh
+ollama pull hf.co/ggml-org/Qwen3-ASR-1.7B-GGUF:Q8_0   # about 2.5 GB
+npm run eval -- --manifest .eval/clips/clips.json --engines ollama
+```
+
+Ollama does not upload, so it is not in the bill and needs no `--yes`.
 
 **Before any cloud call** the harness prints the audio minutes and uploads each cloud engine will be billed for. For Scribe it also prints the share of a 4.5-hour free plan. For SageMaker it says that the endpoint bills by its running time, not by the minute, and the upload count is approximate, because its windows are cut at pauses. Without `--yes` it then stops, and nothing runs, local Whisper included. The figure is the clips' audio duration rounded up to a tenth of a minute. A provider's own rounding per request may differ slightly.
 
@@ -75,8 +85,9 @@ The Markdown table goes to stdout and everything else to stderr, so `npm run -s 
 | OpenAI | `whisper-1` | 10 minutes |
 | ElevenLabs | `scribe_v2` | 1 hour |
 | Amazon SageMaker | Qwen3-ASR, on your endpoint | about 10 seconds, cut at pauses; 30 seconds at most |
+| local Ollama | `hf.co/ggml-org/Qwen3-ASR-1.7B-GGUF:Q8_0`, or `OLLAMA_TRANSCRIPTION_MODEL` | about 10 seconds, cut at pauses; 30 seconds at most |
 
-Model ids and input limits are read from the extension's code, not restated. A clip longer than an engine's limit is split into windows exactly as a Capture Span is. A diarizing engine's labels then carry their part ("Speaker 1 (part 2)"), as ADR-0008 decided. SageMaker's windows are cut at pauses instead, as ADR-0009 decided, because its words come back without timings.
+Model ids and input limits are read from the extension's code, not restated. A clip longer than an engine's limit is split into windows exactly as a Capture Span is. A diarizing engine's labels then carry their part ("Speaker 1 (part 2)"), as ADR-0008 decided. SageMaker's and Ollama's windows are cut at pauses instead, as ADR-0009 and ADR-0011 decided, because their words come back without timings. For both, the wrapper skips windows with no signal, and the Meeting Language is given as the engine gives it: SageMaker's `to_language`, and for Ollama the reply begun with Qwen3-ASR's language line. Ollama has two windows in flight at once, as in the extension.
 
 Local Whisper runs in Node through transformers.js, with the worker's model repository, `dtype: "q8"`, `session_options: { graphOptimizationLevel: "disabled" }`, `whisperRunOptions(language)` and span mapping. What cannot be the same is the host, and every report says so:
 
@@ -84,6 +95,12 @@ Local Whisper runs in Node through transformers.js, with the worker's model repo
 - **No worker.** It runs in the Node process rather than a dedicated worker in the offscreen document.
 - **Disk cache.** The model is cached in `.eval/models` rather than the browser cache. The first run's load time includes the download.
 - **WAV, not WebM.** The audio is read from WAV rather than decoded from the recorder's WebM, so compression loss in a real recording is not measured, for any engine.
+
+Local Ollama runs on the same Ollama server, with the engine's own requests, windows and checks. What differs is the caller and the clock, and every report that ran it says so, with the Ollama version:
+
+- **Node's fetch.** The calls come from Node rather than the extension's offscreen document. Node sends no `Origin` header, so Ollama's `OLLAMA_ORIGINS` check is not exercised. A run that succeeds here does not show that Ollama allows the extension: `npm run doctor -- --ollama` checks that.
+- **Loaded before the clock.** The harness has Ollama load the model, with the context size of the engine's calls, before it times anything, and reports that as Load. In the extension, the first window of a meeting pays that load when the model is not already in memory. Ollama keeps a model in memory for 5 minutes by default, so a second run soon after the first has a short Load.
+- **Environment, not Settings.** The base URL and model come from the two variables above.
 
 ## Metrics
 
@@ -118,7 +135,7 @@ Worked examples, from the tests:
 
 ### Speaker accuracy
 
-Only for an engine that diarizes, which today is Scribe. The Whisper engines read **n/a: no diarization**, not zero.
+Only for an engine that diarizes, which today is Scribe. Every other engine reads **n/a: no diarization**, not zero.
 
 1. **Mapping, many-to-one.** Each engine label is mapped to the reference speaker it overlaps most in total time. Two labels may map to one person. That is deliberate: across engine calls the product gives one voice a label per part (ADR-0008), and a one-to-one mapping would score that as an error. A tie goes to the reference speaker who speaks first. A label that overlaps nobody maps to nobody.
 2. **Accuracy** = reference speech covered by an Utterance whose label maps to whoever was speaking ÷ all reference speech.
@@ -140,11 +157,11 @@ This measures the engine alone. In the extension a Speaker Track name wins where
 ### Also reported
 
 - **Audio**: the clip's length.
-- **Load**: model load in seconds, including any download. It happens once per run and is shown on every local Whisper row. Cloud engines have nothing to load.
+- **Load**: model load in seconds, including any download. It happens once per run and is shown on every local Whisper and local Ollama row. For Ollama it is the setup check and the load into Ollama's memory; the model was pulled before. Cloud engines have nothing to load.
 - **Transcribe**: wall-clock seconds from the recording handed to the Transcription Provider to its Utterances. For a cloud engine this includes the upload.
 - **Outcome**: a failure, or a Silent Recording refused by the provider, is reported in place of a rate, with the reason beneath the table.
 
-Engines run one at a time, so no two compete for the machine.
+Engines run one at a time, so no two compete for the machine. The other programs on the machine still do: Ollama's speed depends on what else uses the GPU.
 
 ## Results
 

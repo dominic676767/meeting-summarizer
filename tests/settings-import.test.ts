@@ -36,10 +36,11 @@ describe("parseSettingsImport", () => {
         openai: { model: "whisper-1" },
         elevenlabs: { model: "scribe_v2" },
         sagemaker: { region: "us-east-1", endpointName: "qwen3-asr" },
+        ollama: { baseUrl: "http://localhost:11434", model: "hf.co/ggml-org/Qwen3-ASR-1.7B-GGUF:Q8_0" },
       },
     };
     const parsed = parseSettingsImport(block(settings));
-    expect(parsed).toEqual({ ok: true, settings, count: 16 });
+    expect(parsed).toEqual({ ok: true, settings, count: 18 });
   });
 
   it("accepts a block with only a few choices", () => {
