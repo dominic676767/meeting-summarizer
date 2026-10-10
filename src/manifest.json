@@ -2,6 +2,7 @@
   "manifest_version": 3,
   "name": "Meeting Summarizer",
   "version": "0.1.1",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtRDqrhQ8LGUtzkZEWHq11Bbnu0hBg1RzPAXEyn/bC7P2HbsJOPJCNQPOtZXZqtWL4V2q/3BXRPRoFusH0L4P4/otlNIUGi/nUx8Hi5+hMtLTyVtSR5wkwSI+5j8JA9KITknWoXrnInmINltw5U7/ISecMfHTk1LR4eqbnnRGR4OaiFjzKuDfnCzv5c3GabRhdK733pGkEImv5Ve+XV9YxEJkHEKJZkpMnFr8w2zIj8yZWJo5rylYRVsNpp9PtWPJxdxXHJehVh+mY0yi5kKQiv78x+XfWLF3nqpcZh6GmE8b9BRROR97zvkSOSl1rfKmhLDr0tI2KPmq8VpnObCfSwIDAQAB",
   "description": "Captures live captions from Teams and Zoom web meetings, summarizes them with your LLM, and saves a local HTML summary to Downloads.",
   "background": {
     "service_worker": "background.js"

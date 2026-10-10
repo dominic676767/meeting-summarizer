@@ -8,11 +8,25 @@ Pure WebExtension: no companion app, no backend. Transcription runs on your mach
 
 Speaker names come from Teams' live captions, matched against the audio's timings. Whisper cannot tell voices apart, so a line the captions missed reads *Unknown speaker*; with ElevenLabs Scribe (below) it reads *Speaker 1*, *Speaker 2* instead. A meeting with no recording still gets a caption-only summary.
 
-## Install (unpacked, for development)
+## Let your coding agent set it up (macOS)
+
+Paste this into Claude Code, Codex, OpenCode, Cursor, Gemini CLI or any other coding agent:
+
+```
+Install and set up meeting-summarizer by following the guide here:
+https://raw.githubusercontent.com/dominic676767/meeting-summarizer/main/docs/guide/installation.md
+```
+
+The agent asks about your choices, builds the extension, and guides you through the steps only you can do: *Load unpacked*, your API keys, and microphone consent. See [the installation guide](docs/guide/installation.md).
+
+## Install (unpacked, by hand)
+
+Needs Node 22 or later (see `.nvmrc`).
 
 ```sh
-npm install
+npm ci
 npm run build
+npm run doctor   # checks the build; add -- --ollama if Ollama summarizes
 ```
 
 Then in Chrome or Edge: `chrome://extensions` → enable **Developer mode** → *Load unpacked* → pick the `dist/` folder.
@@ -32,7 +46,7 @@ Tell participants how you intend to use the recording, transcript, and summary, 
 ## Use
 
 1. Open Settings (extension options), pick a Provider and paste its API key.
-   - **Ollama**: run it with `OLLAMA_ORIGINS=chrome-extension://*` so the extension may call it.
+   - **Ollama**: allow this extension's origin, then quit and reopen the Ollama app: `launchctl setenv OLLAMA_ORIGINS "chrome-extension://hbobmcebmpakimlijcjiaklipegdelap"`. The ID is fixed by the manifest `key` ([ADR-0010](docs/adr/0010-agent-setup-settings-import-and-fixed-extension-id.md)). On macOS the value is lost at a reboot: `npm run doctor -- --ollama` says so.
    - **Bedrock**: use a Bedrock API key (bearer token) only.
    - If you enable the local microphone, select **Allow microphone access** in Settings and select **Allow** in Chrome. Then return to the meeting and start recording.
 2. Join a Teams or Zoom meeting in the browser and **turn on live captions** if available.

@@ -106,7 +106,7 @@ Why the split:
 | Service worker | Owns state and decisions. Can be suspended at any time, so sessions are mirrored to `storage.session`. |
 | Offscreen document | A service worker has no `MediaRecorder`, `AudioContext` or `getUserMedia`. The offscreen page does the recording and runs transcription. |
 | Whisper worker | Keeps the WASM model off the offscreen page's main thread. The only ES-module bundle, because the ONNX runtime uses a dynamic import (ADR-0006). |
-| Popup / Options | User surfaces. The popup is the explicit invocation Chromium requires before `tabCapture` will work. The Options page also calls the SageMaker endpoint itself, with one second of silence, to test the setup before a meeting depends on it. |
+| Popup / Options | User surfaces. The popup is the explicit invocation Chromium requires before `tabCapture` will work. The Options page also calls the SageMaker endpoint itself, with one second of silence, to test the setup before a meeting depends on it. A pasted settings import fills the Options form; only Save stores it (ADR-0010). |
 
 ---
 
@@ -197,6 +197,7 @@ flowchart LR
         popupTs["popup/popup.ts"]
         optionsTs["options/options.ts"]
         optionsMicAccess["options/microphone-access.ts"]
+        settingsImport["options/settings-import.ts"]
     end
 
     teamsContent --> teams
@@ -235,12 +236,13 @@ flowchart LR
     popupTs --> awsCreds
     optionsTs --> micPermission
     optionsTs --> optionsMicAccess --> micPermission
+    optionsTs --> settingsImport
     capturePrompt --> promptPosition
 ```
 
 `platform.ts` (the `chrome` namespace as `ext`), `messages.ts` (the protocol) and `domain/types.ts` (the vocabulary) are imported almost everywhere and are left off the arrows.
 
-**Pure vs browser-bound.** Most logic is pure and unit-tested: `capture-state`, `capture-signal`, `capture-spans`, `capture-health`, `mic-capture`, `badge`, `meeting-url`, `fusion`, `silence`, `whisper-audio`, `provider` (transcription), `pauses`, `aws-credentials`, `sagemaker` (its fetch is injected), `pipeline/*`, `providers/*`, `audio-mix`, `signal`. The browser-bound shells (`background.ts`, `offscreen.ts`, `microphone-access.ts`, `microphone-permission.ts`, `audio-store.ts`, `whisper-worker.ts`, popup, options) are kept thin and checked by hand via [manual-checks.md](manual-checks.md). Tests cover the microphone permission check and Settings navigation with browser API substitutes. `content/runner.ts` is browser-bound too (DOM, `MutationObserver`, `ext`), but `tests/content-runner.test.ts` drives it under jsdom with a fake adapter.
+**Pure vs browser-bound.** Most logic is pure and unit-tested: `capture-state`, `capture-signal`, `capture-spans`, `capture-health`, `mic-capture`, `badge`, `meeting-url`, `fusion`, `silence`, `whisper-audio`, `provider` (transcription), `pauses`, `aws-credentials`, `settings-import`, `sagemaker` (its fetch is injected), `pipeline/*`, `providers/*`, `audio-mix`, `signal`. The browser-bound shells (`background.ts`, `offscreen.ts`, `microphone-access.ts`, `microphone-permission.ts`, `audio-store.ts`, `whisper-worker.ts`, popup, options) are kept thin and checked by hand via [manual-checks.md](manual-checks.md). Tests cover the microphone permission check and Settings navigation with browser API substitutes. `content/runner.ts` is browser-bound too (DOM, `MutationObserver`, `ext`), but `tests/content-runner.test.ts` drives it under jsdom with a fake adapter.
 
 ---
 
@@ -565,7 +567,7 @@ flowchart LR
 | Audio span files | each Capture Start | artifact written (`offscreen-discard-spans`), unless a Held Recording still needs them |
 | Held Recording | capture or transcription failed, or audio session recovered without a meeting tab | its Transcript is held |
 | Held Transcript | summarization failed, or caption session recovered without a meeting tab | its artifact is written |
-| Settings | Options page save | never (user-owned) |
+| Settings | Options page save (a pasted settings import only fills the form first, ADR-0010) | never (user-owned) |
 | SageMaker AWS credentials | pasted on the Options page | cleared there, or when the browser closes (`storage.session`) |
 
 ---
@@ -656,13 +658,14 @@ The functions to read first, by job.
 | Settings with defaults | `loadSettings`, `saveSettings` | `src/settings.ts` |
 | SageMaker credentials, memory only | `loadAwsCredentials`, `saveAwsCredentials`, `clearAwsCredentials` | `src/settings.ts` |
 | Read pasted AWS credentials | `parseAwsCredentials` | `src/transcription/aws-credentials.ts` |
+| Read a pasted settings import; refuse keys, credentials, consent | `parseSettingsImport` | `src/options/settings-import.ts` |
 | Credentials status, popup warning | `describeCredentials`, `credentialsWarning` | `src/transcription/aws-credentials.ts` |
 
 ### Every source file
 
 | File | Role |
 |---|---|
-| `src/manifest.json` | MV3 manifest: content-script matches, permissions, shortcut |
+| `src/manifest.json` | MV3 manifest: content-script matches, permissions, shortcut; the public `key` that fixes the extension ID (ADR-0010) |
 | `src/platform.ts` | `ext` = the `chrome` namespace, resolved in one place |
 | `src/messages.ts` | message protocol and reply shapes |
 | `src/domain/types.ts` | domain vocabulary types |
@@ -729,6 +732,7 @@ The functions to read first, by job.
 | `src/options/options.html` | settings markup |
 | `src/options/options.ts` | settings: providers, transcription, templates; the SageMaker credentials and its Test button |
 | `src/options/microphone-access.ts` | request microphone access from a separate Settings tab and explain failures |
+| `src/options/settings-import.ts` | parse a pasted settings block into form values; the offered Meeting Languages |
 
 **Zoom web client.** The manifest loads `zoom-content.js` and `capture-prompt.js` on `zoom.us` web-client routes, including the meeting iframe. The Zoom adapter captures visible subtitles, joins overlapping sliding text, and uses the meeting footer, breakout transition and explicit host-end message to detect meeting state. Its leave grace period is 30 seconds. A native Zoom desktop meeting does not expose a browser DOM and is outside this capture path.
 

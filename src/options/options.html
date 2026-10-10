@@ -29,6 +29,26 @@
   <body>
     <h1>Meeting Summarizer — Settings</h1>
 
+    <details class="editor">
+      <summary>Import settings</summary>
+      <label for="settings-import">Settings block</label>
+      <textarea
+        id="settings-import"
+        rows="4"
+        autocomplete="off"
+        spellcheck="false"
+        aria-describedby="settings-import-help"
+        placeholder='{ "meetingSummarizerSettings": 1, "provider": "ollama", … }'
+        style="width: 100%; box-sizing: border-box; font: 12px monospace;"
+      ></textarea>
+      <p class="note" id="settings-import-status" role="status" aria-live="polite"></p>
+      <p class="note" id="settings-import-help">
+        Paste the block a setup agent prepared for you. It fills in the choices below and stores
+        nothing: check them, then select Save. API keys, AWS credentials, microphone recording and
+        the templates are never imported — a block that holds any of them is refused.
+      </p>
+    </details>
+
     <h2>Provider</h2>
     <label for="provider">LLM used to summarize your meetings</label>
     <select id="provider">
@@ -57,8 +77,9 @@
     <fieldset id="panel-ollama" class="hidden">
       <legend>Ollama</legend>
       <p class="note">
-        One-time setup: run Ollama with <code>OLLAMA_ORIGINS=chrome-extension://*</code> so this
-        extension may call it.
+        One-time setup: run Ollama with
+        <code>OLLAMA_ORIGINS=chrome-extension://hbobmcebmpakimlijcjiaklipegdelap</code> (this
+        extension's ID) so this extension may call it.
       </p>
       <label for="ollama-url">Base URL</label>
       <input type="text" id="ollama-url" />
