@@ -470,6 +470,7 @@ describe("the factory's SageMaker checks", () => {
     openai: { apiKey: "", model: "whisper-1" },
     elevenlabs: { apiKey: "", model: "scribe_v2" },
     sagemaker: { region: "eu-west-1", endpointName: "qwen3-asr", ...over },
+    ollama: { baseUrl: "http://localhost:11434", model: "qwen3-asr" },
   });
   const decode: DecodeAudio = () => Promise.resolve({ samples: sound(5), sampleRate: RATE });
   const recording = { spans: [{ data: new Blob(), startOffsetMs: 0 }] };

@@ -66,9 +66,10 @@ Then ask these questions. Ask them one group at a time. Give the default for eac
 | Q3 | Which LLM must write your summaries (the **Provider**)? | Claude / OpenAI / Ollama on this Mac / AWS Bedrock | `provider` in the settings block. Each choice except Ollama needs an API key, which the user pastes on the Settings page |
 | Q3a | (Claude, OpenAI or Bedrock) Which model? | Claude: `claude-sonnet-5`. OpenAI: `gpt-4o`. Bedrock: `anthropic.claude-sonnet-4-20250514-v1:0` | The `model` field. For Bedrock, also ask the region (default `us-east-1`) |
 | Q3b | (Ollama) Is Ollama installed? Which model? May I allow this extension in Ollama and restart Ollama? | Model default `llama3.1` | Step 5A |
-| Q4 | Which engine must turn the audio into words (the **Transcription Provider**)? | Local Whisper (nothing leaves this Mac) / OpenAI / ElevenLabs Scribe / Amazon SageMaker (your own endpoint) | `transcription.provider`. Tell the user: every choice except Local Whisper **uploads the meeting audio** |
+| Q4 | Which engine must turn the audio into words (the **Transcription Provider**)? | Local Whisper (nothing leaves this Mac) / OpenAI / ElevenLabs Scribe / Amazon SageMaker (your own endpoint) / Qwen3-ASR in Ollama on this Mac | `transcription.provider`. Tell the user: every choice except Local Whisper and Ollama **uploads the meeting audio** |
 | Q4a | (Local Whisper) Which model size? | `base` (~75 MB) / `tiny` (~40 MB, fastest) / `small` (~250 MB, most accurate) | `transcription.localWhisper.model` |
 | Q4b | (SageMaker) Does your endpoint exist now? Which region, endpoint name and AWS profile? | Region default `us-east-1` | Step 5B. If the endpoint does not exist, tell the user to read the README's SageMaker section and deploy it themselves. Do not deploy it |
+| Q4c | (Ollama) Is Ollama 0.40 or later installed? May I pull `hf.co/ggml-org/Qwen3-ASR-1.7B-GGUF:Q8_0` (about 2.5 GB), allow this extension in Ollama and restart Ollama? | Model default `hf.co/ggml-org/Qwen3-ASR-1.7B-GGUF:Q8_0` | Step 5A, and `transcription.ollama.model` |
 | Q5 | Which language are your meetings in (the **Meeting Language**)? | English, or one of the languages on the Settings page | `transcription.language`. Nothing detects the language: a wrong one gives wrong words |
 | Q6 | Do you want your own voice recorded (microphone)? | No / Yes | You do not set this. If yes, the user turns it on in Step 7 |
 | Q7 | Which summary shape? | Structured (TL;DR, decisions, action items, open questions) / Narrative | `shape` |
@@ -135,16 +136,17 @@ Exit code `0` means no check failed. A `warn` line does not fail the run. Each `
 
 Do only the parts that match the answers.
 
-#### 5A. Ollama (Q3 = Ollama)
+#### 5A. Ollama (Q3 = Ollama, or Q4 = Ollama)
 
 The extension ID is fixed: `hbobmcebmpakimlijcjiaklipegdelap`. Ollama must allow this one origin. Do not use a wildcard origin: it allows every extension in the browser.
 
 1. Ask the user before each command in this part.
-2. Pull the model, if it is not there yet:
+2. Pull each model, if it is not there yet: the summary model (Q3 = Ollama), and the speech-to-text model (Q4 = Ollama):
 
    ```bash
    ollama list
    ollama pull <model>
+   ollama pull hf.co/ggml-org/Qwen3-ASR-1.7B-GGUF:Q8_0
    ```
 
 3. Read the current value, so that you keep any entries that the user has:
@@ -254,11 +256,12 @@ No tool can click Chrome's **Developer mode** or **Load unpacked** for the user.
    | `anthropic.model`, `openai.model` | text |
    | `ollama.baseUrl`, `ollama.model` | text |
    | `bedrock.region`, `bedrock.model` | text |
-   | `transcription.provider` | `local-whisper`, `openai`, `elevenlabs`, `sagemaker` |
+   | `transcription.provider` | `local-whisper`, `openai`, `elevenlabs`, `sagemaker`, `ollama` |
    | `transcription.language` | a two-letter code from the Settings page, for example `en`, `de`, `ja` |
    | `transcription.localWhisper.model` | `tiny`, `base`, `small` |
    | `transcription.openai.model`, `transcription.elevenlabs.model` | text |
    | `transcription.sagemaker.region`, `transcription.sagemaker.endpointName` | text |
+   | `transcription.ollama.baseUrl`, `transcription.ollama.model` | text. The base URL must be this Mac, for example `http://localhost:11434` |
    | `shape` | `structured`, `narrative` |
    | `nameEngineInArtifact` | `true`, `false` |
 
@@ -275,7 +278,7 @@ No tool can click Chrome's **Developer mode** or **Load unpacked** for the user.
 
 3. Tell the user:
    1. Open **Import settings** at the top and paste the block. The page says how many settings it filled in. If it refuses the block, it says why: fix the block and copy it again.
-   2. Paste each API key in its field. (SageMaker: run the `pbcopy` command from Step 5B now, paste into **Temporary AWS credentials**, then click **Test the endpoint**. The result names the part to fix, if any.)
+   2. Paste each API key in its field. (SageMaker: run the `pbcopy` command from Step 5B now, paste into **Temporary AWS credentials**, then click **Test the endpoint**. The result names the part to fix, if any. Ollama transcription: click **Test Ollama**.)
    3. (Q6 = Yes) Under **Recording**, turn on **Record my microphone**, click **Allow microphone access**, and click **Allow** in Chrome's prompt. This is the user's decision. Do not do it for them.
    4. Click **Save**. If a Provider key is missing, the page says so.
 
@@ -330,7 +333,7 @@ Run `npm run doctor` (add `-- --ollama` for Ollama) before you change anything.
 | The doctor says `dist/ is older than src/manifest.json` | The code changed after the last build | Run `npm run build`, then click **Reload** on the extension card |
 | The card's ID is not `hbobmcebmpakimlijcjiaklipegdelap` | An old build without the manifest `key` is loaded | Run `npm run build`, remove the old card, and load `dist/` again |
 | The card shows "Manifest file is missing or unreadable" | The wrong folder was selected | Select the `dist` folder, not the clone folder |
-| The summary fails with an Ollama error, or the doctor says that Ollama refuses this extension | `OLLAMA_ORIGINS` is missing, usually after a Mac restart | Step 5A, items 3 to 6 |
+| The summary or the transcription fails with an Ollama error that names `OLLAMA_ORIGINS`, or the doctor says that Ollama refuses this extension | `OLLAMA_ORIGINS` is missing, usually after a Mac restart | Step 5A, items 3 to 6 |
 | Ollama does not start after you set `OLLAMA_ORIGINS` | A space or a bad entry in the value | Set the value again with no spaces, then restart Ollama |
 | **Test the endpoint** names credentials | The credentials expired, or the browser restarted | Step 5B: put fresh credentials on the clipboard; the user pastes them |
 | **Test the endpoint** names the endpoint or the container | Wrong name or region, or the endpoint is not `InService` | Run the `describe-endpoint` check again |

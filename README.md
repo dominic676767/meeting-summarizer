@@ -26,7 +26,7 @@ Needs Node 22 or later (see `.nvmrc`).
 ```sh
 npm ci
 npm run build
-npm run doctor   # checks the build; add -- --ollama if Ollama summarizes
+npm run doctor   # checks the build; add -- --ollama if Ollama summarizes or transcribes
 ```
 
 Then in Chrome or Edge: `chrome://extensions` → enable **Developer mode** → *Load unpacked* → pick the `dist/` folder.
@@ -98,7 +98,16 @@ Local Whisper is the default and needs no key. Pick a model size in Settings —
 
 Qwen3-ASR returns words without timings, so the audio goes in pieces of about 10 seconds, cut at pauses, four at a time, and each piece takes its speaker name from the captions. A piece with no sound at all is not sent, because the model invents words for silence. If the credentials expire before a meeting ends, the popup warns you while it records, and the meeting's audio is kept: paste fresh credentials and use *Retry transcription* in the popup. If the meeting language is set wrong, Qwen3-ASR translates into it rather than mistranscribing. It does not list Hebrew, Norwegian or Ukrainian; for these, no language is sent and the model guesses.
 
-Choosing a different cloud engine asks for microphone consent again, because the recording would go somewhere else: to a different company, or with SageMaker, to your own AWS account.
+**Qwen3-ASR in Ollama** is the second local engine: the same Qwen3-ASR 1.7B, in a GGUF build, in the Ollama app on this Mac. The audio goes to Ollama on this machine and no further, so it needs no key and no account. See [ADR-0011](docs/adr/0011-qwen3-asr-in-local-ollama.md).
+
+1. Pull the model (about 2.5 GB): `ollama pull hf.co/ggml-org/Qwen3-ASR-1.7B-GGUF:Q8_0`. It needs Ollama 0.40 or later.
+2. Allow this extension's origin in Ollama, as for the Ollama Provider above. If Ollama already writes your summaries, this is done.
+3. In Settings → Transcription, choose *Qwen3-ASR in Ollama*. The base URL must be this computer (`http://localhost:11434`), and a model that Ollama runs on its cloud is refused.
+4. Click *Test Ollama*. It sends one second of silence, never meeting audio, and says which part of the setup to fix, if any: Ollama not running, the origin not allowed, or the model not pulled.
+
+The audio goes in pieces of about 10 seconds, cut at pauses, two at a time, as with SageMaker. On an M4 Pro, a minute of audio takes about 2 seconds once the model is loaded. The meeting language tells the model which language to expect where the audio leaves it in doubt; speech in another language comes back in that language, not translated. For Hebrew, Norwegian and Ukrainian the model detects the language.
+
+Choosing a different cloud engine asks for microphone consent again, because the recording would go somewhere else: to a different company, or with SageMaker, to your own AWS account. Moving to either local engine does not ask again.
 
 How the engines compare on the same audio — word error rate, and how often each word is credited to the right speaker — is measured with the harness in `eval/`; the method and the rules for what audio may be used are in [docs/evaluations](docs/evaluations/README.md).
 

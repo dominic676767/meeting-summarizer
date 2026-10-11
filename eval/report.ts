@@ -39,9 +39,12 @@ export interface ClipResult {
 
 export interface RunResult {
   startedAt: string;
-  host: { node: string; platform: string };
+  /** `ollama` is the Ollama server's version, present when Ollama ran and answered. */
+  host: { node: string; platform: string; ollama?: string };
   /** Present when local Whisper ran: how it differs from the extension's. */
   localWhisperDifferences?: readonly string[];
+  /** Present when local Ollama ran: how it differs from the extension's. */
+  ollamaDifferences?: readonly string[];
   speakerMapping: "many-to-one";
   clips: ClipResult[];
 }
@@ -109,6 +112,10 @@ export function renderMarkdown(run: RunResult): string {
   if (run.localWhisperDifferences) {
     notes.push("", "Local Whisper here differs from the extension's:");
     for (const d of run.localWhisperDifferences) notes.push(`- ${d}`);
+  }
+  if (run.ollamaDifferences) {
+    notes.push("", `Local Ollama${run.host.ollama ? ` ${run.host.ollama}` : ""} here differs from the extension's:`);
+    for (const d of run.ollamaDifferences) notes.push(`- ${d}`);
   }
   return [...table, ...notes].join("\n");
 }

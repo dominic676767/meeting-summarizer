@@ -1,7 +1,8 @@
 // Float samples → 16-bit little-endian PCM, the encoding every cloud engine
-// uploads. OpenAI's endpoint and the SageMaker engine want it inside a WAV
-// container; Scribe takes it bare. Kept in one place so the engines cannot drift
-// on clamping, rounding or the WAV header.
+// uploads and the Ollama engine sends to localhost. OpenAI's endpoint, the
+// SageMaker engine and Ollama want it inside a WAV container; Scribe takes it
+// bare. Kept in one place so the engines cannot drift on clamping, rounding or
+// the WAV header.
 
 /** Writes `samples` as 16-bit little-endian PCM into `view` from `offset`. */
 export function writePcm16(view: DataView, offset: number, samples: Float32Array): void {

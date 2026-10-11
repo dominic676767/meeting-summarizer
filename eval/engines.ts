@@ -3,11 +3,13 @@
 // Every engine is the one the extension ships, wrapped by the same
 // createTranscriptionProvider, so chunking, offsets, part-labelling and the
 // Silent Recording check are the product's and the numbers describe what a user
-// gets. Only two things are the harness's own: the decoder, which reads a WAV
-// where the extension has an AudioContext, and local Whisper's host, which is
-// transformers.js in Node where the extension has a worker running WASM. What
-// that second one changes is written down in LOCAL_WHISPER_DIFFERENCES and
-// travels with every result.
+// gets. Only three things are the harness's own: the decoder, which reads a WAV
+// where the extension has an AudioContext; local Whisper's host, which is
+// transformers.js in Node where the extension has a worker running WASM; and
+// local Ollama's caller, which is Node's fetch where the extension has the
+// offscreen document's. What the last two change is written down in
+// LOCAL_WHISPER_DIFFERENCES and OLLAMA_DIFFERENCES, and travels with every
+// result.
 import type { MeetingLanguage, TranscriptionProviderId, WhisperModelSize } from "../src/domain/types";
 import { DEFAULT_SETTINGS } from "../src/settings";
 import {
@@ -17,8 +19,16 @@ import {
 import { TRANSCRIPTION_ENGINE_NAMES, uploadsAudio } from "../src/transcription/engines";
 import { WHISPER_MAX_INPUT_MS } from "../src/transcription/local-whisper";
 import {
+  chatRequest,
+  createOllamaTranscriptionEngine,
+  isLoopbackUrl,
+  OLLAMA_TRANSCRIPTION_MAX_INPUT_MS,
+  OLLAMA_TRANSCRIPTION_WINDOWING,
+} from "../src/transcription/ollama";
+import {
   createOpenAiTranscriptionEngine,
   OPENAI_TRANSCRIPTION_MAX_INPUT_MS,
+  type FetchFn,
 } from "../src/transcription/openai";
 import {
   createTranscriptionProvider,
@@ -43,11 +53,15 @@ import { parseWav } from "./wav";
 
 export type EngineId = TranscriptionProviderId;
 
-export const ENGINE_IDS: readonly EngineId[] = ["local-whisper", "openai", "elevenlabs", "sagemaker"];
+export const ENGINE_IDS: readonly EngineId[] = ["local-whisper", "openai", "elevenlabs", "sagemaker", "ollama"];
 
 /**
- * The engines a run compares when it names none. SageMaker is left out: it
- * needs an endpoint the user deployed, so a run asks for it by name.
+ * The engines a run compares when it names none. SageMaker and Ollama are left
+ * out, and a run asks for them by name. SageMaker needs an endpoint the user
+ * deployed. Ollama needs the Ollama app running on this computer and a 2.5-GB
+ * model pulled into it, which most machines that run the harness do not have:
+ * in the default set it would add a failed row to every run that did not ask
+ * for it.
  */
 export const DEFAULT_ENGINE_IDS: readonly EngineId[] = ["local-whisper", "openai", "elevenlabs"];
 
@@ -104,6 +118,59 @@ export function sageMakerFromEnv(
   };
 }
 
+/**
+ * What the Ollama engine reads, also from the environment only. Not Ollama's own
+ * OLLAMA_HOST: that is the address the Ollama server binds to (often 0.0.0.0, or
+ * a bare host:port), not a URL to send to.
+ */
+export const OLLAMA_ENV = {
+  baseUrl: "OLLAMA_BASE_URL",
+  model: "OLLAMA_TRANSCRIPTION_MODEL",
+} as const;
+
+export type OllamaConfig = Record<keyof typeof OLLAMA_ENV, string>;
+
+/**
+ * The Ollama settings from `env`, each defaulting to the extension's own
+ * default, or why they cannot be used. The base URL must be this computer, as
+ * the extension's factory demands: the engine counts as one that does not
+ * upload, so it is not billed and needs no --yes, and a remote host would make
+ * that untrue.
+ */
+export function ollamaFromEnv(
+  env: Record<string, string | undefined>,
+): { ok: true; config: OllamaConfig } | { ok: false; problem: string } {
+  const defaults = DEFAULT_SETTINGS.transcription.ollama;
+  const config: OllamaConfig = {
+    baseUrl: env[OLLAMA_ENV.baseUrl]?.trim() || defaults.baseUrl,
+    model: env[OLLAMA_ENV.model]?.trim() || defaults.model,
+  };
+  if (!isLoopbackUrl(config.baseUrl)) {
+    return {
+      ok: false,
+      problem: `${OLLAMA_ENV.baseUrl} ${config.baseUrl} is not this computer — use http://localhost:11434, or leave it unset`,
+    };
+  }
+  return { ok: true, config };
+}
+
+/**
+ * How local Ollama here differs from local Ollama in the extension. The server,
+ * the model, the requests and the windows are the extension's; the caller and
+ * the clock are not. So its words are comparable to the extension's, and so is
+ * its speed once the model is in memory.
+ */
+export const OLLAMA_DIFFERENCES: readonly string[] = [
+  "Calls come from Node's fetch rather than the extension's offscreen document. Node " +
+    "sends no Origin header, so Ollama's OLLAMA_ORIGINS check is not exercised: a run " +
+    "here that succeeds does not show that Ollama allows the extension.",
+  "The harness has Ollama load the model, with the engine's own context size, before " +
+    "the clock starts, and reports that as Load. The extension's first window of a " +
+    "meeting pays that load when the model is not already in memory.",
+  "The base URL and model come from OLLAMA_BASE_URL and OLLAMA_TRANSCRIPTION_MODEL, " +
+    "or the extension's defaults, rather than from Settings.",
+];
+
 export interface EngineInfo {
   id: EngineId;
   /** What the product calls it, from the one Record every surface reads. */
@@ -119,7 +186,11 @@ export interface EngineInfo {
   windowMs?: number;
 }
 
-export function engineInfo(id: EngineId, whisperModel: WhisperModelSize): EngineInfo {
+export function engineInfo(
+  id: EngineId,
+  whisperModel: WhisperModelSize,
+  ollamaModel: string = DEFAULT_SETTINGS.transcription.ollama.model,
+): EngineInfo {
   const t = DEFAULT_SETTINGS.transcription;
   const shared = { id, name: TRANSCRIPTION_ENGINE_NAMES[id], uploads: uploadsAudio(id) };
   switch (id) {
@@ -152,6 +223,14 @@ export function engineInfo(id: EngineId, whisperModel: WhisperModelSize): Engine
         maxInputMs: SAGEMAKER_MAX_INPUT_MS,
         windowMs: SAGEMAKER_WINDOWING.targetMs,
       };
+    case "ollama":
+      return {
+        ...shared,
+        model: ollamaModel,
+        diarizes: false,
+        maxInputMs: OLLAMA_TRANSCRIPTION_MAX_INPUT_MS,
+        windowMs: OLLAMA_TRANSCRIPTION_WINDOWING.targetMs,
+      };
   }
 }
 
@@ -170,6 +249,41 @@ export function createSageMakerEngine(
     },
     language,
   });
+}
+
+/**
+ * The extension's Ollama engine, pointed at the server the environment names,
+ * and a load that is the harness's own. The load is the engine's own check
+ * first (Ollama is running, the model is pulled, takes audio and runs on this
+ * computer), so its failures read as the extension's do. Then Ollama is asked to
+ * put the model in memory with the context size the engine's calls ask for: with
+ * any other size, Ollama would load it again on the first call. The load
+ * returns Ollama's version, which changes what a run measures.
+ */
+export function createNodeOllama(config: OllamaConfig, fetchFn: FetchFn = fetch) {
+  const base = config.baseUrl.trim().replace(/\/+$/, "");
+  const engineFor = (language: MeetingLanguage): TranscriptionEngine =>
+    createOllamaTranscriptionEngine({ ...config, language, fetchFn });
+  return {
+    engineFor,
+    async load(): Promise<{ version: string }> {
+      await engineFor("en").load();
+      const { num_ctx } = chatRequest({ model: config.model, samples: new Float32Array(0), language: "en" }).options;
+      const res = await fetchFn(`${base}/api/generate`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: config.model, options: { num_ctx } }),
+      });
+      if (!res.ok) {
+        throw new Error(`Ollama could not load ${config.model} (${res.status}): ${(await res.text()).slice(0, 300)}`);
+      }
+      const version = await fetchFn(`${base}/api/version`)
+        .then((r) => r.json() as Promise<{ version?: unknown }>)
+        .then((v) => (typeof v.version === "string" ? v.version : "unknown"))
+        .catch(() => "unknown");
+      return { version };
+    },
+  };
 }
 
 type Asr = (samples: Float32Array, options: Record<string, unknown>) => Promise<WhisperOutput>;

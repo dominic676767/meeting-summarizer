@@ -1,7 +1,8 @@
 // Options page: Provider selection + keys (browser.storage.local, ADR-0001),
 // Summary shape toggle, and editable Prompt Templates. The SageMaker engine's
 // AWS credentials are the exception: pasted here, kept in storage.session only
-// (ADR-0009), and tested from here against the user's endpoint. A pasted
+// (ADR-0009), and tested from here against the user's endpoint. The Ollama
+// engine is tested from here too, against this computer's Ollama. A pasted
 // settings import fills the form and stores nothing until Save (ADR-0010).
 import type {
   MeetingLanguage,
@@ -31,6 +32,12 @@ import {
   SAGEMAKER_SAMPLE_RATE,
   testReport,
 } from "../transcription/sagemaker";
+import {
+  createOllamaTranscriptionEngine,
+  isLoopbackUrl,
+  OLLAMA_TRANSCRIPTION_SAMPLE_RATE,
+  ollamaTestReport,
+} from "../transcription/ollama";
 import { microphonePermission } from "../offscreen/microphone-permission";
 import { allowMicrophoneAccess, microphoneAccessFailure } from "./microphone-access";
 import { MEETING_LANGUAGES, parseSettingsImport, type ImportedSettings } from "./settings-import";
@@ -46,6 +53,7 @@ const TRANSCRIPTION_PROVIDERS: TranscriptionProviderId[] = [
   "openai",
   "elevenlabs",
   "sagemaker",
+  "ollama",
 ];
 
 const languageSelect = $<HTMLSelectElement>("meeting-language");
@@ -172,6 +180,8 @@ function fillForm(i: ImportedSettings): void {
   set("transcription-elevenlabs-model", i.transcription?.elevenlabs?.model);
   set("transcription-sagemaker-region", i.transcription?.sagemaker?.region);
   set("transcription-sagemaker-endpoint", i.transcription?.sagemaker?.endpointName);
+  set("transcription-ollama-url", i.transcription?.ollama?.baseUrl);
+  set("transcription-ollama-model", i.transcription?.ollama?.model);
   set("shape", i.shape);
   if (i.nameEngineInArtifact !== undefined) {
     $<HTMLInputElement>("name-engine").checked = i.nameEngineInArtifact;
@@ -195,6 +205,43 @@ importBox.addEventListener("input", () => {
   fillForm(parsed.settings);
   importBox.value = "";
   importStatus.textContent = `Filled in ${parsed.count} ${parsed.count === 1 ? "setting" : "settings"}. Check them below, add your keys, then select Save. Nothing is stored until you do.`;
+});
+
+const ollamaTranscriptionUrl = $<HTMLInputElement>("transcription-ollama-url");
+const ollamaTranscriptionModel = $<HTMLInputElement>("transcription-ollama-model");
+
+// Like the SageMaker test: the values as typed, saved or not, and one second of
+// silence rather than meeting audio. The model check comes first, so a missing
+// pull or a refused origin is named before any audio is sent.
+$("transcription-ollama-test").addEventListener("click", async () => {
+  const button = $<HTMLButtonElement>("transcription-ollama-test");
+  const result = $("transcription-ollama-test-result");
+  const baseUrl = ollamaTranscriptionUrl.value.trim();
+  const model = ollamaTranscriptionModel.value.trim();
+  if (!baseUrl || !model) {
+    result.textContent = "Enter the base URL and the model first.";
+    return;
+  }
+  if (!isLoopbackUrl(baseUrl)) {
+    result.textContent = "The base URL must be this computer, for example http://localhost:11434.";
+    return;
+  }
+  button.disabled = true;
+  result.textContent = "Testing…";
+  try {
+    const engine = createOllamaTranscriptionEngine({
+      baseUrl,
+      model,
+      language: languageSelect.value as MeetingLanguage,
+    });
+    await engine.load();
+    const spans = await engine.transcribe(new Float32Array(OLLAMA_TRANSCRIPTION_SAMPLE_RATE));
+    result.textContent = ollamaTestReport({ ok: true, text: spans.map((s) => s.text).join(" ") });
+  } catch (error) {
+    result.textContent = ollamaTestReport({ ok: false, error });
+  } finally {
+    button.disabled = false;
+  }
 });
 
 providerSelect.addEventListener("change", () => showPanel(providerSelect.value));
@@ -250,6 +297,8 @@ async function init(): Promise<void> {
   $<HTMLInputElement>("transcription-elevenlabs-model").value = s.transcription.elevenlabs.model;
   sageMakerRegion.value = s.transcription.sagemaker.region;
   sageMakerEndpoint.value = s.transcription.sagemaker.endpointName;
+  ollamaTranscriptionUrl.value = s.transcription.ollama.baseUrl;
+  ollamaTranscriptionModel.value = s.transcription.ollama.model;
   await showCredentials();
   $<HTMLInputElement>("mic-capture").checked = s.micCapture.enabled;
   micCaptureAsLoaded = s.micCapture.enabled;
@@ -366,6 +415,10 @@ $("save").addEventListener("click", async () => {
     sagemaker: {
       region: sageMakerRegion.value.trim(),
       endpointName: sageMakerEndpoint.value.trim(),
+    },
+    ollama: {
+      baseUrl: ollamaTranscriptionUrl.value.trim(),
+      model: ollamaTranscriptionModel.value.trim(),
     },
   };
   // Whether this Save leaves microphone consent on file is a rule of its own —

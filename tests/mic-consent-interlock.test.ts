@@ -81,6 +81,18 @@ describe("microphone consent survives only what it was given for", () => {
     ).toBe(1000);
   });
 
+  it("keeps consent when the user moves between the two local engines", () => {
+    // Ollama transcribes on this machine too (ADR-0011): the local promise holds.
+    expect(confirmedAtAfterSave({ ...base, providerNowSelected: "ollama" })).toBe(1000);
+    expect(
+      confirmedAtAfterSave({
+        ...base,
+        providerConsentGivenUnder: "sagemaker",
+        providerNowSelected: "ollama",
+      }),
+    ).toBe(1000);
+  });
+
   it("withdrawing on a cloud switch outranks a checkbox the user just ticked", () => {
     // Ticking the box answers the local disclosure; it cannot answer a cloud one
     // the user has not been shown yet.

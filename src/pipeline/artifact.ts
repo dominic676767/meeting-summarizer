@@ -109,6 +109,16 @@ const NO_SPEECH_CLAUSE = "from live captions only — the recording contained no
 const CAPTURE_FAILED_CLAUSE = "from live captions only — audio capture failed";
 
 /**
+ * Replace the captions-only clause where a recording existed and its words never
+ * arrived. "no audio was recorded" is false here too, and after a failure the
+ * audio still exists and can be retried.
+ */
+const UNTRANSCRIBED_CLAUSE: Record<NonNullable<Transcript["untranscribed"]>, string> = {
+  skipped: "from live captions only — audio transcription was skipped",
+  failed: "from live captions only — audio transcription failed",
+};
+
+/**
  * The Meta line is not enough where owners are anonymous: action items are what
  * get acted on, so the caveat is repeated where a wrong owner does its damage.
  */
@@ -172,8 +182,12 @@ function metaLine(
     parts.push(provenance === "captions-only"
       ? CAPTURE_FAILED_CLAUSE
       : `${provenanceClause} · audio capture failed`);
+  } else if (transcript.noSpeech === true) {
+    parts.push(NO_SPEECH_CLAUSE);
+  } else if (provenance === "captions-only" && transcript.untranscribed) {
+    parts.push(UNTRANSCRIBED_CLAUSE[transcript.untranscribed]);
   } else {
-    parts.push(transcript.noSpeech === true ? NO_SPEECH_CLAUSE : provenanceClause);
+    parts.push(provenanceClause);
   }
   // Only where audio was actually recorded: on a caption-only artifact the
   // microphone is beside the point, and naming it would read as a second fault
