@@ -274,11 +274,16 @@ export async function ensureSession(tabId: number, platform: string): Promise<Me
   // Transcript store — either way, new captions mean a new Meeting.
   if (!s || s.state === "done" || s.state === "failed") {
     recoveredSessions.delete(tabId);
+    // Summarize now finishes a session while the call goes on, and the content
+    // script reports meeting status only when it changes. So the new session
+    // takes the status, and the title, from the old one. Meeting End has already
+    // cleared the status, so a call that ended does not leak into the next one.
+    const continuing = s?.inMeeting === true;
     s = {
       platform,
-      title: null,
+      title: continuing ? (s?.title ?? null) : null,
       startedAt: Date.now(),
-      inMeeting: false,
+      inMeeting: continuing,
       state: "capturing",
       recording: false,
       recordingStartedAt: null,
