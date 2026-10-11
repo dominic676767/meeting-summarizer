@@ -118,11 +118,11 @@ Structured (TL;DR / decisions / action items with owners / open questions — de
 ## Development
 
 ```sh
-npm test -- --exclude '**/.claude/**' --exclude '**/.eval/**'
+npm test
 npm run typecheck
 npm run build     # esbuild → dist/
 
-WHISPER_INTEGRATION=1 npm test -- --exclude '**/.claude/**' --exclude '**/.eval/**'
+WHISPER_INTEGRATION=1 npm test
 # Also runs real Whisper on a committed audio fixture (downloads the tiny model).
 ```
 
