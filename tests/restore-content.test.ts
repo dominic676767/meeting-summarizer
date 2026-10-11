@@ -42,12 +42,28 @@ describe("content-script recovery after extension reload", () => {
     ]);
   });
 
-  it("does not inject into Zoom's leave, home or pre-join pages", async () => {
+  it("restores Zoom web-client pages that are not in a Meeting yet", async () => {
+    // A Meeting started from the Web App home keeps the home document: Zoom
+    // changes the URL and adds a meeting iframe, but the top page never reloads.
+    // Skipping home here left that tab with no capture prompt for the Meeting.
     browser.query.mockResolvedValue([
       { id: 11, url: "https://app.zoom.us/wc/home" },
-      { id: 12, url: "https://app.zoom.us/wc/leave" },
+      { id: 12, url: "https://app.zoom.us/wc/leave?meetingNumber=92191608192" },
+    ]);
+    await restoreMeetingContentScripts();
+    expect(browser.executeScript.mock.calls.map(([args]) => args)).toEqual([
+      { target: { tabId: 11, allFrames: true }, files: ["zoom-content.js", "capture-prompt.js"] },
+      { target: { tabId: 12, allFrames: true }, files: ["zoom-content.js", "capture-prompt.js"] },
+    ]);
+  });
+
+  it("does not inject where the manifest does not load the content scripts", async () => {
+    browser.query.mockResolvedValue([
       { id: 13, url: "https://app.zoom.us/j/92191608192" },
-      { id: 14, url: "https://example.com/" },
+      { id: 14, url: "https://app.zoom.us/wc" },
+      { id: 15, url: "https://example.com/" },
+      { id: 16, url: "http://app.zoom.us/wc/home" },
+      { id: 17, url: "https://notteams.live.com/" },
       { url: "https://app.zoom.us/wc/92191608192/join" },
     ]);
     await restoreMeetingContentScripts();
