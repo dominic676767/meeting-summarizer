@@ -71,7 +71,7 @@ const MIC_LINE: Partial<Record<MicCaptureState, string>> = {
  * Why including the microphone is reasonable, in the same breath as the ask.
  *
  * Two variants, because the sentence that earns a yes is only true of the local
- * engine: "everything is transcribed on this machine" is what makes handing over a
+ * engines: "everything is transcribed on this machine" is what makes handing over a
  * microphone acceptable for a member of the public, and it is false the moment a
  * cloud Transcription Provider is selected — which is exactly when recording your
  * own voice matters most. The destination is named rather than called "the cloud",
@@ -79,7 +79,7 @@ const MIC_LINE: Partial<Record<MicCaptureState, string>> = {
  * third party does with the audio.
  */
 function micWhy(s: Settings): string {
-  if (s.transcription.provider === "local-whisper") {
+  if (!uploadsAudio(s.transcription.provider)) {
     return "Your voice is not recorded yet. Including it means the summary covers your side of the meeting too — everything is transcribed on this machine.";
   }
   return `Your voice is not recorded yet. Including it means the summary covers your side of the meeting too — and because you have chosen ${TRANSCRIPTION_ENGINE_NAMES[s.transcription.provider]} to transcribe, the recording, including your voice, is uploaded to ${uploadDestination(s.transcription.provider)} to be transcribed.`;
@@ -238,6 +238,7 @@ function isConfigured(s: Settings): boolean {
 async function refreshHint(): Promise<void> {
   const s = await loadSettings();
   hintEl.hidden = isConfigured(s);
+  micWhyEl.textContent = micWhy(s);
   uploadingTo = uploadsAudio(s.transcription.provider)
     ? TRANSCRIPTION_ENGINE_NAMES[s.transcription.provider]
     : null;
@@ -349,7 +350,14 @@ function render(status: StatusReply): void {
   // capture starts, and during it, because a Meeting recorded without the user's
   // voice can still have its next Capture Span include it.
   const inMeeting = status.state === "detected" || status.state === "recording";
-  micDisclosureEl.hidden = !(inMeeting && status.mic === "unconfirmed");
+  // Never the button without its explanation: until the settings are read, the
+  // popup cannot say where the audio goes, and a yes given without the
+  // destination is not consent to it (ADR-0007). The next poll shows it.
+  micDisclosureEl.hidden = !(
+    inMeeting &&
+    status.mic === "unconfirmed" &&
+    micWhyEl.textContent !== ""
+  );
   // Only before capture starts: these sentences are in the future tense, and once
   // recording the status line states the microphone in the present tense instead.
   const micLine = status.state === "detected" ? MIC_LINE[status.mic] : undefined;

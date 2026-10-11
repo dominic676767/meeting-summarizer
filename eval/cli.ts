@@ -23,6 +23,7 @@ import {
 } from "./clips";
 import {
   createCloudEngine,
+  createNodeOllama,
   createNodeWhisper,
   createSageMakerEngine,
   DEFAULT_ENGINE_IDS,
@@ -30,12 +31,16 @@ import {
   engineInfo,
   KEY_ENV,
   LOCAL_WHISPER_DIFFERENCES,
+  OLLAMA_DIFFERENCES,
+  OLLAMA_ENV,
+  ollamaFromEnv,
   providerFor,
   redactKeys,
   SAGEMAKER_ENV,
   sageMakerFromEnv,
   type EngineId,
   type EngineInfo,
+  type OllamaConfig,
   type SageMakerConfig,
 } from "./engines";
 import { renderMarkdown, type ClipResult, type EngineResult, type RunResult } from "./report";
@@ -56,7 +61,8 @@ Options:
   --help                 this text
 
 Keys come only from OPENAI_API_KEY and ELEVENLABS_API_KEY. SageMaker reads
-${Object.values(SAGEMAKER_ENV).join(", ")}.
+${Object.values(SAGEMAKER_ENV).join(", ")}. Ollama reads
+${Object.values(OLLAMA_ENV).join(" and ")}, each defaulting to the extension's default.
 Method, data rules and file formats: docs/evaluations/README.md`;
 
 export class UsageError extends Error {
@@ -271,9 +277,17 @@ export async function main(argv: string[], dirs: { cwd: string; root: string }):
     return 1;
   }
 
-  const engines = options.engines.map((id) => engineInfo(id, options.whisperModel));
-  const keys = new Map<EngineId, string>();
   const missing: string[] = [];
+  // Read before the engines' details, so the model a run names is the one its
+  // results carry.
+  let ollama: OllamaConfig | null = null;
+  if (options.engines.includes("ollama")) {
+    const fromEnv = ollamaFromEnv(process.env);
+    if (fromEnv.ok) ollama = fromEnv.config;
+    else missing.push(`local Ollama: ${fromEnv.problem}`);
+  }
+  const engines = options.engines.map((id) => engineInfo(id, options.whisperModel, ollama?.model));
+  const keys = new Map<EngineId, string>();
   for (const e of engines) {
     const variable = KEY_ENV[e.id];
     if (!variable) continue;
@@ -325,17 +339,37 @@ export async function main(argv: string[], dirs: { cwd: string; root: string }):
     }
   }
 
+  // The same for Ollama: its load is its own check of the setup, then the model
+  // put in memory. A failed load fails Ollama's rows, not the run.
+  const ollamaRunner = ollama ? createNodeOllama(ollama) : null;
+  let ollamaLoad: { sec: number; version?: string; error?: string } | null = null;
+  if (ollamaRunner) {
+    log(`Loading ${ollama!.model} in Ollama at ${ollama!.baseUrl}…`);
+    const started = performance.now();
+    try {
+      const { version } = await ollamaRunner.load();
+      ollamaLoad = { sec: since(started), version };
+    } catch (err) {
+      ollamaLoad = { sec: since(started), error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+  const loads: Partial<Record<EngineId, { sec: number; error?: string } | null>> = {
+    "local-whisper": whisperLoad,
+    ollama: ollamaLoad,
+  };
+
   const results: ClipResult[] = [];
   for (const prepared of clips) {
     const { clip } = prepared;
     const engineResults: EngineResult[] = [];
     for (const info of engines) {
       log(`${clip.name}: ${info.name} (${info.model})…`);
-      if (info.id === "local-whisper" && whisperLoad?.error !== undefined) {
+      const load = loads[info.id];
+      if (load?.error !== undefined) {
         engineResults.push({
           engine: info,
-          outcome: { kind: "failed", message: `model load failed: ${whisperLoad.error}` },
-          loadSec: whisperLoad.sec,
+          outcome: { kind: "failed", message: `model load failed: ${load.error}` },
+          loadSec: load.sec,
           transcribeSec: 0,
           errors: null,
           speakers: null,
@@ -348,8 +382,10 @@ export async function main(argv: string[], dirs: { cwd: string; root: string }):
           ? whisper!.engineFor(clip.language)
           : info.id === "sagemaker"
             ? createSageMakerEngine(sageMaker!, clip.language)
-            : createCloudEngine(info.id, keys.get(info.id)!, clip.language);
-      const loadSec = info.id === "local-whisper" ? (whisperLoad?.sec ?? null) : null;
+            : info.id === "ollama"
+              ? ollamaRunner!.engineFor(clip.language)
+              : createCloudEngine(info.id, keys.get(info.id)!, clip.language);
+      const loadSec = load?.sec ?? null;
       engineResults.push(await runOne(prepared, info, engine, loadSec, secrets));
     }
     results.push({
@@ -364,8 +400,13 @@ export async function main(argv: string[], dirs: { cwd: string; root: string }):
 
   const run: RunResult = {
     startedAt,
-    host: { node: process.version, platform: `${process.platform}-${process.arch}` },
+    host: {
+      node: process.version,
+      platform: `${process.platform}-${process.arch}`,
+      ...(ollamaLoad?.version ? { ollama: ollamaLoad.version } : {}),
+    },
     ...(whisper ? { localWhisperDifferences: LOCAL_WHISPER_DIFFERENCES } : {}),
+    ...(ollamaRunner ? { ollamaDifferences: OLLAMA_DIFFERENCES } : {}),
     speakerMapping: "many-to-one",
     clips: results,
   };

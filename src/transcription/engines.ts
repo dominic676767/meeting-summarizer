@@ -11,6 +11,7 @@ export const TRANSCRIPTION_ENGINE_NAMES: Record<TranscriptionProviderId, string>
   openai: "OpenAI",
   elevenlabs: "ElevenLabs",
   sagemaker: "Amazon SageMaker",
+  ollama: "local Ollama",
 };
 
 /**
@@ -23,9 +24,13 @@ const UPLOAD_DESTINATIONS: Record<TranscriptionProviderId, string> = {
   sagemaker: "Amazon SageMaker, in the AWS account your credentials belong to",
 };
 
-/** Whether choosing this engine sends the meeting's audio off the machine. */
+/**
+ * Whether choosing this engine sends the meeting's audio off the machine. Ollama
+ * does not: the factory sends to this computer's Ollama only, and the engine
+ * refuses a model that Ollama would run on its cloud (ADR-0011).
+ */
 export function uploadsAudio(provider: TranscriptionProviderId): boolean {
-  return provider !== "local-whisper";
+  return provider !== "local-whisper" && provider !== "ollama";
 }
 
 /** The destination a consent names for this engine's uploads. */

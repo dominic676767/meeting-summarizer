@@ -899,3 +899,110 @@ describe("background runtime message routing", () => {
     );
   });
 });
+
+describe("what a caption-only or retried Transcript says about its recording", () => {
+  const OLLAMA = {
+    ...structuredClone(DEFAULT_SETTINGS.transcription),
+    provider: "ollama" as const,
+  };
+
+  /** A healthy recording with captions, ready for Meeting End. */
+  async function seedRecordedMeeting() {
+    const store = useLocalStore();
+    store.settings = { transcription: OLLAMA };
+    const listener = await loadListener();
+    const { ensureSession } = await import("../src/background/sessions");
+    const session = await ensureSession(42, "zoom");
+    session.recordingId = "recording";
+    session.spans = [{ spanId: "recording.1000", startOffsetMs: 1000 }];
+    session.hadAnySignal = true;
+    session.accumulator.upsert(
+      { key: "caption1", speaker: "Participant A", text: "We will meet on Friday." },
+      Date.now(),
+    );
+    return listener;
+  }
+
+  /** The offscreen document answers a transcription with `reply`. */
+  function transcribeReplies(reply: Record<string, unknown>) {
+    browser.sendMessage.mockImplementation(async (msg: { type: string }) =>
+      msg.type === "offscreen-transcribe"
+        ? { utterances: [], cancelled: false, noSpeech: null, error: null, ...reply }
+        : recorderStatus(),
+    );
+  }
+
+  function summarized() {
+    return pipeline.summarize.mock.calls[0]![0] as import("../src/domain/types").Transcript;
+  }
+
+  it("marks a skipped transcription, so the artifact does not say no audio was recorded", async () => {
+    const listener = await seedRecordedMeeting();
+    transcribeReplies({ cancelled: true });
+
+    await listener({ type: "summarize-now", tabId: 42 }, {});
+
+    expect(summarized()).toMatchObject({ provenance: "captions-only", untranscribed: "skipped" });
+    expect(summarized().noSpeech).toBeUndefined();
+  });
+
+  it("marks a failed transcription on the summary, but not on the held copy", async () => {
+    const listener = await seedRecordedMeeting();
+    const { getHeldRecording } = await import("../src/background/held-recordings");
+    transcribeReplies({ error: "Ollama is not running at http://localhost:11434" });
+
+    await listener({ type: "summarize-now", tabId: 42 }, {});
+
+    expect(summarized()).toMatchObject({ provenance: "captions-only", untranscribed: "failed" });
+    const held = await getHeldRecording("recording");
+    expect(held?.reason).toContain("Ollama is not running");
+    // The retry decides what the recording held, so the held copy makes no claim.
+    expect(held?.transcript.untranscribed).toBeUndefined();
+  });
+
+  async function holdHealthyRecording() {
+    const store = useLocalStore();
+    store.settings = { transcription: OLLAMA, nameEngineInArtifact: true };
+    const listener = await loadListener();
+    const { ensureSession, sessionToTranscript } = await import("../src/background/sessions");
+    const { holdRecording } = await import("../src/background/held-recordings");
+    const session = await ensureSession(42, "zoom");
+    session.accumulator.upsert(
+      { key: "caption1", speaker: "Participant A", text: "This is the recovery test." },
+      Date.now(),
+    );
+    await holdRecording(
+      {
+        recordingId: "recording",
+        transcript: sessionToTranscript(session),
+        spans: [{ spanId: "recording.1000", startOffsetMs: 1000 }],
+      },
+      "Ollama is not running at http://localhost:11434",
+    );
+    return listener;
+  }
+
+  it("names the engine that the retry ran", async () => {
+    const listener = await holdHealthyRecording();
+    transcribeReplies({
+      utterances: [{ text: "This is the recovery test.", startMs: 1000, endMs: 3000 }],
+    });
+
+    const result = await listener({ type: "retry-held-recording", recordingId: "recording" }, {});
+
+    expect(result).toEqual({ ok: true });
+    expect(summarized().engine).toEqual({ id: "local Ollama", model: OLLAMA.ollama.model });
+    expect(summarized().provenance).not.toBe("captions-only");
+  });
+
+  it("says a retried recording contained no speech, and names no engine", async () => {
+    const listener = await holdHealthyRecording();
+    transcribeReplies({ noSpeech: "No speech detected." });
+
+    const result = await listener({ type: "retry-held-recording", recordingId: "recording" }, {});
+
+    expect(result).toEqual({ ok: true });
+    expect(summarized()).toMatchObject({ provenance: "captions-only", noSpeech: true });
+    expect(summarized().engine).toBeUndefined();
+  });
+});

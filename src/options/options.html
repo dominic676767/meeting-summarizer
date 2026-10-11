@@ -131,12 +131,14 @@
       <option value="openai">OpenAI (cloud — uploads your meeting audio)</option>
       <option value="elevenlabs">ElevenLabs Scribe (cloud — uploads your meeting audio)</option>
       <option value="sagemaker">Amazon SageMaker, your own endpoint (cloud — uploads your meeting audio)</option>
+      <option value="ollama">Qwen3-ASR in Ollama (on this machine, no API key)</option>
     </select>
     <p class="note">
       <strong>This is not the LLM above.</strong> Summarizing and transcribing are two different
-      jobs with two different engines and two separate keys. Claude (Anthropic), AWS Bedrock and
-      Ollama have <strong>no speech-to-text API at all</strong>: a key for any of them can summarize
-      a meeting but can never transcribe one. Only the engines in this list transcribe.
+      jobs with two different engines and two separate keys. Claude (Anthropic) and AWS Bedrock have
+      <strong>no speech-to-text API at all</strong>: a key for either can summarize a meeting but can
+      never transcribe one. Ollama can do both, but with two different models, so it is set up in
+      each place. Only the engines in this list transcribe.
     </p>
 
     <label for="meeting-language">Language spoken in your meetings</label>
@@ -257,6 +259,40 @@
       <button id="transcription-sagemaker-test" type="button">Test the endpoint</button>
       <p class="note">Sends one second of silence, never meeting audio, with the values above.</p>
       <p class="note" id="transcription-sagemaker-test-result" role="status" aria-live="polite"></p>
+    </fieldset>
+
+    <fieldset id="panel-transcription-ollama" class="hidden">
+      <legend>Qwen3-ASR in Ollama</legend>
+      <p class="note">
+        Transcribes with Qwen3-ASR, the model of the SageMaker engine, in the Ollama app on this
+        computer. The audio goes to Ollama on this machine and no further: the base URL must be this
+        computer, and a model that Ollama runs on its cloud is refused.
+      </p>
+      <p class="note">
+        One-time setup: run <code>ollama pull hf.co/ggml-org/Qwen3-ASR-1.7B-GGUF:Q8_0</code>
+        (about 2.5 GB), and run Ollama with
+        <code>OLLAMA_ORIGINS=chrome-extension://hbobmcebmpakimlijcjiaklipegdelap</code> (this
+        extension's ID) so this extension may call it. If Ollama also writes your summaries, that
+        setting is already done.
+      </p>
+      <p class="note">
+        Qwen3-ASR returns words without timings. So the audio is sent in short pieces cut at pauses,
+        and each piece gets its speaker name from the live captions.
+      </p>
+      <label for="transcription-ollama-url">Base URL</label>
+      <input type="text" id="transcription-ollama-url" placeholder="http://localhost:11434" />
+      <label for="transcription-ollama-model">Model</label>
+      <input type="text" id="transcription-ollama-model" autocomplete="off" />
+      <p class="note">
+        With this engine, the language chosen above tells the model which language to expect when
+        the audio leaves it in doubt. Speech in another language still comes back in that language,
+        not translated. Qwen3-ASR does not list Hebrew, Norwegian or Ukrainian. For a meeting in one
+        of these, the model guesses the language.
+      </p>
+
+      <button id="transcription-ollama-test" type="button">Test Ollama</button>
+      <p class="note">Sends one second of silence, never meeting audio, with the values above.</p>
+      <p class="note" id="transcription-ollama-test-result" role="status" aria-live="polite"></p>
     </fieldset>
 
     <h2>Summary</h2>

@@ -8,6 +8,7 @@ import type { TranscriptionSettings } from "../domain/types";
 import { credentialsExpired, type AwsCredentials } from "./aws-credentials";
 import { createElevenLabsTranscriptionEngine } from "./elevenlabs";
 import { createLocalWhisperEngine, decodeToMono } from "./local-whisper";
+import { createOllamaTranscriptionEngine, isLoopbackUrl } from "./ollama";
 import { createOpenAiTranscriptionEngine, type FetchFn } from "./openai";
 import {
   createTranscriptionProvider,
@@ -99,6 +100,24 @@ function engineFor(s: TranscriptionSettings, deps: TranscriptionDeps): Transcrip
         ...(deps.invoke ? { invoke: deps.invoke } : {}),
       });
     }
+    case "ollama":
+      if (!s.ollama.baseUrl || !s.ollama.model) {
+        throw new TranscriptionError(
+          "ollama transcription: no base URL or model configured — open Settings",
+        );
+      }
+      // Refused before any upload: the consent for this engine says the audio
+      // stays on this computer, and any other host would make that untrue.
+      if (!isLoopbackUrl(s.ollama.baseUrl)) {
+        throw new TranscriptionError(
+          `ollama transcription: ${s.ollama.baseUrl} is not this computer — use http://localhost:11434 in Settings`,
+        );
+      }
+      return createOllamaTranscriptionEngine({
+        ...s.ollama,
+        language: s.language,
+        ...(deps.fetchFn ? { fetchFn: deps.fetchFn } : {}),
+      });
   }
 }
 

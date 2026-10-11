@@ -94,6 +94,19 @@ export interface Transcript {
    * belongs in the log, not in a document that gets forwarded.
    */
   noSpeech?: boolean;
+  /**
+   * An Audio Recording exists, but none of its words reached this Transcript:
+   * the user skipped the wait (`skipped`), or the Transcription Provider failed
+   * and the recording is held for retry (`failed`).
+   *
+   * Without it the caption-only artifact says "no audio was recorded", which is
+   * false in both cases — the audio was recorded, and after a failure it still
+   * exists. The two values have different remedies, so they are kept apart.
+   *
+   * Absent reads as no claim: no recording, a silent one (`noSpeech`), or a
+   * failed capture (`captureError`), each stated in its own words.
+   */
+  untranscribed?: "skipped" | "failed";
   segments: TranscriptSegment[];
 }
 
@@ -145,9 +158,15 @@ export type ProviderId = "anthropic" | "openai" | "ollama" | "bedrock";
  * The engine that turns an Audio Recording into Utterances. Deliberately a
  * separate axis from ProviderId: most LLM backends have no speech-to-text API,
  * so the ids that appear in both lists are a coincidence of vendor, not a shared
- * setting — `openai` here is a transcription endpoint with its own key.
+ * setting — `openai` here is a transcription endpoint with its own key, and
+ * `ollama` a speech-to-text model with its own setting.
  */
-export type TranscriptionProviderId = "local-whisper" | "openai" | "elevenlabs" | "sagemaker";
+export type TranscriptionProviderId =
+  | "local-whisper"
+  | "openai"
+  | "elevenlabs"
+  | "sagemaker"
+  | "ollama";
 
 /** Whisper model size — the accuracy-against-time trade the user picks. */
 export type WhisperModelSize = "tiny" | "base" | "small";
@@ -224,6 +243,13 @@ export interface TranscriptionSettings {
    * storage, never with these settings on disk (ADR-0009).
    */
   sagemaker: { region: string; endpointName: string };
+  /**
+   * Qwen3-ASR in the user's own Ollama, on this computer. Its own base URL and
+   * model rather than the `ollama` Provider's: the summary model cannot
+   * transcribe, and the base URL must be this machine for the audio to stay on
+   * it (ADR-0011).
+   */
+  ollama: { baseUrl: string; model: string };
 }
 
 /**

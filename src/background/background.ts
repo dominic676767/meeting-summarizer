@@ -426,7 +426,11 @@ export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | 
       // leave a reader concluding the engine broke when it worked perfectly and
       // there was nothing to hear.
       transcript = { ...captionTranscript, noSpeech: true };
-    } else if (!outcome.cancelled) {
+    } else if (outcome.cancelled) {
+      // The user skipped the wait. Audio was recorded, so the artifact must not
+      // say that none was.
+      transcript = { ...captionTranscript, untranscribed: "skipped" };
+    } else {
       // A transcription outage must cost a retry, not the meeting: hold the
       // Audio Recording so the user can retry it — after switching Transcription
       // Provider if that is what it takes. The caption-only summary below still
@@ -439,6 +443,9 @@ export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | 
         { recordingId: s.recordingId, transcript: captionTranscript, spans: s.spans },
         outcome.error ?? "transcription produced no words",
       );
+      // Only the caption summary carries the failure. The held copy stays
+      // unmarked, because its retry decides what the recording actually held.
+      transcript = { ...captionTranscript, untranscribed: "failed" };
     }
   }
 
@@ -508,6 +515,8 @@ function engineOf(t: Settings["transcription"]): { id: string; model: string } {
     case "sagemaker":
       // The endpoint is the most the extension knows about the model behind it.
       return { id, model: t.sagemaker.endpointName };
+    case "ollama":
+      return { id, model: t.ollama.model };
   }
 }
 
@@ -628,8 +637,9 @@ async function retryHeldRecording(recordingId: string): Promise<void> {
     if (!entry) return;
     let utterances: Utterance[];
     let noSpeech: string | null;
+    let engine: ReturnType<typeof engineOf>;
     try {
-      ({ utterances, noSpeech } = await transcribeHeldRecording(entry));
+      ({ utterances, noSpeech, engine } = await transcribeHeldRecording(entry));
       if (entry.transcript.captureError && noSpeech) {
         throw new Error(
           "The saved recording is incomplete. A result with no speech cannot verify the failed audio capture.",
@@ -643,7 +653,12 @@ async function retryHeldRecording(recordingId: string): Promise<void> {
     // it: fusion leaves the caption Transcript intact, and it goes on to a
     // caption-only Summary Artifact instead of back into the Held Recording list
     // where the user would keep retrying the same silence.
-    const transcript = fuseTranscript(entry.transcript, utterances);
+    //
+    // Marked as the first run marks it: silence says the recording contained no
+    // speech, and words name the engine that this retry ran — read from the
+    // current settings, which may not be the engine that failed.
+    const fused = fuseTranscript(entry.transcript, utterances);
+    const transcript = noSpeech ? { ...fused, noSpeech: true } : { ...fused, engine };
     const held = await holdTranscript(transcript, noSpeech ?? "transcribed, summary pending", {
       recordingId,
       spans: entry.spans,
@@ -667,8 +682,9 @@ async function retryHeldRecording(recordingId: string): Promise<void> {
  */
 async function transcribeHeldRecording(
   entry: HeldRecording,
-): Promise<{ utterances: Utterance[]; noSpeech: string | null }> {
+): Promise<{ utterances: Utterance[]; noSpeech: string | null; engine: ReturnType<typeof engineOf> }> {
   const settings = await loadSettings();
+  const engine = engineOf(settings.transcription);
   await ensureOffscreenDocument();
   try {
     const reply = (await ext.runtime.sendMessage({
@@ -686,9 +702,9 @@ async function transcribeHeldRecording(
     } satisfies OffscreenMessage)) as OffscreenTranscribeReply;
     if (reply.error) throw new Error(reply.error);
     if (reply.cancelled) throw new Error("transcription cancelled");
-    if (reply.noSpeech) return { utterances: [], noSpeech: reply.noSpeech };
+    if (reply.noSpeech) return { utterances: [], noSpeech: reply.noSpeech, engine };
     if (reply.utterances.length === 0) throw new Error("transcription produced no words");
-    return { utterances: reply.utterances, noSpeech: null };
+    return { utterances: reply.utterances, noSpeech: null, engine };
   } finally {
     await closeOffscreenUnlessRecording();
   }
