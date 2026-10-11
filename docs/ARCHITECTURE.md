@@ -214,7 +214,7 @@ flowchart LR
     bg --> sessions --> accumulator
     bg --> captureState & captureSignal & captureSpans & micCapture & micAccess & badge & meetingUrl
     meetingUrl --> manifestJson
-    bg --> restoreContent --> meetingUrl
+    bg --> restoreContent
     bg --> heldT & heldR & writer
     bg --> fusion
     bg --> pipe
@@ -622,7 +622,7 @@ All types are in `src/messages.ts`. Every `chrome.runtime.sendMessage` is one of
 | `capture-silent` | offscreen → SW | `silenceWarning` | 45 s of silence, warn while still fixable |
 | `capture-failed` | offscreen → SW | records failure, stops capture, holds audio | audio clock, encoder, or storage failed |
 
-Chrome events the service worker also listens to: `commands.onCommand` (shortcut → `startCapture`), `tabs.onUpdated` (left meeting URL → `finishMeeting("navigated")`), `tabs.onRemoved` (→ `finishMeeting("tab-closed")`, `dropSession`), `runtime.onStartup` / `onInstalled` (→ `reconcileSessions`, then restore content scripts in open meeting tabs). Restoring content scripts after an extension reload does not refresh the meeting page. `mountContentScript` stops the old runner before replacing it. The capture prompt also replaces its old card and stops polling when its extension context is no longer valid.
+Chrome events the service worker also listens to: `commands.onCommand` (shortcut → `startCapture`), `tabs.onUpdated` (left meeting URL → `finishMeeting("navigated")`), `tabs.onRemoved` (→ `finishMeeting("tab-closed")`, `dropSession`), `runtime.onStartup` / `onInstalled` (→ `reconcileSessions`, then restore content scripts in every open tab the manifest's content scripts cover). This includes Zoom web-client pages that are not a Meeting yet, such as `/wc/home`: a Meeting started from there keeps the same top document, so the capture prompt in that document is the only one the Meeting gets. Restoring content scripts after an extension reload does not refresh the meeting page. `mountContentScript` stops the old runner before replacing it. The capture prompt also replaces its old card and stops polling when its extension context is no longer valid.
 
 ---
 
@@ -644,7 +644,7 @@ The functions to read first, by job.
 | Summarize and save | `summarizeAndWrite` | `src/background/background.ts` |
 | Retries | `retryHeld`, `retryHeldRecording` | `src/background/background.ts` |
 | Crash recovery | `reconcileSessions` | `src/background/background.ts` |
-| Restore capture in open meeting tabs after extension install or reload | `restoreMeetingContentScripts` | `src/background/restore-content.ts` |
+| Restore content scripts in open Teams and Zoom tabs after extension install or reload | `restoreMeetingContentScripts` | `src/background/restore-content.ts` |
 | Is this URL a meeting? | `isMeetingUrl` | `src/background/meeting-url.ts` |
 | Badge text / colour | `badgeFor` | `src/background/badge.ts` |
 | Popup state | `deriveCaptureState`, `isDegraded` | `src/background/capture-state.ts` |
@@ -707,7 +707,7 @@ The functions to read first, by job.
 | `src/background/microphone-access.ts` | check Chrome microphone access and open Settings when required |
 | `src/background/badge.ts` | toolbar badge decision |
 | `src/background/meeting-url.ts` | meeting-URL test: Teams hosts from the manifest, Zoom web-client `/wc/...` routes |
-| `src/background/restore-content.ts` | injects the correct platform entry point and prompt into open meeting tabs on install or reload |
+| `src/background/restore-content.ts` | injects the correct platform entry point and prompt into every open tab the manifest's content scripts cover, on install or reload |
 | `src/background/held.ts` | Held Transcript store |
 | `src/background/held-recordings.ts` | Held Recording store |
 | `src/background/artifact-writer.ts` | downloads API write, waits for completion |
@@ -753,7 +753,7 @@ The functions to read first, by job.
 | `src/options/microphone-access.ts` | request microphone access from a separate Settings tab and explain failures |
 | `src/options/settings-import.ts` | parse a pasted settings block into form values; the offered Meeting Languages |
 
-**Zoom web client.** The manifest loads `zoom-content.js` and `capture-prompt.js` on `zoom.us` web-client routes, including the meeting iframe. The Zoom adapter captures visible subtitles, joins overlapping sliding text, and uses the meeting footer, breakout transition and explicit host-end message to detect meeting state. Its leave grace period is 30 seconds. A native Zoom desktop meeting does not expose a browser DOM and is outside this capture path.
+**Zoom web client.** The manifest loads `zoom-content.js` and `capture-prompt.js` on `zoom.us` web-client routes, including the meeting iframe. A Meeting started from the Web App home (`/wc/home`) does not reload the top page: Zoom changes the URL to `/wc/<id>/start` and adds the meeting iframe. The capture prompt therefore lives in the top document that loaded with the Web App. The Zoom adapter captures visible subtitles, joins overlapping sliding text, and uses the meeting footer, breakout transition and explicit host-end message to detect meeting state. Its leave grace period is 30 seconds. A native Zoom desktop meeting does not expose a browser DOM and is outside this capture path.
 
 ---
 

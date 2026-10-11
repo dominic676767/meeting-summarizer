@@ -165,3 +165,8 @@ The settings parser, the extension ID that the manifest `key` gives, and the doc
 ## The popup and logo redesign (#25)
 
 Not yet landed. Its checks live in `design-system/meeting-summarizer/MASTER.md` on the `popup-logo-redesign` branch and move here when #25 merges, per the rule above.
+
+## Zoom web client
+
+- [x] **The card shows for a Meeting started from the Web App home after an extension reload.** Open `app.zoom.us/wc/home` in a tab. Reload Meeting Summarizer at `chrome://extensions`. Then start a Meeting from that home tab, without reloading the page. The card must show *Not recording* at the bottom left. Zoom keeps the home document as the Meeting's top page, so the card there is the one the extension put back after the reload. The restore step is tested with a fake browser; only Chrome shows that its injection reaches that document.
+  - 2026-10-11, Chrome 155.0.8059.40, working tree with the restore fix built and reloaded: worked. The tab kept one document, loaded at `app.zoom.us/wc`, from the first observation at 11:42 MYT to the end of the check. After the reload at 12:30, the extension's scripts were back in that tab. A Meeting started from `/wc/home` at 12:30:45 showed the card with *Not recording* within 2 seconds, and the background had the Meeting as detected. Earlier that day, before the fix, a Meeting started from a home tab had no card in its top page. That run's extension reload was not observed, so the before-fix path was not repeated step by step. A CDP monitor recorded the frames, script contexts, card and session state.
