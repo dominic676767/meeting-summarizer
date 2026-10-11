@@ -16,7 +16,6 @@ The [live test handover](zoom-live-test-handoff-2026-10-07.md) preserves the tes
 | FI-04 | Verify combined local and remote speech and echo. | Local and remote speech have passed in separate recordings. This does not prove both inputs in one complete recording. | Confirm both known passages in the same audio file and final transcript. Confirm that the user hears the meeting and does not hear their own microphone through the extension. |
 | FI-05 | Verify immediate cleanup and the remaining recording indicators. | Later checks found recording stopped, no offscreen recorder, a cleared meeting flag, and a cleared badge. Immediate OS microphone indicator closure was not measured. | Observe the OS microphone indicator, recorder, badge, and tooltip at completion. Complete the per-tab badge, fault visibility, theme, and display-scale checks in the manual checklist. |
 | FI-06 | Complete the remaining browser release checks. | The manual checklist still has open checks for long recordings, storage limits, OS-level refusal, Settings entry points, and local model setup. | Verify incremental storage and bounded recording memory, quota-failure recovery, OS-level microphone refusal, each Settings entry path, and the first local model download. Record browser version and observed results for each check. |
-| FI-07 | Make default test discovery exclude saved work. | The default test search also collects incomplete source copies under `.eval/checkpoints/`. These copies fail because they contain only part of the source tree. | Configure default test discovery to select the current project tests and exclude `.eval/` and `.claude/`. Preserve the private evidence files. |
 
 ## Next transcript-quality investigation
 
@@ -28,10 +27,10 @@ Do not resume analysis of the old long recording that the project owner asked to
 
 ## Test command for this checkout
 
-Until FI-07 is complete, exclude saved work explicitly:
+`vitest.config.ts` limits test discovery to `tests/`, so the copies under `.claude/` and `.eval/` are not collected:
 
 ```sh
-npm test -- --exclude '**/.claude/**' --exclude '**/.eval/**'
+npm test
 npm run typecheck
 ```
 

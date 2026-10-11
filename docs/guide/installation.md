@@ -121,7 +121,7 @@ Developer mode only (Q2 = Develop):
 
 ```bash
 npm run typecheck
-npm test -- --exclude '**/.claude/**' --exclude '**/.eval/**'
+npm test
 ```
 
 ### Step 4: Verify the build
