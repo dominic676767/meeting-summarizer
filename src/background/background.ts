@@ -341,6 +341,12 @@ async function handleContentMessage(msg: Message, tabId: number): Promise<void> 
   } else if (msg.type === "meeting-status") {
     const s = await ensureSession(tabId, msg.platform);
     if (msg.title) s.title = msg.title;
+    // A session made while the tab was not in a meeting holds nothing yet. Its
+    // Meeting starts now, or the artifact counts the wait before it as meeting time.
+    if (msg.inMeeting && !s.inMeeting && s.state === "capturing" && !s.recording &&
+      !hasRecording(s) && s.accumulator.size === 0) {
+      s.startedAt = Date.now();
+    }
     s.inMeeting = msg.inMeeting;
     await persistSessions();
     await updateBadge(tabId);
