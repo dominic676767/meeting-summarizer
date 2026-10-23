@@ -254,13 +254,13 @@ No tool can click Chrome's **Developer mode** or **Load unpacked** for the user.
    |---|---|
    | `provider` | `anthropic`, `openai`, `ollama`, `bedrock` |
    | `anthropic.model`, `openai.model` | text |
-   | `ollama.baseUrl`, `ollama.model` | text |
-   | `bedrock.region`, `bedrock.model` | text |
+   | `ollama.baseUrl`, `ollama.model` | text. The base URL must be this Mac, for example `http://localhost:11434` |
+   | `bedrock.region`, `bedrock.model` | text. The region must be an AWS region, for example `us-east-1` |
    | `transcription.provider` | `local-whisper`, `openai`, `elevenlabs`, `sagemaker`, `ollama` |
    | `transcription.language` | a two-letter code from the Settings page, for example `en`, `de`, `ja` |
    | `transcription.localWhisper.model` | `tiny`, `base`, `small` |
    | `transcription.openai.model`, `transcription.elevenlabs.model` | text |
-   | `transcription.sagemaker.region`, `transcription.sagemaker.endpointName` | text |
+   | `transcription.sagemaker.region`, `transcription.sagemaker.endpointName` | text. The region must be an AWS region, for example `us-east-1` |
    | `transcription.ollama.baseUrl`, `transcription.ollama.model` | text. The base URL must be this Mac, for example `http://localhost:11434` |
    | `shape` | `structured`, `narrative` |
    | `nameEngineInArtifact` | `true`, `false` |

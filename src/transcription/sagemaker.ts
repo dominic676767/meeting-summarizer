@@ -20,7 +20,7 @@
 // only signs and sends one window and hands back what came back.
 import { SignatureV4 } from "@smithy/signature-v4";
 import type { MeetingLanguage } from "../domain/types";
-import type { AwsCredentials } from "./aws-credentials";
+import { isAwsRegion, type AwsCredentials } from "./aws-credentials";
 import type { FetchFn } from "./openai";
 import type { PauseWindowing } from "./pauses";
 import { wav16 } from "./pcm";
@@ -413,6 +413,13 @@ export function createSageMakerTranscriptionEngine(opts: {
   /** Injected by tests; defaults to SAGEMAKER_TIMEOUT_MS. */
   timeoutMs?: number;
 }): TranscriptionEngine {
+  // The region is part of the host that gets the audio and the signed credentials.
+  if (!isAwsRegion(opts.region)) {
+    throw new SageMakerFailure(
+      "endpoint",
+      `"${opts.region}" is not an AWS region, for example us-east-1 — open Settings`,
+    );
+  }
   const where = { endpointName: opts.endpointName, region: opts.region };
   const timeoutMs = opts.timeoutMs ?? SAGEMAKER_TIMEOUT_MS;
   const invoke =

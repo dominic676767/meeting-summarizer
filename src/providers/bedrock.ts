@@ -1,4 +1,5 @@
-import { expectOk, expectSummary, type FetchFn, type ProviderClient } from "./provider";
+import { isAwsRegion } from "../transcription/aws-credentials";
+import { expectOk, expectSummary, ProviderError, type FetchFn, type ProviderClient } from "./provider";
 
 // Bedrock via API keys (bearer tokens) only. Long-lived AWS keys stay
 // unsupported everywhere (ADR-0009), and the SageMaker engine's temporary AWS
@@ -10,6 +11,13 @@ export function createBedrockClient(opts: {
   model: string;
   fetchFn?: FetchFn;
 }): ProviderClient {
+  // The region is part of the host that gets the key and the transcript.
+  if (!isAwsRegion(opts.region)) {
+    throw new ProviderError(
+      "bedrock",
+      `"${opts.region}" is not an AWS region, for example us-east-1 — open Settings`,
+    );
+  }
   const fetchFn = opts.fetchFn ?? fetch;
   return {
     name: "bedrock",

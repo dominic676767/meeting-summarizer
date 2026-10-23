@@ -88,6 +88,18 @@ export function maskKeyId(accessKeyId: string): string {
     : `${accessKeyId.slice(0, 4)}…`;
 }
 
+/**
+ * Whether text has the form of an AWS region, such as `us-east-1`. The region
+ * becomes part of the Bedrock and SageMaker request hosts, and those requests
+ * carry the key or the signed credentials. Any other text, such as
+ * `attacker.example/?`, could send them to a different host. China regions
+ * (`cn-north-1`) pass: their host stays under amazonaws.com, so the call fails
+ * and nothing goes elsewhere.
+ */
+export function isAwsRegion(region: string): boolean {
+  return /^[a-z]{2}(-[a-z]+)+-\d+$/.test(region);
+}
+
 /** Whether a known expiry has passed. Unknown expiry is never called expired. */
 export function credentialsExpired(c: AwsCredentials, now: number): boolean {
   return c.expiresAt !== undefined && c.expiresAt <= now;
