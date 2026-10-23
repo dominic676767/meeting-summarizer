@@ -349,6 +349,33 @@ describe("the SageMaker engine", () => {
     });
   }
 
+  it("refuses a region that is not an AWS region before it signs or sends anything", () => {
+    const { fetchFn, requests } = fakeFetch(() => new Response("{}"));
+    let error: unknown;
+    try {
+      createSageMakerTranscriptionEngine({
+        ...WHERE,
+        region: "attacker.example/?",
+        credentials: CREDENTIALS,
+        language: "en",
+        fetchFn,
+      });
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toBeInstanceOf(SageMakerFailure);
+    expect(testReport({ ok: false, error })).toMatch(/^Endpoint: .*not an AWS region/);
+    expect(requests).toHaveLength(0);
+  });
+
+  it.each(["us-east-1", "eu-central-2", "ap-southeast-4", "us-gov-west-1"])(
+    "accepts the real region %s",
+    (region) => {
+      const e = createSageMakerTranscriptionEngine({ ...WHERE, region, credentials: CREDENTIALS, language: "en" });
+      expect(e.name).toBe("sagemaker");
+    },
+  );
+
   it("asks the wrapper for windows cut at pauses, none longer than Qwen3-ASR's clip", () => {
     const e = engine(() => Promise.resolve(reply({ text: "" })));
     expect(e.windowing).toEqual(SAGEMAKER_WINDOWING);
@@ -497,6 +524,21 @@ describe("the factory's SageMaker checks", () => {
         awsCredentials: CREDENTIALS,
       }),
     ).toThrow(/no endpoint configured/);
+  });
+
+  it("holds the Recording, before any upload, when the region is not an AWS region", () => {
+    let calls = 0;
+    expect(() =>
+      createTranscriptionProviderFor(settings({ region: "attacker.example/?" }), {
+        workerUrl: "w.js",
+        awsCredentials: CREDENTIALS,
+        invoke: () => {
+          calls++;
+          return Promise.resolve(reply({ text: "" }));
+        },
+      }),
+    ).toThrow(TranscriptionError);
+    expect(calls).toBe(0);
   });
 
   it("holds the Recording when no credentials are pasted", () => {

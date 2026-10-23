@@ -4,6 +4,7 @@ import { createBedrockClient } from "../src/providers/bedrock";
 import { createProviderClient } from "../src/providers/factory";
 import { createOllamaClient } from "../src/providers/ollama";
 import { createOpenAiClient } from "../src/providers/openai";
+import { ProviderError } from "../src/providers/provider";
 import { DEFAULT_SETTINGS } from "../src/settings";
 
 function fakeFetch(body: unknown, status = 200) {
@@ -61,6 +62,24 @@ describe("bedrock provider", () => {
     expect(headers.authorization).toBe("Bearer bedrock-key");
     expect(headers["x-amz-date"]).toBeUndefined(); // no SigV4 signing
   });
+
+  it.each(["us-east-1", "eu-central-2", "ap-southeast-4", "us-gov-west-1", "cn-north-1"])(
+    "accepts the real region %s",
+    (region) => {
+      expect(createBedrockClient({ apiKey: "k", region, model: "m" }).name).toBe("bedrock");
+    },
+  );
+
+  it.each(["attacker.example/?", "us-east-1.attacker.example", "us-east-1/", "US-EAST-1", ""])(
+    "refuses %j as a region before any call, so the key and transcript go nowhere else",
+    (region) => {
+      const { fn, calls } = fakeFetch({});
+      expect(() => createBedrockClient({ apiKey: "k", region, model: "m", fetchFn: fn })).toThrow(
+        ProviderError,
+      );
+      expect(calls).toHaveLength(0);
+    },
+  );
 });
 
 describe("provider factory", () => {
@@ -83,6 +102,27 @@ describe("provider factory", () => {
     expect(() =>
       createProviderClient(withProvider("anthropic", { anthropic: { apiKey: "", model: "m" } })),
     ).toThrow(/no API key configured/);
+  });
+
+  it("refuses a summary Ollama URL that is not this computer, on the held-transcript path", () => {
+    for (const baseUrl of ["http://ollama.example:11434", "https://localhost:11434", ""]) {
+      expect(() =>
+        createProviderClient(withProvider("ollama", { ollama: { baseUrl, model: "m" } })),
+      ).toThrow(ProviderError);
+    }
+    for (const baseUrl of ["http://localhost:11434", "http://127.0.0.1:11434", "http://[::1]:11434"]) {
+      expect(
+        createProviderClient(withProvider("ollama", { ollama: { baseUrl, model: "m" } })).name,
+      ).toBe("ollama");
+    }
+  });
+
+  it("refuses a Bedrock region that is not an AWS region", () => {
+    expect(() =>
+      createProviderClient(
+        withProvider("bedrock", { bedrock: { apiKey: "k", region: "attacker.example/?", model: "m" } }),
+      ),
+    ).toThrow(/not an AWS region/);
   });
 
   it("every provider declares a context budget", () => {
