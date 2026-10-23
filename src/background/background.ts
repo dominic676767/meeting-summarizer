@@ -154,8 +154,22 @@ async function startCapture(tabId: number): Promise<void> {
   if (pending) return pending;
   const operation = (async () => {
     await capturesStopping.get(tabId);
-    const s = await getSession(tabId);
+    let s = await getSession(tabId);
     if (!s || s.recording) return;
+    if (s.state === "transcribing" || s.state === "summarizing") {
+      // The finishing Meeting would end with this span's audio inside it: a "done"
+      // session that the next caption replaces, while the recorder runs on unseen.
+      s.captureWarning = {
+        message: "The last recording is still being processed. Start recording again when the summary is saved.",
+        detail: "recording cannot start while the previous recording is processed",
+      };
+      await persistSessions();
+      await updateBadge(tabId);
+      return;
+    }
+    // A finished Meeting is replaced by the next caption. A span started on it would
+    // record audio that no session owns, behind a badge that says "Not recording".
+    if (s.state === "done" || s.state === "failed") s = await ensureSession(tabId, s.platform);
     await beginCaptureSpan(tabId, s);
   })();
   capturesStarting.set(tabId, operation);
@@ -642,6 +656,14 @@ async function retryHeld(id: string): Promise<void> {
       // Same confirmation releases the audio: the Meeting's single artifact
       // exists, so nothing is left for the recording to serve.
       if (entry.recordingId) await discardRecording(entry.recordingId, entry.spans ?? []);
+      // The Meeting whose summary failed is saved now, so the popup must stop
+      // saying it failed. Its Transcript keeps the session's start time.
+      for (const [tabId, s] of await allSessions()) {
+        if (s.state !== "failed" || s.startedAt !== entry.transcript.startedAt) continue;
+        s.state = "done";
+        await persistSessions();
+        await updateBadge(tabId);
+      }
     } catch (err) {
       await updateHeldReason(id, reasonOf(err));
       throw err;
