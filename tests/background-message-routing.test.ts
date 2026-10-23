@@ -197,6 +197,55 @@ describe("meeting status after Zoom completion", () => {
     expect(session.state).toBe("done");
   });
 
+  it("starts the next meeting with its own clock after a silent meeting ends", async () => {
+    useLocalStore();
+    const { listener, session } = await seedMeeting("capturing", false);
+    session.recordingId = "silent";
+    session.spans = [{ spanId: "silent.0", startOffsetMs: 0 }];
+    session.hadAnySignal = false;
+
+    await listener({ type: "meeting-ended", platform: "Zoom", title: null }, { tab: { id: 42 } });
+
+    expect(pipeline.summarize).not.toHaveBeenCalled();
+    expect(browser.sendMessage).toHaveBeenCalledWith({
+      type: "offscreen-discard-spans",
+      spanIds: ["silent.0"],
+    });
+    const { getSession } = await import("../src/background/sessions");
+    expect(await getSession(42)).toBeUndefined();
+
+    await listener({ type: "meeting-status", platform: "Zoom", title: null, inMeeting: true }, { tab: { id: 42 } });
+
+    const next = await getSession(42);
+    expect(next).toMatchObject({ state: "capturing", inMeeting: true, spans: [], noSpeech: false });
+    expect(next?.startedAt).not.toBe(2_000);
+  });
+
+  it("holds skipped audio when a meeting with no captions ends", async () => {
+    useLocalStore();
+    const { listener, session } = await seedMeeting("capturing", false);
+    session.recordingId = "skipped";
+    session.spans = [{ spanId: "skipped.0", startOffsetMs: 0 }];
+    session.hadAnySignal = true;
+    browser.sendMessage.mockImplementation(async (msg: { type: string }) =>
+      msg.type === "offscreen-transcribe"
+        ? { utterances: [], cancelled: true, noSpeech: null, error: null }
+        : recorderStatus(),
+    );
+
+    await listener({ type: "meeting-ended", platform: "Zoom", title: null }, { tab: { id: 42 } });
+
+    const { listHeldRecordings } = await import("../src/background/held-recordings");
+    expect(await listHeldRecordings()).toMatchObject([
+      { recordingId: "skipped", spans: [{ spanId: "skipped.0", startOffsetMs: 0 }] },
+    ]);
+    expect(browser.sendMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "offscreen-discard-spans" }),
+    );
+    const { getSession } = await import("../src/background/sessions");
+    expect(await getSession(42)).toBeUndefined();
+  });
+
   it("finishes captured captions when Zoom navigates home", async () => {
     const { session } = await seedMeeting();
     const onUpdated = browser.onUpdated.mock.calls[0]![0];
@@ -207,7 +256,20 @@ describe("meeting status after Zoom completion", () => {
     expect(pipeline.write).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["done", "failed", "transcribing", "summarizing", "capturing"] as const)(
+  it("drops an empty capturing session on navigation, so the next meeting starts its own", async () => {
+    const store = useLocalStore();
+    await seedMeeting("capturing", false);
+    const onUpdated = browser.onUpdated.mock.calls[0]![0];
+
+    onUpdated(42, { url: "https://app.zoom.us/wc/home" });
+
+    await vi.waitFor(() => expect(store.meetingSessionsCheckpoint).toMatchObject({ sessions: {} }));
+    expect(store.meetingSessionsCheckpoint).not.toHaveProperty("sessions.42");
+    expect(pipeline.summarize).not.toHaveBeenCalled();
+    expect(pipeline.write).not.toHaveBeenCalled();
+  });
+
+  it.each(["done", "failed", "transcribing", "summarizing"] as const)(
     "clears %s status on navigation without starting another report",
     async (state) => {
       const store = useLocalStore();
@@ -1100,6 +1162,28 @@ describe("what a caption-only or retried Transcript says about its recording", (
     );
     return listener;
   }
+
+  it("stops saying captions only once a retry saves the recovered audio words", async () => {
+    const listener = await holdHealthyRecording();
+    const { getSession } = await import("../src/background/sessions");
+    // As the caption fallback left it: saved, recorded, but no audio words.
+    const session = (await getSession(42))!;
+    session.state = "done";
+    session.spans = [{ spanId: "recording.1000", startOffsetMs: 1000 }];
+    session.audioWords = false;
+    transcribeReplies({
+      utterances: [{ text: "This is the recovery test.", startMs: 1000, endMs: 3000 }],
+    });
+    expect(await listener({ type: "get-status", tabId: 42 }, {})).toMatchObject({ degraded: true });
+
+    expect(await listener({ type: "retry-held-recording", recordingId: "recording" }, {})).toEqual({ ok: true });
+
+    expect(await listener({ type: "get-status", tabId: 42 }, {})).toMatchObject({
+      state: "done",
+      degraded: false,
+      noSpeech: false,
+    });
+  });
 
   it("names the engine that the retry ran", async () => {
     const listener = await holdHealthyRecording();

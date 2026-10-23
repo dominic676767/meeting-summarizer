@@ -340,12 +340,14 @@ stateDiagram-v2
 
     capturing --> transcribing: finishMeeting(), healthy audio has signal
     capturing --> summarizing: finishMeeting(), captions only or silent audio
-    capturing --> capturing: finishMeeting() found nothing to summarize
+    capturing --> capturing: Summarize now found nothing to summarize
+    capturing --> [*]: Meeting End with nothing to summarize, endEmptyMeeting()
     transcribing --> summarizing: utterances, silence, cancel or failure (reply, or transcription-finished after a worker restart)
-    transcribing --> capturing: no segments at all
+    transcribing --> capturing: no segments at all, the call goes on
+    transcribing --> [*]: no segments at all at Meeting End, endEmptyMeeting()
     summarizing --> done: artifact written
     summarizing --> failed: provider error, transcript held
-    failed --> done: retryHeld() wrote the artifact
+    failed --> done: retryHeld() wrote the artifact (it also sets audioWords and noSpeech from what was saved)
     done --> capturing: next content message or startCapture(), ensureSession() starts a new Meeting
     failed --> capturing: next content message or startCapture(), ensureSession() starts a new Meeting
     done --> [*]: tab closed, dropSession()
@@ -353,6 +355,8 @@ stateDiagram-v2
 ```
 
 A new session from `done` or `failed` keeps `inMeeting` and the title of the session it replaces. After *Summarize now* the call goes on. The content script sends `meeting-status` only when the status changes, so the new session cannot wait for it. Meeting End has already set `inMeeting = false`, so a call that ended does not carry into the next one.
+
+A Meeting End with nothing to summarize drops the session in `endEmptyMeeting()`, so the next meeting in the tab starts its own session and clock. Silent audio is deleted; other audio that is not yet held (a skipped transcription with no captions) is held for retry. *Summarize now* and a lost capture keep the session, because the call goes on.
 
 `startCapture()` never records into a session that is not `capturing`. On `done` or `failed` it starts the new Meeting first, so the next caption cannot replace the session that owns the recorder. While the last recording is `transcribing` or `summarizing`, it refuses and shows a capture warning, because the finishing session would become `done` with a live span inside it.
 
@@ -648,7 +652,7 @@ The functions to read first, by job.
 | Caption dedupe by stable key | `TranscriptAccumulator.upsertAll()` | `src/adapters/accumulator.ts` |
 | Session load / persist | `ensureSession`, `getSession`, `persistSessions`, `sessionToTranscript` | `src/background/sessions.ts` |
 | Start a Capture Span | `startCapture` → `beginCaptureSpan` | `src/background/background.ts` |
-| Meeting End orchestration | `finishMeeting` → `transcriptFromOutcome` → `summarizeSession` | `src/background/background.ts` |
+| Meeting End orchestration | `finishMeeting` → `transcriptFromOutcome` → `summarizeSession`, or `endEmptyMeeting` when nothing is left to summarize | `src/background/background.ts` |
 | Call the offscreen transcriber | `transcribeRecording` | `src/background/background.ts` |
 | Summarize and save | `summarizeAndWrite` | `src/background/background.ts` |
 | Retries | `retryHeld`, `retryHeldRecording` | `src/background/background.ts` |

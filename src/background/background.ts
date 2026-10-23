@@ -377,7 +377,7 @@ export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | 
   await capturesStarting.get(tabId);
   const s = await getSession(tabId);
   if (!s) return;
-  const meetingEnded = trigger === "auto" || trigger === "tab-closed" || trigger === "navigated";
+  const meetingEnded = endsMeeting(trigger);
   if (meetingEnded) s.inMeeting = false;
   // Meeting End stops the recorder before the transcribe → summarize sequence
   // runs, and regardless of whether audio was captured, so the Audio Recording
@@ -388,7 +388,9 @@ export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | 
   if (s.state !== "capturing" || (s.accumulator.size === 0 && !hasRecording(s))) {
     // End and navigation can arrive after processing has started or completed.
     // Update the meeting status even when there is no more data to process.
-    if (meetingEnded) {
+    if (meetingEnded && s.state === "capturing") {
+      await endEmptyMeeting(tabId, s);
+    } else if (meetingEnded) {
       await persistSessions();
       await updateBadge(tabId);
     }
@@ -492,6 +494,33 @@ async function transcriptFromOutcome(
   return transcript;
 }
 
+/** Meeting End, as opposed to Summarize now or a lost capture: the call is over. */
+function endsMeeting(trigger: string): boolean {
+  return trigger === "auto" || trigger === "tab-closed" || trigger === "navigated";
+}
+
+/**
+ * A Meeting that ended with nothing to summarize. Its session is dropped, so the
+ * next meeting in this tab starts its own session and clock instead of
+ * inheriting this one's start time and silent spans. Silent audio is deleted;
+ * any other audio is the only copy of the Meeting, so it stays held for retry.
+ */
+async function endEmptyMeeting(tabId: number, s: MeetingSession): Promise<void> {
+  if (s.recordingId && hasRecording(s)) {
+    if (s.noSpeech) {
+      await discardRecording(s.recordingId, s.spans);
+    } else if (!(await getHeldRecording(s.recordingId))) {
+      // Transcription was skipped and there were no captions.
+      await holdRecording(
+        { recordingId: s.recordingId, transcript: sessionToTranscript(s), spans: s.spans },
+        "Transcription was skipped, and there were no captions to summarize.",
+      );
+    }
+  }
+  await dropSession(tabId);
+  await updateBadge(tabId);
+}
+
 /** Summarize and write the Transcript, or hold it, and settle the session state. */
 async function summarizeSession(
   tabId: number,
@@ -502,7 +531,13 @@ async function summarizeSession(
   if (transcript.segments.length === 0) {
     // Do not send an empty transcript to the summary provider. Capture or
     // transcription failures have already held the recording for retry.
-    // Keep the session available for a later capture and show any silence warning.
+    if (endsMeeting(trigger)) {
+      await endEmptyMeeting(tabId, s);
+      await closeOffscreenUnlessRecording();
+      return;
+    }
+    // The call goes on: keep the session for a later capture and show any
+    // silence warning.
     if (s.noSpeech) s.captureWarning = NOTHING_CAPTURED_WARNING;
     s.state = "capturing";
     await persistSessions();
@@ -656,11 +691,14 @@ async function retryHeld(id: string): Promise<void> {
       // Same confirmation releases the audio: the Meeting's single artifact
       // exists, so nothing is left for the recording to serve.
       if (entry.recordingId) await discardRecording(entry.recordingId, entry.spans ?? []);
-      // The Meeting whose summary failed is saved now, so the popup must stop
-      // saying it failed. Its Transcript keeps the session's start time.
+      // The Meeting is saved now, so the popup must say what was saved: not a
+      // failure, and not "captions only" when a retry recovered the audio words.
+      // Its Transcript keeps the session's start time.
       for (const [tabId, s] of await allSessions()) {
-        if (s.state !== "failed" || s.startedAt !== entry.transcript.startedAt) continue;
-        s.state = "done";
+        if (s.startedAt !== entry.transcript.startedAt) continue;
+        if (s.state === "failed") s.state = "done";
+        s.audioWords = (entry.transcript.provenance ?? "captions-only") !== "captions-only";
+        s.noSpeech = entry.transcript.noSpeech === true;
         await persistSessions();
         await updateBadge(tabId);
       }
