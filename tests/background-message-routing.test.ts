@@ -221,6 +221,34 @@ describe("meeting status after Zoom completion", () => {
     expect(next?.startedAt).not.toBe(2_000);
   });
 
+  it("drops the session when the meeting ends while Summarize now finds no speech", async () => {
+    useLocalStore();
+    const { listener, session } = await seedMeeting("capturing", false);
+    session.recordingId = "quiet";
+    session.spans = [{ spanId: "quiet.0", startOffsetMs: 0 }];
+    session.hadAnySignal = true;
+    let reply!: (value: unknown) => void;
+    browser.sendMessage.mockImplementation(async (msg: { type: string }) =>
+      msg.type === "offscreen-transcribe"
+        ? new Promise((resolve) => { reply = resolve; })
+        : recorderStatus(),
+    );
+
+    const summarizing = listener({ type: "summarize-now", tabId: 42 }, {});
+    await vi.waitFor(() => expect(session.state).toBe("transcribing"));
+    await listener({ type: "meeting-ended", platform: "Zoom", title: null }, { tab: { id: 42 } });
+    reply({ utterances: [], cancelled: false, noSpeech: "No speech detected.", error: null });
+    await summarizing;
+
+    const { getSession } = await import("../src/background/sessions");
+    expect(await getSession(42)).toBeUndefined();
+    expect(browser.sendMessage).toHaveBeenCalledWith({
+      type: "offscreen-discard-spans",
+      spanIds: ["quiet.0"],
+    });
+    expect(pipeline.summarize).not.toHaveBeenCalled();
+  });
+
   it("holds skipped audio when a meeting with no captions ends", async () => {
     useLocalStore();
     const { listener, session } = await seedMeeting("capturing", false);
