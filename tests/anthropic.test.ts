@@ -48,4 +48,17 @@ describe("anthropic provider", () => {
     const client = createAnthropicClient({ apiKey: "bad", model: "m", fetchFn: fn });
     await expect(client.complete("x")).rejects.toThrow(/HTTP 401/);
   });
+
+  it.each([
+    ["claude-haiku-4-5", 150_000],
+    ["claude-sonnet-4-5-20250929", 150_000],
+    ["claude-opus-4-5", 150_000],
+    ["claude-sonnet-4-20250514", 150_000],
+    ["claude-opus-4-6", 400_000],
+    ["claude-opus-4-8", 400_000],
+    ["claude-sonnet-5", 400_000],
+    ["claude-opus-5-5", 400_000],
+  ])("gives %s a prompt budget of %i characters, to fit its context window", (model, budget) => {
+    expect(createAnthropicClient({ apiKey: "k", model }).contextBudget).toBe(budget);
+  });
 });

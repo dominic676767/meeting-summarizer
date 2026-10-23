@@ -8,7 +8,9 @@ export function createAnthropicClient(opts: {
   const fetchFn = opts.fetchFn ?? fetch;
   return {
     name: "anthropic",
-    contextBudget: 400_000,
+    // Characters, not tokens. Claude 4.x before 4.6 has a 200K-token window, and
+    // Chinese, Japanese or Korean text is about one token per character.
+    contextBudget: /-4-(?![678])/.test(opts.model) ? 150_000 : 400_000,
     async complete(prompt: string): Promise<string> {
       const res = await fetchFn("https://api.anthropic.com/v1/messages", {
         method: "POST",
