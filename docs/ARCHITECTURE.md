@@ -74,7 +74,7 @@ flowchart TB
 
     subgraph off["Offscreen document: offscreen/offscreen.ts"]
         rec["MediaRecorder + AudioContext mix"]
-        store["audio-store.ts<br/>OPFS, IndexedDB fallback"]
+        store["audio-store.ts<br/>IndexedDB; OPFS read only for old spans"]
         tx["transcription/factory.ts"]
     end
 
@@ -92,7 +92,7 @@ flowchart TB
     router --> finish
     finish --> held
     finish -- "offscreen-start / stop / transcribe / discard" --> off
-    off -- "transcription-progress, capture-signal, capture-silent,<br/>capture-failed, capture-track-ended, mic-track-ended" --> router
+    off -- "transcription-progress, transcription-finished, capture-signal,<br/>capture-silent, capture-failed, capture-track-ended, mic-track-ended" --> router
     rec --> store
     tx -- "local engine" --> worker
     finish --> llm
@@ -290,7 +290,7 @@ sequenceDiagram
     Note over SW: badge REC, CaptureState = recording
 
     loop while recording
-        OD->>OD: append chunk to OPFS / IndexedDB
+        OD->>OD: append chunk to IndexedDB (one transaction per chunk)
         OD->>OD: check audio clock and encoded bytes
         OD--)SW: capture-silent (only after 45 s of no signal)
     end
@@ -305,6 +305,8 @@ sequenceDiagram
     WW-->>OD: engine spans with timestamps
     OD--)SW: transcription-progress (≤ 1 per second)
     OD->>OD: rejectAsSilent() check
+    OD--)SW: transcription-finished {tabId, utterances}
+    Note over SW: Ignored while this worker still awaits the reply
     OD-->>SW: {utterances, engine}
     SW->>SW: fuseTranscript(captions, utterances)<br/>names from the Speaker Track
     SW->>LLM: summarizeTranscript() → client.complete(prompt)
@@ -315,6 +317,8 @@ sequenceDiagram
     SW->>OD: offscreen-discard-spans
     Note over SW: state = done, audio deleted, nothing retained
 ```
+
+Chrome stops a service worker that waits more than 5 minutes on one request, and local Whisper on a long Meeting can take longer. The `offscreen-transcribe` reply is then lost. The offscreen document also sends the outcome as `transcription-finished`. A restarted worker that finds the session still `transcribing`, with no request of its own waiting, continues the Meeting from that event: `transcriptFromOutcome()` then `summarizeSession()`, the same steps `finishMeeting()` runs after the reply. `tabs.onRemoved` keeps such a session until the event arrives.
 
 The same `finishMeeting()` is reached from five triggers: `auto` (adapter saw the call end), `manual` (popup *Summarize now*), `tab-closed`, `navigated` (tab left the meeting URL), `capture-lost` (recorder track died, or the worker woke to find the recorder gone).
 
@@ -339,17 +343,20 @@ stateDiagram-v2
     capturing --> transcribing: finishMeeting(), healthy audio has signal
     capturing --> summarizing: finishMeeting(), captions only or silent audio
     capturing --> capturing: finishMeeting() found nothing to summarize
-    transcribing --> summarizing: utterances, silence, cancel or failure
+    transcribing --> summarizing: utterances, silence, cancel or failure (reply, or transcription-finished after a worker restart)
     transcribing --> capturing: no segments at all
     summarizing --> done: artifact written
     summarizing --> failed: provider error, transcript held
-    done --> capturing: next content message, ensureSession() starts a new Meeting
-    failed --> capturing: next content message, ensureSession() starts a new Meeting
+    failed --> done: retryHeld() wrote the artifact
+    done --> capturing: next content message or startCapture(), ensureSession() starts a new Meeting
+    failed --> capturing: next content message or startCapture(), ensureSession() starts a new Meeting
     done --> [*]: tab closed, dropSession()
     failed --> [*]: tab closed, dropSession()
 ```
 
 A new session from `done` or `failed` keeps `inMeeting` and the title of the session it replaces. After *Summarize now* the call goes on. The content script sends `meeting-status` only when the status changes, so the new session cannot wait for it. Meeting End has already set `inMeeting = false`, so a call that ended does not carry into the next one.
+
+`startCapture()` never records into a session that is not `capturing`. On `done` or `failed` it starts the new Meeting first, so the next caption cannot replace the session that owns the recorder. While the last recording is `transcribing` or `summarizing`, it refuses and shows a capture warning, because the finishing session would become `done` with a live span inside it.
 
 Microphone state is its own axis (`micCaptureState()` in `mic-capture.ts`): `off → unconfirmed → armed → recording`, or `unavailable` if Chromium refused it. The mic is recorded only when the setting is on **and** the disclosure was answered (ADR-0007). Consent is withdrawn whenever the cloud destination changes, including from one cloud engine to another (ADR-0008). Chrome must also grant microphone access. When that access is required, capture pauses and Settings opens. The visible Settings page requests access, closes the temporary stream, and tells the user to return to the meeting and start recording. A connected microphone track does not prove that speech reached the file. A capture failure clears the microphone recording flag and shows a warning.
 
@@ -378,7 +385,8 @@ flowchart TD
     sig -- yes --> silentCap["noSpeech = true<br/>keep caption words"]
     sig -- no --> tx["state = transcribing<br/>transcribeRecording()"]
 
-    tx --> out{"outcome"}
+    tx --> out{"outcome<br/>transcriptFromOutcome()"}
+    fin(["transcription-finished<br/>after a worker restart"]) --> out
     out -- "utterances" --> fuse["fuseTranscript()<br/>audio words + caption names"]
     out -- "noSpeech" --> silentCap
     out -- "cancelled by user" --> skipCap["untranscribed = skipped<br/>keep caption words"]
@@ -389,7 +397,7 @@ flowchart TD
     fuse --> seg
     silentCap --> seg
     skipCap --> seg
-    seg{"transcript has segments?"}
+    seg{"summarizeSession()<br/>transcript has segments?"}
     seg -- no --> nothing["state back to capturing<br/>warn if silence was the reason"]
     seg -- yes --> sum["state = summarizing<br/>summarizeAndWrite()"]
     sum --> ok{"artifact written?"}
@@ -428,7 +436,7 @@ flowchart LR
     end
     watch["watchSignal()<br/>fresh RMS and capture-health.ts"]
     mr["MediaRecorder<br/>audio/webm, 5 s timeslice"]
-    store[("audio-store.ts<br/>OPFS file per spanId<br/>IndexedDB fallback")]
+    store[("audio-store.ts<br/>IndexedDB chunks per spanId<br/>OPFS read only for old spans")]
 
     tab --> mix
     mic --> mix
@@ -520,7 +528,7 @@ flowchart TD
     name --> write["writeArtifact()<br/>data: URL → downloads API<br/>resolves only on 'complete'"]
 ```
 
-Providers (`providers/factory.ts` → `createProviderClient()`): `anthropic`, `openai`, `ollama`, `bedrock`. Each is a small `fetch` client implementing `ProviderClient { name, contextBudget, complete() }`. A missing key, an Ollama base URL that is not this computer (`isLoopbackUrl`), or a Bedrock region that is not an AWS region (`isAwsRegion`) throws `ProviderError` before any call. Any failure becomes `PipelineError`, which sends the Transcript to the hold path.
+Providers (`providers/factory.ts` → `createProviderClient()`): `anthropic`, `openai`, `ollama`, `bedrock`. Each is a small `fetch` client implementing `ProviderClient { name, contextBudget, complete() }`. A missing key, an Ollama base URL that is not this computer (`isLoopbackUrl`), or a Bedrock region that is not an AWS region (`isAwsRegion`) throws `ProviderError` before any call. A reply that stopped at the output token limit, or has no text, also throws `ProviderError`. Any failure becomes `PipelineError`, which sends the Transcript to the hold path.
 
 ---
 
@@ -570,7 +578,7 @@ flowchart LR
         awsK["sagemakerCredentials<br/>temporary AWS credentials,<br/>memory only (ADR-0009)"]
     end
     subgraph audio["Offscreen origin storage"]
-        opfs[("OPFS file per spanId<br/>IndexedDB 'meeting-audio' fallback")]
+        idb[("IndexedDB 'meeting-audio' chunks per spanId<br/>OPFS file per spanId: old recordings, read and delete only")]
     end
     subgraph browser["Browser cache"]
         model[("Whisper model files")]
@@ -618,13 +626,14 @@ All types are in `src/messages.ts`. Every `chrome.runtime.sendMessage` is one of
 | `offscreen-cancel-transcribe` | SW → offscreen | abort + `provider.close()` | stop the WASM run |
 | `offscreen-discard-spans` | SW → offscreen | `deleteSpan` per id | delete audio |
 | `transcription-progress` | offscreen → SW | sets `session.transcription` | popup progress line |
+| `transcription-finished` | offscreen → SW | `transcriptFromOutcome` + `summarizeSession`, only if the session is still `transcribing` and no request in this worker waits | finish the Meeting when a worker restart lost the `offscreen-transcribe` reply |
 | `capture-track-ended` | offscreen → SW | `finishMeeting("capture-lost")` | tab audio died |
 | `mic-track-ended` | offscreen → SW | clears mic flags, sets warning | mic revoked mid-meeting |
 | `capture-signal` | offscreen → SW | updates the owning session's signal state | fresh audio reached the capture graph |
 | `capture-silent` | offscreen → SW | `silenceWarning` | 45 s of silence, warn while still fixable |
 | `capture-failed` | offscreen → SW | records failure, stops capture, holds audio | audio clock, encoder, or storage failed |
 
-Chrome events the service worker also listens to: `commands.onCommand` (shortcut → `startCapture`), `tabs.onUpdated` (left meeting URL → `finishMeeting("navigated")`), `tabs.onRemoved` (→ `finishMeeting("tab-closed")`, `dropSession`), `runtime.onStartup` / `onInstalled` (→ `reconcileSessions`, then restore content scripts in every open tab the manifest's content scripts cover). This includes Zoom web-client pages that are not a Meeting yet, such as `/wc/home`: a Meeting started from there keeps the same top document, so the capture prompt in that document is the only one the Meeting gets. Restoring content scripts after an extension reload does not refresh the meeting page. `mountContentScript` stops the old runner before replacing it. The capture prompt also replaces its old card and stops polling when its extension context is no longer valid.
+Chrome events the service worker also listens to: `commands.onCommand` (shortcut → `startCapture`), `tabs.onUpdated` (left meeting URL → `finishMeeting("navigated")`), `tabs.onRemoved` (→ `finishMeeting("tab-closed")`, `dropSession`; a `transcribing` session that this worker does not await is kept for `transcription-finished`), `runtime.onStartup` / `onInstalled` (→ `reconcileSessions`, then restore content scripts in every open tab the manifest's content scripts cover). This includes Zoom web-client pages that are not a Meeting yet, such as `/wc/home`: a Meeting started from there keeps the same top document, so the capture prompt in that document is the only one the Meeting gets. Restoring content scripts after an extension reload does not refresh the meeting page. `mountContentScript` stops the old runner before replacing it. The capture prompt also replaces its old card and stops polling when its extension context is no longer valid.
 
 ---
 
@@ -641,7 +650,7 @@ The functions to read first, by job.
 | Caption dedupe by stable key | `TranscriptAccumulator.upsertAll()` | `src/adapters/accumulator.ts` |
 | Session load / persist | `ensureSession`, `getSession`, `persistSessions`, `sessionToTranscript` | `src/background/sessions.ts` |
 | Start a Capture Span | `startCapture` → `beginCaptureSpan` | `src/background/background.ts` |
-| Meeting End orchestration | `finishMeeting` | `src/background/background.ts` |
+| Meeting End orchestration | `finishMeeting` → `transcriptFromOutcome` → `summarizeSession` | `src/background/background.ts` |
 | Call the offscreen transcriber | `transcribeRecording` | `src/background/background.ts` |
 | Summarize and save | `summarizeAndWrite` | `src/background/background.ts` |
 | Retries | `retryHeld`, `retryHeldRecording` | `src/background/background.ts` |
@@ -719,7 +728,7 @@ The functions to read first, by job.
 | `src/offscreen/microphone-permission.ts` | check microphone permission and request it from a visible page |
 | `src/offscreen/audio-mix.ts` | tab + mic Web Audio graph |
 | `src/offscreen/capture-health.ts` | audio clock and encoder progress checks |
-| `src/offscreen/audio-store.ts` | OPFS / IndexedDB span storage |
+| `src/offscreen/audio-store.ts` | IndexedDB span storage (OPFS read only for old spans) |
 | `src/offscreen/signal.ts` | RMS signal and sustained-silence measure |
 | `src/transcription/provider.ts` | engine-agnostic transcription core and errors |
 | `src/transcription/factory.ts` | engine selection |

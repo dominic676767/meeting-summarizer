@@ -1,5 +1,5 @@
 import { isAwsRegion } from "../transcription/aws-credentials";
-import { expectOk, ProviderError, type FetchFn, type ProviderClient } from "./provider";
+import { expectOk, expectSummary, ProviderError, type FetchFn, type ProviderClient } from "./provider";
 
 // Bedrock via API keys (bearer tokens) only. Long-lived AWS keys stay
 // unsupported everywhere (ADR-0009), and the SageMaker engine's temporary AWS
@@ -39,8 +39,11 @@ export function createBedrockClient(opts: {
       await expectOk("bedrock", res);
       const data = (await res.json()) as {
         output: { message: { content: Array<{ text?: string }> } };
+        stopReason?: string;
       };
-      return data.output.message.content.map((c) => c.text ?? "").join("");
+      // No inferenceConfig: Converse defaults maxTokens to the model's own maximum.
+      const text = data.output.message.content.map((c) => c.text ?? "").join("");
+      return expectSummary("bedrock", text, data.stopReason === "max_tokens");
     },
   };
 }
