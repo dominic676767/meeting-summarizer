@@ -234,6 +234,8 @@ flowchart LR
     pipe --> chunking & serialize & templates & artifact
     bg --> filename
     pFactory --> anthropic & openai & ollama & bedrock --> pIface
+    pFactory --> txOllama
+    bedrock --> awsCreds
     popupTs --> settings
     optionsTs --> settings --> templates
     settings --> awsCreds
@@ -243,7 +245,7 @@ flowchart LR
     popupTs --> awsCreds
     optionsTs --> micPermission
     optionsTs --> optionsMicAccess --> micPermission
-    optionsTs --> settingsImport
+    optionsTs --> settingsImport --> awsCreds & txOllama
     capturePrompt --> promptPosition
 ```
 
@@ -532,7 +534,7 @@ flowchart TD
     name --> write["writeArtifact()<br/>data: URL → downloads API<br/>resolves only on 'complete'"]
 ```
 
-Providers (`providers/factory.ts` → `createProviderClient()`): `anthropic`, `openai`, `ollama`, `bedrock`. Each is a small `fetch` client implementing `ProviderClient { name, contextBudget, complete() }`. A missing key throws `ProviderError` before any call. A reply that stopped at the output token limit, or has no text, also throws `ProviderError`. Any failure becomes `PipelineError`, which sends the Transcript to the hold path.
+Providers (`providers/factory.ts` → `createProviderClient()`): `anthropic`, `openai`, `ollama`, `bedrock`. Each is a small `fetch` client implementing `ProviderClient { name, contextBudget, complete() }`. A missing key, an Ollama base URL that is not this computer (`isLoopbackUrl`), or a Bedrock region that is not an AWS region (`isAwsRegion`) throws `ProviderError` before any call. A reply that stopped at the output token limit, or has no text, also throws `ProviderError`. Any failure becomes `PipelineError`, which sends the Transcript to the hold path.
 
 ---
 
@@ -691,6 +693,7 @@ The functions to read first, by job.
 | Settings with defaults | `loadSettings`, `saveSettings` | `src/settings.ts` |
 | SageMaker credentials, memory only | `loadAwsCredentials`, `saveAwsCredentials`, `clearAwsCredentials` | `src/settings.ts` |
 | Read pasted AWS credentials | `parseAwsCredentials` | `src/transcription/aws-credentials.ts` |
+| A region that keeps Bedrock and SageMaker requests on AWS hosts | `isAwsRegion` | `src/transcription/aws-credentials.ts` |
 | Read a pasted settings import; refuse keys, credentials, consent | `parseSettingsImport` | `src/options/settings-import.ts` |
 | Credentials status, popup warning | `describeCredentials`, `credentialsWarning` | `src/transcription/aws-credentials.ts` |
 

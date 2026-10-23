@@ -1,4 +1,5 @@
 import type { Settings } from "../domain/types";
+import { isLoopbackUrl } from "../transcription/ollama";
 import { createAnthropicClient } from "./anthropic";
 import { createBedrockClient } from "./bedrock";
 import { createOllamaClient } from "./ollama";
@@ -20,6 +21,13 @@ export function createProviderClient(settings: Settings, fetchFn?: FetchFn): Pro
       requireKey("openai", settings.openai.apiKey);
       return createOpenAiClient({ ...settings.openai, fetchFn });
     case "ollama":
+      // Same rule as Ollama transcription: the transcript stays on this computer.
+      if (!isLoopbackUrl(settings.ollama.baseUrl)) {
+        throw new ProviderError(
+          "ollama",
+          `${settings.ollama.baseUrl || "no base URL"} is not this computer — use http://localhost:11434 in Settings`,
+        );
+      }
       return createOllamaClient({ ...settings.ollama, fetchFn });
     case "bedrock":
       requireKey("bedrock", settings.bedrock.apiKey);

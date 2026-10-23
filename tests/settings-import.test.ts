@@ -71,6 +71,30 @@ describe("parseSettingsImport", () => {
     },
   );
 
+  it.each([
+    ["bedrock.region", { bedrock: { region: "attacker.example/?" } }],
+    ["transcription.sagemaker.region", { transcription: { sagemaker: { region: "us-east-1.attacker.example" } } }],
+  ])("refuses %s when it is not an AWS region, since it becomes the request host", (where, fields) => {
+    expect(reason(block(fields))).toBe(`"${where}" must be an AWS region, for example us-east-1.`);
+  });
+
+  it.each(["us-east-1", "eu-central-2", "ap-southeast-4", "us-gov-west-1"])(
+    "accepts the real region %s",
+    (region) => {
+      expect(ok(block({ bedrock: { region }, transcription: { sagemaker: { region } } }))).toEqual({
+        bedrock: { region },
+        transcription: { sagemaker: { region } },
+      });
+    },
+  );
+
+  it.each([
+    ["ollama.baseUrl", { ollama: { baseUrl: "http://ollama.example:11434" } }],
+    ["transcription.ollama.baseUrl", { transcription: { ollama: { baseUrl: "https://ollama.example" } } }],
+  ])("refuses %s when it is not this computer", (where, fields) => {
+    expect(reason(block(fields))).toBe(`"${where}" must be this computer, for example http://localhost:11434.`);
+  });
+
   it("refuses microphone recording, which only the user's own answer turns on", () => {
     expect(reason(block({ micCapture: { enabled: true, confirmedAt: 1 } }))).toContain(
       "microphone recording is never imported",
