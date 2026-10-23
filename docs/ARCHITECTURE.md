@@ -344,7 +344,7 @@ stateDiagram-v2
     capturing --> [*]: Meeting End with nothing to summarize, endEmptyMeeting()
     transcribing --> summarizing: utterances, silence, cancel or failure (reply, or transcription-finished after a worker restart)
     transcribing --> capturing: no segments at all, the call goes on
-    transcribing --> [*]: no segments at all at Meeting End, endEmptyMeeting()
+    transcribing --> [*]: no segments at all and the meeting has ended, endEmptyMeeting()
     summarizing --> done: artifact written
     summarizing --> failed: provider error, transcript held
     failed --> done: retryHeld() wrote the artifact (it also sets audioWords and noSpeech from what was saved)
@@ -358,7 +358,7 @@ A new session from `done` or `failed` keeps `inMeeting` and the title of the ses
 
 A session made while the tab was not in a meeting holds nothing until the meeting starts. When such an empty session gets `meeting-status` with `inMeeting: true`, `startedAt` moves to that moment, so the summary does not count the wait before the meeting as meeting time. A session with captions or audio keeps its clock, for example after a Zoom breakout.
 
-A Meeting End with nothing to summarize drops the session in `endEmptyMeeting()`, so the next meeting in the tab starts its own session and clock. Silent audio is deleted; other audio that is not yet held (a skipped transcription with no captions) is held for retry. *Summarize now* and a lost capture keep the session, because the call goes on.
+A Meeting End with nothing to summarize drops the session in `endEmptyMeeting()`, so the next meeting in the tab starts its own session and clock. Silent audio is deleted; other audio that is not yet held (a skipped transcription with no captions) is held for retry. When processing finds no words, the meeting as it is then decides: if it has ended, even while its audio was transcribed, `endEmptyMeeting()` drops the session; if the call goes on, as after *Summarize now* or a lost capture, the session stays.
 
 `startCapture()` never records into a session that is not `capturing`. On `done` or `failed` it starts the new Meeting first, so the next caption cannot replace the session that owns the recorder. While the last recording is `transcribing` or `summarizing`, it refuses and shows a capture warning, because the finishing session would become `done` with a live span inside it.
 
