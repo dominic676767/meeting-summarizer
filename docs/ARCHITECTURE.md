@@ -521,7 +521,7 @@ flowchart TD
     name --> write["writeArtifact()<br/>data: URL → downloads API<br/>resolves only on 'complete'"]
 ```
 
-Providers (`providers/factory.ts` → `createProviderClient()`): `anthropic`, `openai`, `ollama`, `bedrock`. Each is a small `fetch` client implementing `ProviderClient { name, contextBudget, complete() }`. A missing key throws `ProviderError` before any call. Any failure becomes `PipelineError`, which sends the Transcript to the hold path.
+Providers (`providers/factory.ts` → `createProviderClient()`): `anthropic`, `openai`, `ollama`, `bedrock`. Each is a small `fetch` client implementing `ProviderClient { name, contextBudget, complete() }`. A missing key throws `ProviderError` before any call. A reply that stopped at the output token limit, or has no text, also throws `ProviderError`. Any failure becomes `PipelineError`, which sends the Transcript to the hold path.
 
 ---
 
