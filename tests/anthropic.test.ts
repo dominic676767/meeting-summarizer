@@ -28,6 +28,21 @@ describe("anthropic provider", () => {
     expect(body.messages[0].content).toBe("hello");
   });
 
+  it("refuses a summary cut off at max_tokens", async () => {
+    const { fn } = fakeFetch(200, {
+      content: [{ type: "text", text: "## TL;DR\nhalf a summ" }],
+      stop_reason: "max_tokens",
+    });
+    const client = createAnthropicClient({ apiKey: "k", model: "m", fetchFn: fn });
+    await expect(client.complete("x")).rejects.toThrow(/cut off/);
+  });
+
+  it("refuses an empty summary", async () => {
+    const { fn } = fakeFetch(200, { content: [{ type: "text", text: "  " }], stop_reason: "end_turn" });
+    const client = createAnthropicClient({ apiKey: "k", model: "m", fetchFn: fn });
+    await expect(client.complete("x")).rejects.toThrow(/empty summary/);
+  });
+
   it("throws ProviderError on non-2xx", async () => {
     const { fn } = fakeFetch(401, { error: "bad key" });
     const client = createAnthropicClient({ apiKey: "bad", model: "m", fetchFn: fn });

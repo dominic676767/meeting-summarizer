@@ -1,4 +1,4 @@
-import { expectOk, type FetchFn, type ProviderClient } from "./provider";
+import { expectOk, expectSummary, type FetchFn, type ProviderClient } from "./provider";
 
 export function createOpenAiClient(opts: {
   apiKey: string;
@@ -23,9 +23,10 @@ export function createOpenAiClient(opts: {
       });
       await expectOk("openai", res);
       const data = (await res.json()) as {
-        choices: Array<{ message: { content: string | null } }>;
+        choices: Array<{ message: { content: string | null }; finish_reason?: string }>;
       };
-      return data.choices[0]?.message.content ?? "";
+      const choice = data.choices[0];
+      return expectSummary("openai", choice?.message.content ?? "", choice?.finish_reason === "length");
     },
   };
 }
