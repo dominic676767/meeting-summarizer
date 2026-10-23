@@ -101,6 +101,13 @@ export type OffscreenMessage =
 export type OffscreenEventMessage =
   | { type: "transcription-progress"; tabId: number; progress: TranscriptionProgress }
   /**
+   * The outcome of an `offscreen-transcribe` run, pushed as well as replied.
+   * Chrome stops a service worker that waits more than 5 minutes on one request,
+   * and the reply is then lost; this event lets the restarted worker finish the
+   * Meeting.
+   */
+  | ({ type: "transcription-finished"; tabId: number } & OffscreenTranscribeReply)
+  /**
    * The capture track ended without us stopping it — the tab navigated away or
    * crashed. Reported so no session goes on claiming `recording: true` for a
    * recording that is not happening.
