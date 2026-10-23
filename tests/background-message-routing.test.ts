@@ -246,6 +246,34 @@ describe("meeting status after Zoom completion", () => {
     expect(await getSession(42)).toBeUndefined();
   });
 
+  it("starts the Meeting clock when an empty session enters a meeting", async () => {
+    const { listener, session } = await seedMeeting("capturing", false);
+    session.inMeeting = false;
+    const now = vi.spyOn(Date, "now").mockReturnValue(9_000);
+    try {
+      await listener(
+        { type: "meeting-status", platform: "Zoom", title: null, inMeeting: true },
+        { tab: { id: 42 } },
+      );
+    } finally {
+      now.mockRestore();
+    }
+
+    expect(session).toMatchObject({ inMeeting: true, startedAt: 9_000 });
+  });
+
+  it("keeps the Meeting clock when a meeting with captions comes back from a breakout", async () => {
+    const { listener, session } = await seedMeeting();
+    session.inMeeting = false;
+
+    await listener(
+      { type: "meeting-status", platform: "Zoom", title: null, inMeeting: true },
+      { tab: { id: 42 } },
+    );
+
+    expect(session).toMatchObject({ inMeeting: true, startedAt: 2_000 });
+  });
+
   it("finishes captured captions when Zoom navigates home", async () => {
     const { session } = await seedMeeting();
     const onUpdated = browser.onUpdated.mock.calls[0]![0];
