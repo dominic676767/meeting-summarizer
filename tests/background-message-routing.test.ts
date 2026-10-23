@@ -1147,4 +1147,76 @@ describe("what a caption-only or retried Transcript says about its recording", (
     expect(summarized()).toMatchObject({ provenance: "captions-only", noSpeech: true });
     expect(summarized().engine).toBeUndefined();
   });
+
+  describe("when the transcription reply is lost to a service-worker restart", () => {
+    const WORDS = [{ text: "We will meet on Friday.", startMs: 1000, endMs: 3000 }];
+    const finished = {
+      type: "transcription-finished",
+      tabId: 42,
+      utterances: WORDS,
+      cancelled: false,
+      noSpeech: null,
+      error: null,
+    };
+
+    /** storage.session survives a worker restart, so the new worker reads the session from it. */
+    function useSessionStore() {
+      const store: Record<string, unknown> = {};
+      browser.sessionGet.mockImplementation(async (key: string) =>
+        key in store ? { [key]: structuredClone(store[key]) } : {},
+      );
+      browser.sessionSet.mockImplementation(async (values: Record<string, unknown>) => {
+        Object.assign(store, structuredClone(values));
+      });
+      return store;
+    }
+
+    it.each([false, true])(
+      "finishes the Meeting from the transcription-finished event (tab closed first: %s)",
+      async (closeTab) => {
+        const sessionStore = useSessionStore();
+        const listener = await seedRecordedMeeting();
+        // The request never answers: Chrome stopped the worker that sent it.
+        browser.sendMessage.mockImplementation((msg: { type: string }) =>
+          msg.type === "offscreen-transcribe" ? new Promise(() => {}) : Promise.resolve(recorderStatus()),
+        );
+        void listener({ type: "summarize-now", tabId: 42 }, {});
+        await vi.waitFor(() =>
+          expect(sessionStore.sessions).toMatchObject({ "42": { state: "transcribing" } }),
+        );
+
+        vi.resetModules();
+        browser.onMessage.mockClear();
+        browser.onRemoved.mockClear();
+        const restarted = await loadListener();
+        if (closeTab) {
+          browser.onRemoved.mock.calls[0]![0](42);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        await restarted(finished, {});
+
+        expect(pipeline.write).toHaveBeenCalledTimes(1);
+        expect(summarized().engine).toEqual({ id: "local Ollama", model: OLLAMA.ollama.model });
+        expect(summarized().provenance).not.toBe("captions-only");
+        const { getSession } = await import("../src/background/sessions");
+        expect((await getSession(42))?.state).toBe("done");
+      },
+    );
+
+    it("writes one artifact when the awaiting worker also gets the event", async () => {
+      const listener = await seedRecordedMeeting();
+      browser.sendMessage.mockImplementation(async (msg: { type: string }) => {
+        if (msg.type !== "offscreen-transcribe") return recorderStatus();
+        await listener(finished, {});
+        return { utterances: WORDS, cancelled: false, noSpeech: null, error: null };
+      });
+
+      await listener({ type: "summarize-now", tabId: 42 }, {});
+      await listener(finished, {});
+
+      expect(pipeline.write).toHaveBeenCalledTimes(1);
+      const { getSession } = await import("../src/background/sessions");
+      expect((await getSession(42))?.state).toBe("done");
+    });
+  });
 });

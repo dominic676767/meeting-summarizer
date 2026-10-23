@@ -473,6 +473,18 @@ async function transcribe(
   if (running) {
     return { utterances: [], cancelled: true, noSpeech: null, error: "transcription already running" };
   }
+  const reply = await runTranscription(msg);
+  // Also pushed as an event: Chrome stops a service worker that waits more than
+  // 5 minutes on one request, and the restarted worker never gets the reply.
+  void ext.runtime
+    .sendMessage({ type: "transcription-finished", tabId: msg.tabId, ...reply })
+    .catch(() => undefined);
+  return reply;
+}
+
+async function runTranscription(
+  msg: OffscreenMessage & { type: "offscreen-transcribe" },
+): Promise<OffscreenTranscribeReply> {
   const report = progressReporter(msg.tabId, Date.now());
   const abort = new AbortController();
   let provider: (TranscriptionProvider & { close(): void }) | undefined;
