@@ -1,4 +1,4 @@
-import { expectOk, type FetchFn, type ProviderClient } from "./provider";
+import { expectOk, expectSummary, type FetchFn, type ProviderClient } from "./provider";
 
 // Local models run small context windows; budget kept conservative so the
 // pipeline's map-reduce chunking kicks in early.
@@ -23,8 +23,8 @@ export function createOllamaClient(opts: {
         }),
       });
       await expectOk("ollama", res);
-      const data = (await res.json()) as { message: { content: string } };
-      return data.message.content;
+      const data = (await res.json()) as { message: { content: string }; done_reason?: string };
+      return expectSummary("ollama", data.message.content, data.done_reason === "length");
     },
   };
 }

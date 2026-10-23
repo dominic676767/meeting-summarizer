@@ -180,6 +180,23 @@ describe("meeting status after Zoom completion", () => {
     });
   });
 
+  it("stops reporting a failed summary once its retry saves the artifact", async () => {
+    useLocalStore();
+    const { listener, session } = await seedMeeting();
+    pipeline.summarize.mockRejectedValueOnce(new Error("model not found"));
+    await listener({ type: "summarize-now", tabId: 42 }, {});
+    expect(session.state).toBe("failed");
+    const { listHeld } = await import("../src/background/held");
+    const [held] = await listHeld();
+
+    const result = await listener({ type: "retry-held", id: held!.id }, {});
+
+    expect(result).toEqual({ ok: true });
+    expect(pipeline.write).toHaveBeenCalledTimes(1);
+    expect(await listHeld()).toEqual([]);
+    expect(session.state).toBe("done");
+  });
+
   it("starts the Meeting clock when an empty session enters a meeting", async () => {
     const { listener, session } = await seedMeeting("capturing", false);
     session.inMeeting = false;
@@ -501,6 +518,63 @@ describe("background runtime message routing", () => {
       },
     });
   });
+
+  it("starts a new Meeting when capture starts on a finished one, so the next caption keeps it", async () => {
+    const listener = await loadListener();
+    const { ensureSession, getSession } = await import("../src/background/sessions");
+    const finished = await ensureSession(42, "zoom");
+    finished.startedAt = 2000;
+    finished.inMeeting = true;
+    finished.state = "done";
+    finished.recordingId = "old-recording";
+    finished.spans = [{ spanId: "old-recording.0", startOffsetMs: 0 }];
+    let recorder = recorderStatus();
+    browser.sendMessage.mockImplementation(async (message: OffscreenMessage) => {
+      if (message.type === "offscreen-start") {
+        recorder = recorderStatus({ recording: true, tabId: message.tabId, spanId: message.spanId });
+      }
+      return recorder;
+    });
+
+    await listener({ type: "start-capture", tabId: 42 }, {});
+    await listener(
+      {
+        type: "captions-update",
+        platform: "zoom",
+        title: null,
+        updates: [{ key: "caption-1", speaker: "Unknown", text: "Next topic." }],
+      },
+      { tab: { id: 42 } },
+    );
+
+    const session = await getSession(42);
+    expect(session).not.toBe(finished);
+    expect(session).toMatchObject({ state: "capturing", inMeeting: true, recording: true });
+    expect(session?.spans).toHaveLength(1);
+    expect(session?.spans[0]?.spanId).not.toMatch(/^old-recording/);
+    expect(session?.spans[0]?.spanId).toBe(recorder.spanId);
+  });
+
+  it.each<SessionState>(["transcribing", "summarizing"])(
+    "does not start a capture while the last recording is %s",
+    async (state) => {
+      const listener = await loadListener();
+      const { ensureSession, getSession } = await import("../src/background/sessions");
+      (await ensureSession(42, "zoom")).state = state;
+
+      await listener({ type: "start-capture", tabId: 42 }, {});
+
+      expect(browser.getMediaStreamId).not.toHaveBeenCalled();
+      expect(browser.sendMessage).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: "offscreen-start" }),
+      );
+      expect(await getSession(42)).toMatchObject({
+        state,
+        recording: false,
+        captureWarning: { message: expect.stringContaining("still being processed") },
+      });
+    },
+  );
 
   it("scopes stop to its meeting and span and keeps another recorder open", async () => {
     const listener = await loadListener();
@@ -933,6 +1007,29 @@ describe("background runtime message routing", () => {
     );
   });
 
+  it("writes one summary when two end triggers race a failed capture", async () => {
+    useLocalStore();
+    const listener = await loadListener();
+    const { ensureSession } = await import("../src/background/sessions");
+    const session = await ensureSession(42, "zoom");
+    session.recordingId = "recording";
+    session.spans = [{ spanId: "recording.1000", startOffsetMs: 1000 }];
+    session.captureFailure = "The audio clock stopped.";
+    session.accumulator.upsert(
+      { key: "caption1", speaker: "Participant A", text: "Ship it on Friday." },
+      Date.now(),
+    );
+
+    await Promise.all([
+      listener({ type: "meeting-ended", platform: "Zoom", title: null }, { tab: { id: 42 } }),
+      listener({ type: "summarize-now", tabId: 42 }, {}),
+    ]);
+
+    expect(pipeline.summarize).toHaveBeenCalledTimes(1);
+    expect(pipeline.write).toHaveBeenCalledTimes(1);
+    expect(session.state).toBe("done");
+  });
+
   it("keeps failed audio when a retry returns no speech", async () => {
     useLocalStore();
     const listener = await loadListener();
@@ -1077,5 +1174,77 @@ describe("what a caption-only or retried Transcript says about its recording", (
     expect(result).toEqual({ ok: true });
     expect(summarized()).toMatchObject({ provenance: "captions-only", noSpeech: true });
     expect(summarized().engine).toBeUndefined();
+  });
+
+  describe("when the transcription reply is lost to a service-worker restart", () => {
+    const WORDS = [{ text: "We will meet on Friday.", startMs: 1000, endMs: 3000 }];
+    const finished = {
+      type: "transcription-finished",
+      tabId: 42,
+      utterances: WORDS,
+      cancelled: false,
+      noSpeech: null,
+      error: null,
+    };
+
+    /** storage.session survives a worker restart, so the new worker reads the session from it. */
+    function useSessionStore() {
+      const store: Record<string, unknown> = {};
+      browser.sessionGet.mockImplementation(async (key: string) =>
+        key in store ? { [key]: structuredClone(store[key]) } : {},
+      );
+      browser.sessionSet.mockImplementation(async (values: Record<string, unknown>) => {
+        Object.assign(store, structuredClone(values));
+      });
+      return store;
+    }
+
+    it.each([false, true])(
+      "finishes the Meeting from the transcription-finished event (tab closed first: %s)",
+      async (closeTab) => {
+        const sessionStore = useSessionStore();
+        const listener = await seedRecordedMeeting();
+        // The request never answers: Chrome stopped the worker that sent it.
+        browser.sendMessage.mockImplementation((msg: { type: string }) =>
+          msg.type === "offscreen-transcribe" ? new Promise(() => {}) : Promise.resolve(recorderStatus()),
+        );
+        void listener({ type: "summarize-now", tabId: 42 }, {});
+        await vi.waitFor(() =>
+          expect(sessionStore.sessions).toMatchObject({ "42": { state: "transcribing" } }),
+        );
+
+        vi.resetModules();
+        browser.onMessage.mockClear();
+        browser.onRemoved.mockClear();
+        const restarted = await loadListener();
+        if (closeTab) {
+          browser.onRemoved.mock.calls[0]![0](42);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        await restarted(finished, {});
+
+        expect(pipeline.write).toHaveBeenCalledTimes(1);
+        expect(summarized().engine).toEqual({ id: "local Ollama", model: OLLAMA.ollama.model });
+        expect(summarized().provenance).not.toBe("captions-only");
+        const { getSession } = await import("../src/background/sessions");
+        expect((await getSession(42))?.state).toBe("done");
+      },
+    );
+
+    it("writes one artifact when the awaiting worker also gets the event", async () => {
+      const listener = await seedRecordedMeeting();
+      browser.sendMessage.mockImplementation(async (msg: { type: string }) => {
+        if (msg.type !== "offscreen-transcribe") return recorderStatus();
+        await listener(finished, {});
+        return { utterances: WORDS, cancelled: false, noSpeech: null, error: null };
+      });
+
+      await listener({ type: "summarize-now", tabId: 42 }, {});
+      await listener(finished, {});
+
+      expect(pipeline.write).toHaveBeenCalledTimes(1);
+      const { getSession } = await import("../src/background/sessions");
+      expect((await getSession(42))?.state).toBe("done");
+    });
   });
 });

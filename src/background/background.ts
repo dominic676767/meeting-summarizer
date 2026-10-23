@@ -10,7 +10,7 @@ import type {
   OffscreenTranscribeReply,
   StatusReply,
 } from "../messages";
-import type { CaptureSpan, HeldRecording, Settings, Utterance } from "../domain/types";
+import type { CaptureSpan, HeldRecording, Settings, Transcript, Utterance } from "../domain/types";
 import { artifactFilename } from "../pipeline/filename";
 import { summarizeTranscript } from "../pipeline/pipeline";
 import { createProviderClient } from "../providers/factory";
@@ -154,8 +154,22 @@ async function startCapture(tabId: number): Promise<void> {
   if (pending) return pending;
   const operation = (async () => {
     await capturesStopping.get(tabId);
-    const s = await getSession(tabId);
+    let s = await getSession(tabId);
     if (!s || s.recording) return;
+    if (s.state === "transcribing" || s.state === "summarizing") {
+      // The finishing Meeting would end with this span's audio inside it: a "done"
+      // session that the next caption replaces, while the recorder runs on unseen.
+      s.captureWarning = {
+        message: "The last recording is still being processed. Start recording again when the summary is saved.",
+        detail: "recording cannot start while the previous recording is processed",
+      };
+      await persistSessions();
+      await updateBadge(tabId);
+      return;
+    }
+    // A finished Meeting is replaced by the next caption. A span started on it would
+    // record audio that no session owns, behind a badge that says "Not recording".
+    if (s.state === "done" || s.state === "failed") s = await ensureSession(tabId, s.platform);
     await beginCaptureSpan(tabId, s);
   })();
   capturesStarting.set(tabId, operation);
@@ -355,10 +369,16 @@ async function handleContentMessage(msg: Message, tabId: number): Promise<void> 
   }
 }
 
+/** Tabs whose transcription outcome this worker instance is handling. A
+ * `transcription-finished` event for any other tab still in "transcribing" means
+ * the worker that sent the request was stopped and its reply is lost. */
+const transcriptionsHandled = new Set<number>();
+
 /**
  * Converging trigger for auto-detect, tab close, and Summarize-now.
  * Idempotent: a Transcript is summarized at most once (double-fire guard —
- * the state test-and-set below is the guard).
+ * the state check below, and the state change right after it with no await
+ * between, is the guard).
  */
 export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | "tab-closed" | "capture-lost" | "navigated") {
   await capturesStarting.get(tabId);
@@ -381,6 +401,9 @@ export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | 
     }
     return;
   }
+  // Claim the session before any await, so a second trigger that arrives while
+  // this one waits sees it is no longer "capturing" and returns.
+  s.state = "summarizing";
 
   const captionTranscript = sessionToTranscript(s);
   let transcript = captionTranscript;
@@ -409,52 +432,83 @@ export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | 
     s.transcription = null;
     await persistSessions();
     await updateBadge(tabId);
-    const outcome = await transcribeRecording(tabId, s);
-    s.transcription = null;
-    // Words from the recording replace the caption words wholesale — that is
-    // the point of v2 — while the captions live on as the Speaker Track fusion
-    // takes the names from. Which is exactly why the words have to be speech
-    // before they count: output the Transcription Provider refused as silence
-    // arrives here as no words at all, so a hallucinated token can never
-    // displace a real caption Transcript or claim to be recorded audio.
-    s.audioWords = outcome.utterances.length > 0;
-    // Recorded so the popup can say the recording carried no speech, rather than
-    // leaving the user with an unexplained caption-only summary.
-    s.noSpeech = outcome.noSpeech !== null;
-    if (s.noSpeech) {
-      console.info(`meeting-summarizer: transcription rejected — ${outcome.noSpeech}`);
-    }
-    if (s.audioWords) {
-      transcript = { ...fuseTranscript(captionTranscript, outcome.utterances), engine: outcome.engine };
-    } else if (s.noSpeech) {
-      // Carried onto the Transcript so the artifact can say the recording was
-      // silent, rather than "no audio was recorded" — which is false, and would
-      // leave a reader concluding the engine broke when it worked perfectly and
-      // there was nothing to hear.
-      transcript = { ...captionTranscript, noSpeech: true };
-    } else if (outcome.cancelled) {
-      // The user skipped the wait. Audio was recorded, so the artifact must not
-      // say that none was.
-      transcript = { ...captionTranscript, untranscribed: "skipped" };
-    } else {
-      // A transcription outage must cost a retry, not the meeting: hold the
-      // Audio Recording so the user can retry it — after switching Transcription
-      // Provider if that is what it takes. The caption-only summary below still
-      // lands, so the outage costs accuracy now rather than everything.
-      //
-      // A recording refused for carrying no speech is deliberately not held: an
-      // outage and a silent recording are different states, and a retry of
-      // silence only reproduces the silence it already found.
-      await holdRecording(
-        { recordingId: s.recordingId, transcript: captionTranscript, spans: s.spans },
-        outcome.error ?? "transcription produced no words",
-      );
-      // Only the caption summary carries the failure. The held copy stays
-      // unmarked, because its retry decides what the recording actually held.
-      transcript = { ...captionTranscript, untranscribed: "failed" };
+    transcriptionsHandled.add(tabId);
+    try {
+      transcript = await transcriptFromOutcome(s, captionTranscript, await transcribeRecording(tabId, s));
+    } finally {
+      // The state leaves "transcribing" synchronously after this, in
+      // summarizeSession, so the transcription-finished event cannot run twice.
+      transcriptionsHandled.delete(tabId);
     }
   }
 
+  await summarizeSession(tabId, s, transcript, trigger);
+}
+
+/**
+ * What the Meeting's Transcript becomes once its transcription has an outcome.
+ * Shared by finishMeeting and by the transcription-finished event that a
+ * restarted service worker receives.
+ */
+async function transcriptFromOutcome(
+  s: MeetingSession,
+  captionTranscript: Transcript,
+  outcome: OffscreenTranscribeReply,
+): Promise<Transcript> {
+  let transcript = captionTranscript;
+  s.transcription = null;
+  // Words from the recording replace the caption words wholesale — that is
+  // the point of v2 — while the captions live on as the Speaker Track fusion
+  // takes the names from. Which is exactly why the words have to be speech
+  // before they count: output the Transcription Provider refused as silence
+  // arrives here as no words at all, so a hallucinated token can never
+  // displace a real caption Transcript or claim to be recorded audio.
+  s.audioWords = outcome.utterances.length > 0;
+  // Recorded so the popup can say the recording carried no speech, rather than
+  // leaving the user with an unexplained caption-only summary.
+  s.noSpeech = outcome.noSpeech !== null;
+  if (s.noSpeech) {
+    console.info(`meeting-summarizer: transcription rejected — ${outcome.noSpeech}`);
+  }
+  if (s.audioWords) {
+    transcript = { ...fuseTranscript(captionTranscript, outcome.utterances), engine: outcome.engine };
+  } else if (s.noSpeech) {
+    // Carried onto the Transcript so the artifact can say the recording was
+    // silent, rather than "no audio was recorded" — which is false, and would
+    // leave a reader concluding the engine broke when it worked perfectly and
+    // there was nothing to hear.
+    transcript = { ...captionTranscript, noSpeech: true };
+  } else if (outcome.cancelled) {
+    // The user skipped the wait. Audio was recorded, so the artifact must not
+    // say that none was.
+    transcript = { ...captionTranscript, untranscribed: "skipped" };
+  } else {
+    // A transcription outage must cost a retry, not the meeting: hold the
+    // Audio Recording so the user can retry it — after switching Transcription
+    // Provider if that is what it takes. The caption-only summary below still
+    // lands, so the outage costs accuracy now rather than everything.
+    //
+    // A recording refused for carrying no speech is deliberately not held: an
+    // outage and a silent recording are different states, and a retry of
+    // silence only reproduces the silence it already found.
+    await holdRecording(
+      { recordingId: s.recordingId!, transcript: captionTranscript, spans: s.spans },
+      outcome.error ?? "transcription produced no words",
+    );
+    // Only the caption summary carries the failure. The held copy stays
+    // unmarked, because its retry decides what the recording actually held.
+    transcript = { ...captionTranscript, untranscribed: "failed" };
+  }
+  return transcript;
+}
+
+/** Summarize and write the Transcript, or hold it, and settle the session state. */
+async function summarizeSession(
+  tabId: number,
+  s: MeetingSession,
+  transcript: Transcript,
+  trigger: string,
+): Promise<void> {
   if (transcript.segments.length === 0) {
     // Do not send an empty transcript to the summary provider. Capture or
     // transcription failures have already held the recording for retry.
@@ -612,6 +666,14 @@ async function retryHeld(id: string): Promise<void> {
       // Same confirmation releases the audio: the Meeting's single artifact
       // exists, so nothing is left for the recording to serve.
       if (entry.recordingId) await discardRecording(entry.recordingId, entry.spans ?? []);
+      // The Meeting whose summary failed is saved now, so the popup must stop
+      // saying it failed. Its Transcript keeps the session's start time.
+      for (const [tabId, s] of await allSessions()) {
+        if (s.state !== "failed" || s.startedAt !== entry.transcript.startedAt) continue;
+        s.state = "done";
+        await persistSessions();
+        await updateBadge(tabId);
+      }
     } catch (err) {
       await updateHeldReason(id, reasonOf(err));
       throw err;
@@ -890,6 +952,25 @@ ext.runtime.onMessage.addListener((raw: unknown, sender) => {
       return { ok: true };
     })();
   }
+  if (msg.type === "transcription-finished") {
+    return (async () => {
+      const s = await getSession(msg.tabId);
+      if (s?.state !== "transcribing" || !s.recordingId || transcriptionsHandled.has(msg.tabId)) {
+        return { ok: true };
+      }
+      transcriptionsHandled.add(msg.tabId);
+      try {
+        const { type: _type, tabId, ...reply } = msg;
+        // Settings are read now; the request that named the engine is gone.
+        const outcome = { ...reply, engine: engineOf((await loadSettings()).transcription) };
+        const transcript = await transcriptFromOutcome(s, sessionToTranscript(s), outcome);
+        await summarizeSession(tabId, s, transcript, "worker-restart");
+      } finally {
+        transcriptionsHandled.delete(msg.tabId);
+      }
+      return { ok: true };
+    })();
+  }
   if (msg.type === "capture-failed") {
     return (async () => {
       const s = await getSession(msg.tabId);
@@ -1074,6 +1155,9 @@ ext.tabs.onRemoved.addListener((tabId) => {
   void (async () => {
     await capturesStarting.get(tabId);
     const s = await getSession(tabId);
+    // A restarted worker still waits for this Meeting's transcription-finished
+    // event, and that event needs the session.
+    if (s?.state === "transcribing" && !transcriptionsHandled.has(tabId)) return;
     if (s && s.state === "capturing" && (s.accumulator.size > 0 || hasRecording(s))) {
       await finishMeeting(tabId, "tab-closed");
     } else if (s?.recording) {

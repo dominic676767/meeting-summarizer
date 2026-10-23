@@ -1,9 +1,12 @@
 // Incremental sink for one Capture Span. MediaRecorder emits encoded chunks
 // every few seconds; they are written straight to browser-managed storage so an
-// hour-long call is never held whole in memory (ADR-0004). OPFS is preferred
-// because it appends by byte offset without re-reading the file; IndexedDB is
-// the fallback where OPFS is unavailable. Keyed by span id so the next slice
-// (Held Recording, transcription) can find every span of a Meeting again.
+// hour-long call is never held whole in memory (ADR-0004). Each chunk is put in
+// IndexedDB in its own transaction, so every chunk is on disk once append()
+// resolves. OPFS is not used for writing: a FileSystemWritableFileStream keeps
+// its writes in a swap file until close(), and an extension reload or browser
+// crash before close() left the span file empty, so the Held Recording kept
+// for a retry had no audio. Keyed by span id so the next slice (Held Recording,
+// transcription) can find every span of a Meeting again.
 //
 // One store per Capture Span, never one per Meeting: each Capture Start begins a
 // fresh MediaRecorder session and therefore a fresh WebM container, so a second
@@ -17,28 +20,7 @@ export interface AudioStore {
   close(): Promise<void>;
 }
 
-async function openOpfsStore(spanId: string): Promise<AudioStore> {
-  const root = await navigator.storage.getDirectory();
-  const handle = await root.getFileHandle(`${spanId}.webm`, { create: true });
-  // One writable held open for the whole span; each chunk is written at the
-  // running byte offset so nothing already flushed is re-buffered. Starting at
-  // byte zero is correct precisely because a span id is written exactly once —
-  // the earlier defect was reusing one id across Capture Starts, which truncated
-  // the first span's file (ADR-0005).
-  const writable = await handle.createWritable();
-  let position = 0;
-  return {
-    async append(chunk: Blob): Promise<void> {
-      await writable.write({ type: "write", position, data: chunk });
-      position += chunk.size;
-    },
-    async close(): Promise<void> {
-      await writable.close();
-    },
-  };
-}
-
-function openIdbStore(spanId: string): Promise<AudioStore> {
+export function openAudioStore(spanId: string): Promise<AudioStore> {
   return new Promise((resolve, reject) => {
     const open = indexedDB.open("meeting-audio", 1);
     open.onupgradeneeded = () => {
@@ -60,6 +42,8 @@ function openIdbStore(spanId: string): Promise<AudioStore> {
             tx.objectStore("chunks").put({ recordingId: spanId, seq: seq++, blob: chunk });
             tx.oncomplete = () => res();
             tx.onerror = () => rej(tx.error);
+            // A quota failure at commit aborts the transaction without an error event.
+            tx.onabort = () => rej(tx.error);
           });
         },
         close(): Promise<void> {
@@ -71,17 +55,8 @@ function openIdbStore(spanId: string): Promise<AudioStore> {
   });
 }
 
-export async function openAudioStore(spanId: string): Promise<AudioStore> {
-  if (typeof navigator.storage?.getDirectory === "function") {
-    try {
-      return await openOpfsStore(spanId);
-    } catch {
-      // OPFS present but unusable (e.g. private-mode restrictions) — fall through.
-    }
-  }
-  return openIdbStore(spanId);
-}
-
+// Older versions wrote spans to OPFS, and their Held Recordings must stay
+// readable and deletable, so OPFS is still read and cleaned up here.
 async function readOpfs(spanId: string): Promise<Blob | null> {
   if (typeof navigator.storage?.getDirectory !== "function") return null;
   try {
@@ -89,7 +64,7 @@ async function readOpfs(spanId: string): Promise<Blob | null> {
     const handle = await root.getFileHandle(`${spanId}.webm`);
     return await handle.getFile();
   } catch {
-    return null; // not written here — the IndexedDB fallback owns it
+    return null; // not an older OPFS span — IndexedDB owns it
   }
 }
 
@@ -141,7 +116,7 @@ export async function deleteSpan(spanId: string): Promise<void> {
       const root = await navigator.storage.getDirectory();
       await root.removeEntry(`${spanId}.webm`);
     } catch {
-      // Not in OPFS (or already gone) — the IndexedDB sweep below covers it.
+      // Not an older OPFS span (or already gone) — the IndexedDB sweep below covers it.
     }
   }
   await idbChunks(spanId, "readwrite").catch(() => []);
