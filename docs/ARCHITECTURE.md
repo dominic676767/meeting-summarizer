@@ -74,7 +74,7 @@ flowchart TB
 
     subgraph off["Offscreen document: offscreen/offscreen.ts"]
         rec["MediaRecorder + AudioContext mix"]
-        store["audio-store.ts<br/>OPFS, IndexedDB fallback"]
+        store["audio-store.ts<br/>IndexedDB; OPFS read only for old spans"]
         tx["transcription/factory.ts"]
     end
 
@@ -288,7 +288,7 @@ sequenceDiagram
     Note over SW: badge REC, CaptureState = recording
 
     loop while recording
-        OD->>OD: append chunk to OPFS / IndexedDB
+        OD->>OD: append chunk to IndexedDB (one transaction per chunk)
         OD->>OD: check audio clock and encoded bytes
         OD--)SW: capture-silent (only after 45 s of no signal)
     end
@@ -429,7 +429,7 @@ flowchart LR
     end
     watch["watchSignal()<br/>fresh RMS and capture-health.ts"]
     mr["MediaRecorder<br/>audio/webm, 5 s timeslice"]
-    store[("audio-store.ts<br/>OPFS file per spanId<br/>IndexedDB fallback")]
+    store[("audio-store.ts<br/>IndexedDB chunks per spanId<br/>OPFS read only for old spans")]
 
     tab --> mix
     mic --> mix
@@ -571,7 +571,7 @@ flowchart LR
         awsK["sagemakerCredentials<br/>temporary AWS credentials,<br/>memory only (ADR-0009)"]
     end
     subgraph audio["Offscreen origin storage"]
-        opfs[("OPFS file per spanId<br/>IndexedDB 'meeting-audio' fallback")]
+        idb[("IndexedDB 'meeting-audio' chunks per spanId<br/>OPFS file per spanId: old recordings, read and delete only")]
     end
     subgraph browser["Browser cache"]
         model[("Whisper model files")]
@@ -719,7 +719,7 @@ The functions to read first, by job.
 | `src/offscreen/microphone-permission.ts` | check microphone permission and request it from a visible page |
 | `src/offscreen/audio-mix.ts` | tab + mic Web Audio graph |
 | `src/offscreen/capture-health.ts` | audio clock and encoder progress checks |
-| `src/offscreen/audio-store.ts` | OPFS / IndexedDB span storage |
+| `src/offscreen/audio-store.ts` | IndexedDB span storage (OPFS read only for old spans) |
 | `src/offscreen/signal.ts` | RMS signal and sustained-silence measure |
 | `src/transcription/provider.ts` | engine-agnostic transcription core and errors |
 | `src/transcription/factory.ts` | engine selection |
