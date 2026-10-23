@@ -384,7 +384,7 @@ export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | 
   await capturesStarting.get(tabId);
   const s = await getSession(tabId);
   if (!s) return;
-  const meetingEnded = endsMeeting(trigger);
+  const meetingEnded = trigger === "auto" || trigger === "tab-closed" || trigger === "navigated";
   if (meetingEnded) s.inMeeting = false;
   // Meeting End stops the recorder before the transcribe → summarize sequence
   // runs, and regardless of whether audio was captured, so the Audio Recording
@@ -504,11 +504,6 @@ async function transcriptFromOutcome(
   return transcript;
 }
 
-/** Meeting End, as opposed to Summarize now or a lost capture: the call is over. */
-function endsMeeting(trigger: string): boolean {
-  return trigger === "auto" || trigger === "tab-closed" || trigger === "navigated";
-}
-
 /**
  * A Meeting that ended with nothing to summarize. Its session is dropped, so the
  * next meeting in this tab starts its own session and clock instead of
@@ -541,7 +536,9 @@ async function summarizeSession(
   if (transcript.segments.length === 0) {
     // Do not send an empty transcript to the summary provider. Capture or
     // transcription failures have already held the recording for retry.
-    if (endsMeeting(trigger)) {
+    // Decided by the meeting as it is now, not by the trigger that started the
+    // processing: the meeting can end while its audio is being transcribed.
+    if (!s.inMeeting) {
       await endEmptyMeeting(tabId, s);
       await closeOffscreenUnlessRecording();
       return;
