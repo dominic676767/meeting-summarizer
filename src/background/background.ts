@@ -371,7 +371,8 @@ const transcriptionsHandled = new Set<number>();
 /**
  * Converging trigger for auto-detect, tab close, and Summarize-now.
  * Idempotent: a Transcript is summarized at most once (double-fire guard —
- * the state test-and-set below is the guard).
+ * the state check below, and the state change right after it with no await
+ * between, is the guard).
  */
 export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | "tab-closed" | "capture-lost" | "navigated") {
   await capturesStarting.get(tabId);
@@ -396,6 +397,9 @@ export async function finishMeeting(tabId: number, trigger: "auto" | "manual" | 
     }
     return;
   }
+  // Claim the session before any await, so a second trigger that arrives while
+  // this one waits sees it is no longer "capturing" and returns.
+  s.state = "summarizing";
 
   const captionTranscript = sessionToTranscript(s);
   let transcript = captionTranscript;

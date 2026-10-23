@@ -1041,6 +1041,29 @@ describe("background runtime message routing", () => {
     );
   });
 
+  it("writes one summary when two end triggers race a failed capture", async () => {
+    useLocalStore();
+    const listener = await loadListener();
+    const { ensureSession } = await import("../src/background/sessions");
+    const session = await ensureSession(42, "zoom");
+    session.recordingId = "recording";
+    session.spans = [{ spanId: "recording.1000", startOffsetMs: 1000 }];
+    session.captureFailure = "The audio clock stopped.";
+    session.accumulator.upsert(
+      { key: "caption1", speaker: "Participant A", text: "Ship it on Friday." },
+      Date.now(),
+    );
+
+    await Promise.all([
+      listener({ type: "meeting-ended", platform: "Zoom", title: null }, { tab: { id: 42 } }),
+      listener({ type: "summarize-now", tabId: 42 }, {}),
+    ]);
+
+    expect(pipeline.summarize).toHaveBeenCalledTimes(1);
+    expect(pipeline.write).toHaveBeenCalledTimes(1);
+    expect(session.state).toBe("done");
+  });
+
   it("keeps failed audio when a retry returns no speech", async () => {
     useLocalStore();
     const listener = await loadListener();
