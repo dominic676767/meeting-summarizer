@@ -23,6 +23,18 @@ describe("openai provider", () => {
     expect(calls[0]!.url).toBe("https://api.openai.com/v1/chat/completions");
     expect((calls[0]!.init.headers as Record<string, string>).authorization).toBe("Bearer sk-o");
   });
+
+  it("refuses a summary cut off at the length limit", async () => {
+    const { fn } = fakeFetch({ choices: [{ message: { content: "half" }, finish_reason: "length" }] });
+    const c = createOpenAiClient({ apiKey: "k", model: "m", fetchFn: fn });
+    await expect(c.complete("p")).rejects.toThrow(/cut off/);
+  });
+
+  it("refuses an empty summary (content null, as on a refusal)", async () => {
+    const { fn } = fakeFetch({ choices: [{ message: { content: null }, finish_reason: "stop" }] });
+    const c = createOpenAiClient({ apiKey: "k", model: "m", fetchFn: fn });
+    await expect(c.complete("p")).rejects.toThrow(/empty summary/);
+  });
 });
 
 describe("ollama provider", () => {
@@ -39,6 +51,18 @@ describe("ollama provider", () => {
   it("declares a small context budget so chunking activates early", () => {
     const c = createOllamaClient({ baseUrl: "http://localhost:11434", model: "m" });
     expect(c.contextBudget).toBeLessThan(50_000);
+  });
+
+  it("refuses a summary cut off at the length limit", async () => {
+    const { fn } = fakeFetch({ message: { content: "half" }, done_reason: "length" });
+    const c = createOllamaClient({ baseUrl: "http://localhost:11434", model: "m", fetchFn: fn });
+    await expect(c.complete("p")).rejects.toThrow(/cut off/);
+  });
+
+  it("refuses an empty summary", async () => {
+    const { fn } = fakeFetch({ message: { content: "" }, done_reason: "stop" });
+    const c = createOllamaClient({ baseUrl: "http://localhost:11434", model: "m", fetchFn: fn });
+    await expect(c.complete("p")).rejects.toThrow(/empty summary/);
   });
 });
 
@@ -60,6 +84,22 @@ describe("bedrock provider", () => {
     const headers = calls[0]!.init.headers as Record<string, string>;
     expect(headers.authorization).toBe("Bearer bedrock-key");
     expect(headers["x-amz-date"]).toBeUndefined(); // no SigV4 signing
+  });
+
+  const bedrock = (fn: typeof fetch) =>
+    createBedrockClient({ apiKey: "k", region: "us-east-1", model: "m", fetchFn: fn });
+
+  it("refuses a summary cut off at max_tokens", async () => {
+    const { fn } = fakeFetch({
+      output: { message: { content: [{ text: "half" }] } },
+      stopReason: "max_tokens",
+    });
+    await expect(bedrock(fn).complete("p")).rejects.toThrow(/cut off/);
+  });
+
+  it("refuses an empty summary", async () => {
+    const { fn } = fakeFetch({ output: { message: { content: [] } }, stopReason: "end_turn" });
+    await expect(bedrock(fn).complete("p")).rejects.toThrow(/empty summary/);
   });
 });
 
