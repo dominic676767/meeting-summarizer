@@ -96,6 +96,34 @@
       <input type="text" id="bedrock-region" />
       <label for="bedrock-model">Model ID</label>
       <input type="text" id="bedrock-model" />
+      <details class="editor">
+        <summary>Make a short-term API key from your AWS profile</summary>
+        <label for="bedrock-profile">AWS profile</label>
+        <input type="text" id="bedrock-profile" value="default" autocomplete="off" spellcheck="false" />
+        <p class="note">
+          1. Run this command in a terminal:
+          <code id="bedrock-command">aws configure export-credentials --profile default</code>
+          <button id="bedrock-copy-command" type="button">Copy command</button>
+        </p>
+        <label for="bedrock-credentials">2. Paste its output here</label>
+        <textarea
+          id="bedrock-credentials"
+          rows="3"
+          autocomplete="off"
+          spellcheck="false"
+          aria-describedby="bedrock-credentials-help"
+          placeholder='{ "Version": 1, "AccessKeyId": "ASIA…", … }'
+          style="width: 100%; box-sizing: border-box; font: 12px monospace;"
+        ></textarea>
+        <p class="note" id="bedrock-credentials-help">
+          The credentials need a session token. Long-term keys (<code>AKIA…</code>) are refused. They are
+          used once to sign the key and are not stored. When this box is empty, the SageMaker
+          credentials are used, if you pasted them. The key works for 12 hours at most, and stops when
+          the credentials expire. Your role needs <code>bedrock:CallWithBearerToken</code>.
+        </p>
+        <button id="bedrock-generate" type="button">3. Generate short-term key</button>
+        <p class="note" id="bedrock-generate-result" role="status" aria-live="polite"></p>
+      </details>
     </fieldset>
 
     <h2 id="microphone">Recording</h2>

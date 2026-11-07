@@ -64,7 +64,7 @@ Then ask these questions. Ask them one group at a time. Give the default for eac
 | Q1 | Where do you want the code? | `~/Projects/meeting-summarizer`, or a path you give | The clone folder. Chrome loads `dist/` from this folder, so it must not move later |
 | Q2 | Do you only want to use the extension, or also develop it? | Use / Develop | Develop: you also run the type check and the tests |
 | Q3 | Which LLM must write your summaries (the **Provider**)? | Claude / OpenAI / Ollama on this Mac / AWS Bedrock | `provider` in the settings block. Each choice except Ollama needs an API key, which the user pastes on the Settings page |
-| Q3a | (Claude, OpenAI or Bedrock) Which model? | Claude: `claude-sonnet-5`. OpenAI: `gpt-4o`. Bedrock: `anthropic.claude-sonnet-4-20250514-v1:0` | The `model` field. For Bedrock, also ask the region (default `us-east-1`) |
+| Q3a | (Claude, OpenAI or Bedrock) Which model? | Claude: `claude-sonnet-5`. OpenAI: `gpt-4o`. Bedrock: `global.anthropic.claude-sonnet-5-5` | The `model` field. For Bedrock, also ask the region (default `us-east-1`) |
 | Q3b | (Ollama) Is Ollama installed? Which model? May I allow this extension in Ollama and restart Ollama? | Model default `llama3.1` | Step 5A |
 | Q4 | Which engine must turn the audio into words (the **Transcription Provider**)? | Local Whisper (nothing leaves this Mac) / OpenAI / ElevenLabs Scribe / Amazon SageMaker (your own endpoint) / Qwen3-ASR in Ollama on this Mac | `transcription.provider`. Tell the user: every choice except Local Whisper and Ollama **uploads the meeting audio** |
 | Q4a | (Local Whisper) Which model size? | `base` (~75 MB) / `tiny` (~40 MB, fastest) / `small` (~250 MB, most accurate) | `transcription.localWhisper.model` |

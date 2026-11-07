@@ -14,7 +14,7 @@ export const DEFAULT_SETTINGS: Settings = {
   anthropic: { apiKey: "", model: "claude-sonnet-5" },
   openai: { apiKey: "", model: "gpt-4o" },
   ollama: { baseUrl: "http://localhost:11434", model: "llama3.1" },
-  bedrock: { apiKey: "", region: "us-east-1", model: "anthropic.claude-sonnet-4-20250514-v1:0" },
+  bedrock: { apiKey: "", region: "us-east-1", model: "global.anthropic.claude-sonnet-5-5" },
   // Local WASM Whisper is the working default: no API key, and the audio never
   // leaves the machine (ADR-0004). Cloud transcription is strictly opt-in.
   nameEngineInArtifact: false,

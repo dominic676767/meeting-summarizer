@@ -1,7 +1,8 @@
 // Options page: Provider selection + keys (browser.storage.local, ADR-0001),
 // Summary shape toggle, and editable Prompt Templates. The SageMaker engine's
 // AWS credentials are the exception: pasted here, kept in storage.session only
-// (ADR-0009), and tested from here against the user's endpoint. The Ollama
+// (ADR-0009), and tested from here against the user's endpoint. Pasted AWS
+// credentials can also sign a short-term Bedrock API key here, then are dropped. The Ollama
 // engine is tested from here too, against this computer's Ollama. A pasted
 // settings import fills the form and stores nothing until Save (ADR-0010).
 import type {
@@ -13,6 +14,7 @@ import type {
   WhisperModelSize,
 } from "../domain/types";
 import { DEFAULT_TEMPLATES } from "../pipeline/templates";
+import { createShortTermBedrockKey } from "../providers/bedrock";
 import { micConsentAfterSave } from "../background/mic-capture";
 import {
   clearAwsCredentials,
@@ -154,6 +156,64 @@ $("transcription-sagemaker-test").addEventListener("click", async () => {
     result.textContent = testReport({ ok: false, error });
   } finally {
     button.disabled = false;
+  }
+});
+
+// A page cannot read ~/.aws (ADR-0001), so the user runs the CLI and pastes its
+// output. The key is signed in the page, with no network call.
+const bedrockProfile = $<HTMLInputElement>("bedrock-profile");
+const bedrockCommand = $("bedrock-command");
+const bedrockResult = $("bedrock-generate-result");
+const exportCommand = () =>
+  `aws configure export-credentials --profile ${bedrockProfile.value.trim() || "default"}`;
+
+bedrockProfile.addEventListener("input", () => {
+  bedrockCommand.textContent = exportCommand();
+});
+
+$("bedrock-copy-command").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(exportCommand());
+    bedrockResult.textContent = "Command copied. Run it in a terminal, then paste its output.";
+  } catch {
+    bedrockResult.textContent = "Could not copy. Select the command and copy it.";
+  }
+});
+
+$("bedrock-generate").addEventListener("click", async () => {
+  const box = $<HTMLTextAreaElement>("bedrock-credentials");
+  const region = $<HTMLInputElement>("bedrock-region").value.trim();
+  if (!region) {
+    bedrockResult.textContent = "Enter the region first.";
+    return;
+  }
+  let credentials;
+  if (box.value.trim()) {
+    const parsed = parseAwsCredentials(box.value);
+    if (!parsed.ok) {
+      bedrockResult.textContent = parsed.reason;
+      return;
+    }
+    credentials = parsed.credentials;
+  } else {
+    credentials = await loadAwsCredentials();
+    if (!credentials) {
+      bedrockResult.textContent = "Paste the output of the command first.";
+      return;
+    }
+  }
+  if (credentialsExpired(credentials, Date.now())) {
+    bedrockResult.textContent = "These credentials have expired. Run the command again and paste the new output.";
+    return;
+  }
+  try {
+    const { apiKey, expiresAt } = await createShortTermBedrockKey({ credentials, region });
+    $<HTMLInputElement>("bedrock-key").value = apiKey;
+    box.value = "";
+    const until = new Date(expiresAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    bedrockResult.textContent = `Key made for ${region}, valid until ${until}. Select Save to use it.`;
+  } catch (err) {
+    bedrockResult.textContent = `No key made: ${err instanceof Error ? err.message : String(err)}`;
   }
 });
 
