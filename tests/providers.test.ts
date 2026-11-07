@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { Settings } from "../src/domain/types";
-import { createBedrockClient } from "../src/providers/bedrock";
+import {
+  createBedrockClient,
+  createShortTermBedrockKey,
+  SHORT_TERM_KEY_MS,
+} from "../src/providers/bedrock";
 import { createProviderClient } from "../src/providers/factory";
 import { createOllamaClient } from "../src/providers/ollama";
 import { createOpenAiClient } from "../src/providers/openai";
@@ -119,6 +123,40 @@ describe("bedrock provider", () => {
       expect(calls).toHaveLength(0);
     },
   );
+});
+
+describe("short-term bedrock key", () => {
+  const credentials = { accessKeyId: "ASIAEXAMPLE", secretAccessKey: "secret", sessionToken: "tok/en+=" };
+  const now = Date.UTC(2026, 10, 7, 12, 0, 0);
+
+  it("is a presigned CallWithBearerToken URL in AWS's token format", async () => {
+    const { apiKey, expiresAt } = await createShortTermBedrockKey({ credentials, region: "eu-west-1", now });
+    expect(apiKey.startsWith("bedrock-api-key-")).toBe(true);
+    const url = new URL(`https://${atob(apiKey.slice("bedrock-api-key-".length))}`);
+    expect(url.host).toBe("bedrock.amazonaws.com");
+    expect(url.pathname).toBe("/");
+    const q = url.searchParams;
+    expect(q.get("Action")).toBe("CallWithBearerToken");
+    expect(q.get("Version")).toBe("1");
+    expect(q.get("X-Amz-Algorithm")).toBe("AWS4-HMAC-SHA256");
+    expect(q.get("X-Amz-Credential")).toBe("ASIAEXAMPLE/20261107/eu-west-1/bedrock/aws4_request");
+    expect(q.get("X-Amz-Date")).toBe("20261107T120000Z");
+    expect(q.get("X-Amz-Expires")).toBe("43200");
+    expect(q.get("X-Amz-Security-Token")).toBe("tok/en+=");
+    expect(q.get("X-Amz-SignedHeaders")).toBe("host");
+    // Pinned from code that Bedrock accepted live (POST, global host). A wrong
+    // method or host still makes a well-formed key that Bedrock refuses.
+    expect(q.get("X-Amz-Signature")).toBe(
+      "1be55e426422f7d3a524cac3285df105b458f11d51b7a0f7581264d7c067717f",
+    );
+    expect(expiresAt).toBe(now + SHORT_TERM_KEY_MS);
+  });
+
+  it("expires with the credentials when they expire first", async () => {
+    const expiresAt = now + 60 * 60 * 1000;
+    const key = await createShortTermBedrockKey({ credentials: { ...credentials, expiresAt }, region: "us-east-1", now });
+    expect(key.expiresAt).toBe(expiresAt);
+  });
 });
 
 describe("provider factory", () => {

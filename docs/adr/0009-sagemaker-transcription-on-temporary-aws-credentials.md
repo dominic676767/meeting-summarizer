@@ -52,6 +52,10 @@ SageMaker is a destination of its own. Switching to it withdraws microphone cons
 
 The disclosure says "Amazon SageMaker, in the AWS account your credentials belong to" (`uploadDestination`). With engine naming on, the Summary Artifact says "Amazon SageMaker `<endpoint>`". The panel promises nothing about retention: what the account keeps depends on how it is set up, for example data capture to S3.
 
+## Addendum: short-term Bedrock API keys
+
+The Bedrock panel can make a short-term Bedrock API key from temporary credentials. The page cannot read `~/.aws` (ADR-0001), so the user runs `aws configure export-credentials --profile <name>` and pastes the output. `createShortTermBedrockKey` signs AWS's `CallWithBearerToken` URL with the same signer, as `aws-bedrock-token-generator` does, with no network call. The credentials are used once and are not stored; an empty box uses the SageMaker credentials from `storage.session`. The result is an ordinary Bedrock API key in the key field, stored like any other key when the user selects Save. It lasts 12 hours at most, or until the credentials expire. The Bedrock client still only sends a bearer token.
+
 ## Consequences
 
 - One new runtime dependency: `@smithy/signature-v4`, and the parts of `@smithy/core` that it uses.

@@ -693,6 +693,7 @@ The functions to read first, by job.
 | Settings with defaults | `loadSettings`, `saveSettings` | `src/settings.ts` |
 | SageMaker credentials, memory only | `loadAwsCredentials`, `saveAwsCredentials`, `clearAwsCredentials` | `src/settings.ts` |
 | Read pasted AWS credentials | `parseAwsCredentials` | `src/transcription/aws-credentials.ts` |
+| Short-term Bedrock API key from pasted AWS credentials (Settings page, no network call) | `createShortTermBedrockKey` | `src/providers/bedrock.ts` |
 | A region that keeps Bedrock and SageMaker requests on AWS hosts | `isAwsRegion` | `src/transcription/aws-credentials.ts` |
 | Read a pasted settings import; refuse keys, credentials, consent | `parseSettingsImport` | `src/options/settings-import.ts` |
 | Credentials status, popup warning | `describeCredentials`, `credentialsWarning` | `src/transcription/aws-credentials.ts` |
@@ -763,11 +764,11 @@ The functions to read first, by job.
 | `src/providers/anthropic.ts` | Claude client |
 | `src/providers/openai.ts` | OpenAI chat client |
 | `src/providers/ollama.ts` | Ollama client |
-| `src/providers/bedrock.ts` | Bedrock client (API-key bearer) |
+| `src/providers/bedrock.ts` | Bedrock client (API-key bearer); signs a short-term API key from temporary AWS credentials |
 | `src/popup/popup.html` | popup markup |
 | `src/popup/popup.ts` | popup: status, actions, held lists |
 | `src/options/options.html` | settings markup |
-| `src/options/options.ts` | settings: providers, transcription, templates; the SageMaker credentials and its Test button; the Ollama engine's Test button |
+| `src/options/options.ts` | settings: providers, transcription, templates; the SageMaker credentials and its Test button; the Bedrock short-term key button; the Ollama engine's Test button |
 | `src/options/microphone-access.ts` | request microphone access from a separate Settings tab and explain failures |
 | `src/options/settings-import.ts` | parse a pasted settings block into form values; the offered Meeting Languages |
 

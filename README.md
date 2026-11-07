@@ -47,7 +47,7 @@ Tell participants how you intend to use the recording, transcript, and summary, 
 
 1. Open Settings (extension options), pick a Provider and paste its API key.
    - **Ollama**: allow this extension's origin, then quit and reopen the Ollama app: `launchctl setenv OLLAMA_ORIGINS "chrome-extension://hbobmcebmpakimlijcjiaklipegdelap"`. The ID is fixed by the manifest `key` ([ADR-0010](docs/adr/0010-agent-setup-settings-import-and-fixed-extension-id.md)). On macOS the value is lost at a reboot: `npm run doctor -- --ollama` says so.
-   - **Bedrock**: use a Bedrock API key (bearer token) only.
+   - **Bedrock**: use a Bedrock API key (bearer token) only. To make a short-term key from a local AWS profile, open *Make a short-term API key from your AWS profile* in the Bedrock panel, copy the command, run it, paste its output, and select **Generate short-term key**, then **Save**. The key works for 12 hours at most, and stops when the credentials expire; make a new one then. The credentials need a session token, and the role needs `bedrock:CallWithBearerToken`.
    - If you enable the local microphone, select **Allow microphone access** in Settings and select **Allow** in Chrome. Then return to the meeting and start recording.
 2. Join a Teams or Zoom meeting in the browser and **turn on live captions** if available.
    - **Teams**: at `teams.microsoft.com`, select More → Language and speech → Turn on live captions.
