@@ -26,6 +26,7 @@ import {
 import {
   credentialsExpired,
   describeCredentials,
+  isAwsRegion,
   parseAwsCredentials,
 } from "../transcription/aws-credentials";
 import { uploadDestination, uploadsAudio } from "../transcription/engines";
@@ -183,8 +184,8 @@ $("bedrock-copy-command").addEventListener("click", async () => {
 $("bedrock-generate").addEventListener("click", async () => {
   const box = $<HTMLTextAreaElement>("bedrock-credentials");
   const region = $<HTMLInputElement>("bedrock-region").value.trim();
-  if (!region) {
-    bedrockResult.textContent = "Enter the region first.";
+  if (!isAwsRegion(region)) {
+    bedrockResult.textContent = "Enter an AWS region first, for example us-east-1.";
     return;
   }
   let credentials;
