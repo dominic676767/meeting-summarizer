@@ -26,3 +26,10 @@ export async function expectOk(provider: string, res: Response): Promise<void> {
     throw new ProviderError(provider, `HTTP ${res.status} ${body.slice(0, 300)}`);
   }
 }
+
+/** Refuses a reply the model cut off or left empty, so it is never written as a Summary. */
+export function expectSummary(provider: string, text: string, truncated: boolean): string {
+  if (truncated) throw new ProviderError(provider, "summary was cut off at the output token limit");
+  if (!text.trim()) throw new ProviderError(provider, "model returned an empty summary");
+  return text;
+}

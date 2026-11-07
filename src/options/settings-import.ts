@@ -10,6 +10,8 @@ import type {
   TranscriptionProviderId,
   WhisperModelSize,
 } from "../domain/types";
+import { isAwsRegion } from "../transcription/aws-credentials";
+import { isLoopbackUrl } from "../transcription/ollama";
 
 /** The version field that marks a block as ours, and its one known value. */
 export const IMPORT_VERSION_FIELD = "meetingSummarizerSettings";
@@ -89,7 +91,7 @@ const TRANSCRIPTION_PROVIDERS: readonly TranscriptionProviderId[] = [
 const SHAPES: readonly SummaryShape[] = ["structured", "narrative"];
 const WHISPER_MODELS: readonly WhisperModelSize[] = ["tiny", "base", "small"];
 
-type Rule = "text" | "flag" | readonly string[];
+type Rule = "text" | "flag" | "region" | "loopbackUrl" | readonly string[];
 type Shape = { [field: string]: Rule | Shape };
 
 /** Everything an import may carry. Anything else is refused by name. */
@@ -99,16 +101,16 @@ const ALLOWED: Shape = {
   nameEngineInArtifact: "flag",
   anthropic: { model: "text" },
   openai: { model: "text" },
-  ollama: { baseUrl: "text", model: "text" },
-  bedrock: { region: "text", model: "text" },
+  ollama: { baseUrl: "loopbackUrl", model: "text" },
+  bedrock: { region: "region", model: "text" },
   transcription: {
     provider: TRANSCRIPTION_PROVIDERS,
     language: Object.keys(MEETING_LANGUAGES),
     localWhisper: { model: WHISPER_MODELS },
     openai: { model: "text" },
     elevenlabs: { model: "text" },
-    sagemaker: { region: "text", endpointName: "text" },
-    ollama: { baseUrl: "text", model: "text" },
+    sagemaker: { region: "region", endpointName: "text" },
+    ollama: { baseUrl: "loopbackUrl", model: "text" },
   },
 };
 
@@ -176,6 +178,16 @@ function check(value: Record<string, unknown>, shape: Shape, path: string): stri
     if (rule === undefined) return `"${where}" is not a setting this page knows.`;
     if (rule === "text") {
       if (typeof item !== "string") return `"${where}" must be text.`;
+    } else if (rule === "region") {
+      // The region and the base URL become request hosts, so an import may not
+      // send keys, audio or transcripts anywhere else.
+      if (typeof item !== "string" || !isAwsRegion(item)) {
+        return `"${where}" must be an AWS region, for example us-east-1.`;
+      }
+    } else if (rule === "loopbackUrl") {
+      if (typeof item !== "string" || !isLoopbackUrl(item)) {
+        return `"${where}" must be this computer, for example http://localhost:11434.`;
+      }
     } else if (rule === "flag") {
       if (typeof item !== "boolean") return `"${where}" must be true or false.`;
     } else if (Array.isArray(rule)) {

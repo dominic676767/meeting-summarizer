@@ -1,7 +1,7 @@
 import { SignatureV4 } from "@smithy/signature-v4";
-import type { AwsCredentials } from "../transcription/aws-credentials";
+import { isAwsRegion, type AwsCredentials } from "../transcription/aws-credentials";
 import { WebCryptoSha256 } from "../transcription/sagemaker";
-import { expectOk, type FetchFn, type ProviderClient } from "./provider";
+import { expectOk, expectSummary, ProviderError, type FetchFn, type ProviderClient } from "./provider";
 
 // Bedrock via API keys (bearer tokens) only. Long-lived AWS keys stay
 // unsupported everywhere (ADR-0009). Temporary AWS credentials are used only on
@@ -13,6 +13,13 @@ export function createBedrockClient(opts: {
   model: string;
   fetchFn?: FetchFn;
 }): ProviderClient {
+  // The region is part of the host that gets the key and the transcript.
+  if (!isAwsRegion(opts.region)) {
+    throw new ProviderError(
+      "bedrock",
+      `"${opts.region}" is not an AWS region, for example us-east-1 — open Settings`,
+    );
+  }
   const fetchFn = opts.fetchFn ?? fetch;
   return {
     name: "bedrock",
@@ -34,8 +41,11 @@ export function createBedrockClient(opts: {
       await expectOk("bedrock", res);
       const data = (await res.json()) as {
         output: { message: { content: Array<{ text?: string }> } };
+        stopReason?: string;
       };
-      return data.output.message.content.map((c) => c.text ?? "").join("");
+      // No inferenceConfig: Converse defaults maxTokens to the model's own maximum.
+      const text = data.output.message.content.map((c) => c.text ?? "").join("");
+      return expectSummary("bedrock", text, data.stopReason === "max_tokens");
     },
   };
 }

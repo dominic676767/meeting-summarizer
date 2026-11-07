@@ -168,13 +168,13 @@ describe("meeting recovery after an extension reload", () => {
     },
   );
 
-  it("clears an empty session on the Zoom home page", async () => {
+  it("drops an empty session on the Zoom home page", async () => {
     await seedCheckpoint({ audio: false, captions: false });
     browser.getTab.mockResolvedValue({ id: 42, url: "https://app.zoom.us/wc/home" });
 
     const api = await startRecovery();
 
-    expect(await api.getSession(42)).toMatchObject({ state: "capturing", inMeeting: false });
+    expect(await api.getSession(42)).toBeUndefined();
     expect(localStore.heldTranscripts).toBeUndefined();
     expectNoProcessing();
   });

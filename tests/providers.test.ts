@@ -8,6 +8,7 @@ import {
 import { createProviderClient } from "../src/providers/factory";
 import { createOllamaClient } from "../src/providers/ollama";
 import { createOpenAiClient } from "../src/providers/openai";
+import { ProviderError } from "../src/providers/provider";
 import { DEFAULT_SETTINGS } from "../src/settings";
 
 function fakeFetch(body: unknown, status = 200) {
@@ -27,6 +28,18 @@ describe("openai provider", () => {
     expect(calls[0]!.url).toBe("https://api.openai.com/v1/chat/completions");
     expect((calls[0]!.init.headers as Record<string, string>).authorization).toBe("Bearer sk-o");
   });
+
+  it("refuses a summary cut off at the length limit", async () => {
+    const { fn } = fakeFetch({ choices: [{ message: { content: "half" }, finish_reason: "length" }] });
+    const c = createOpenAiClient({ apiKey: "k", model: "m", fetchFn: fn });
+    await expect(c.complete("p")).rejects.toThrow(/cut off/);
+  });
+
+  it("refuses an empty summary (content null, as on a refusal)", async () => {
+    const { fn } = fakeFetch({ choices: [{ message: { content: null }, finish_reason: "stop" }] });
+    const c = createOpenAiClient({ apiKey: "k", model: "m", fetchFn: fn });
+    await expect(c.complete("p")).rejects.toThrow(/empty summary/);
+  });
 });
 
 describe("ollama provider", () => {
@@ -43,6 +56,18 @@ describe("ollama provider", () => {
   it("declares a small context budget so chunking activates early", () => {
     const c = createOllamaClient({ baseUrl: "http://localhost:11434", model: "m" });
     expect(c.contextBudget).toBeLessThan(50_000);
+  });
+
+  it("refuses a summary cut off at the length limit", async () => {
+    const { fn } = fakeFetch({ message: { content: "half" }, done_reason: "length" });
+    const c = createOllamaClient({ baseUrl: "http://localhost:11434", model: "m", fetchFn: fn });
+    await expect(c.complete("p")).rejects.toThrow(/cut off/);
+  });
+
+  it("refuses an empty summary", async () => {
+    const { fn } = fakeFetch({ message: { content: "" }, done_reason: "stop" });
+    const c = createOllamaClient({ baseUrl: "http://localhost:11434", model: "m", fetchFn: fn });
+    await expect(c.complete("p")).rejects.toThrow(/empty summary/);
   });
 });
 
@@ -65,6 +90,39 @@ describe("bedrock provider", () => {
     expect(headers.authorization).toBe("Bearer bedrock-key");
     expect(headers["x-amz-date"]).toBeUndefined(); // no SigV4 signing
   });
+
+  const bedrock = (fn: typeof fetch) =>
+    createBedrockClient({ apiKey: "k", region: "us-east-1", model: "m", fetchFn: fn });
+
+  it("refuses a summary cut off at max_tokens", async () => {
+    const { fn } = fakeFetch({
+      output: { message: { content: [{ text: "half" }] } },
+      stopReason: "max_tokens",
+    });
+    await expect(bedrock(fn).complete("p")).rejects.toThrow(/cut off/);
+  });
+
+  it("refuses an empty summary", async () => {
+    const { fn } = fakeFetch({ output: { message: { content: [] } }, stopReason: "end_turn" });
+    await expect(bedrock(fn).complete("p")).rejects.toThrow(/empty summary/);
+  });
+  it.each(["us-east-1", "eu-central-2", "ap-southeast-4", "us-gov-west-1", "cn-north-1"])(
+    "accepts the real region %s",
+    (region) => {
+      expect(createBedrockClient({ apiKey: "k", region, model: "m" }).name).toBe("bedrock");
+    },
+  );
+
+  it.each(["attacker.example/?", "us-east-1.attacker.example", "us-east-1/", "US-EAST-1", ""])(
+    "refuses %j as a region before any call, so the key and transcript go nowhere else",
+    (region) => {
+      const { fn, calls } = fakeFetch({});
+      expect(() => createBedrockClient({ apiKey: "k", region, model: "m", fetchFn: fn })).toThrow(
+        ProviderError,
+      );
+      expect(calls).toHaveLength(0);
+    },
+  );
 });
 
 describe("short-term bedrock key", () => {
@@ -121,6 +179,27 @@ describe("provider factory", () => {
     expect(() =>
       createProviderClient(withProvider("anthropic", { anthropic: { apiKey: "", model: "m" } })),
     ).toThrow(/no API key configured/);
+  });
+
+  it("refuses a summary Ollama URL that is not this computer, on the held-transcript path", () => {
+    for (const baseUrl of ["http://ollama.example:11434", "https://localhost:11434", ""]) {
+      expect(() =>
+        createProviderClient(withProvider("ollama", { ollama: { baseUrl, model: "m" } })),
+      ).toThrow(ProviderError);
+    }
+    for (const baseUrl of ["http://localhost:11434", "http://127.0.0.1:11434", "http://[::1]:11434"]) {
+      expect(
+        createProviderClient(withProvider("ollama", { ollama: { baseUrl, model: "m" } })).name,
+      ).toBe("ollama");
+    }
+  });
+
+  it("refuses a Bedrock region that is not an AWS region", () => {
+    expect(() =>
+      createProviderClient(
+        withProvider("bedrock", { bedrock: { apiKey: "k", region: "attacker.example/?", model: "m" } }),
+      ),
+    ).toThrow(/not an AWS region/);
   });
 
   it("every provider declares a context budget", () => {
